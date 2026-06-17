@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-v*
+out
+release
+release2
+*.db
+.env
+.env.local
+.DS_Store
+.cursor
+.orchids
+nul
+*.tsbuildinfo
+ERP_*.md
+apps/

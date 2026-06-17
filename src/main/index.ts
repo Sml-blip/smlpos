@@ -1,0 +1,1970 @@
+import { app, shell, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { join } from 'path'
+import { randomUUID } from 'crypto'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { initDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
+import { bindRow } from './bindRow'
+import { setupAutoUpdater } from './updater'
+import { wipeAllUserData, relaunchFresh } from './factoryReset'
+import { printHtmlInHiddenWindow } from './printWindow'
+
+// ─── Backup ───────────────────────────────────────────────────────────────────
+const MAX_LOCAL_BACKUPS = 20
+
+function getBackupDir(): string {
+  const dir = join(app.getPath('userData'), 'backups')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+function createLocalBackup(): { path: string; filename: string } | null {
+  try {
+    const backupDir = getBackupDir()
+    const ts = new Date().toISOString().replace(/:/g, '-').replace('T', '_').slice(0, 19)
+    const filename = `smlpos_${ts}.db`
+    const backupPath = join(backupDir, filename)
+
+    // Checkpoint WAL so the backup includes all committed data
+    try { db.pragma('wal_checkpoint(FULL)') } catch {}
+    copyFileSync(dbFilePath, backupPath)
+
+    // Prune old backups, keep MAX_LOCAL_BACKUPS most recent
+    const files = readdirSync(backupDir)
+      .filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
+      .map(f => ({ name: f, time: statSync(join(backupDir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time)
+    files.slice(MAX_LOCAL_BACKUPS).forEach(({ name }) => {
+      try { unlinkSync(join(backupDir, name)) } catch {}
+    })
+
+    return { path: backupPath, filename }
+  } catch (e) {
+    console.warn('[backup] Local backup failed:', e)
+    return null
+  }
+}
+
+function copyToExternalFolder(localPath: string): boolean {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key='backup_folder_path'`).get() as { value?: string } | undefined
+    const extFolder = row?.value?.trim()
+    if (!extFolder || !existsSync(extFolder)) return false
+    const filename = localPath.split(/[\\/]/).pop()!
+    copyFileSync(localPath, join(extFolder, filename))
+    // Always overwrite a "latest" copy for easy access
+    copyFileSync(localPath, join(extFolder, 'smlpos_latest.db'))
+    return true
+  } catch (e) {
+    console.warn('[backup] External copy failed:', e)
+    return false
+  }
+}
+
+let _backupInterval: ReturnType<typeof setInterval> | null = null
+
+function startAutoBackup() {
+  // Startup backup — protects data before anything writes
+  setTimeout(() => {
+    const r = createLocalBackup()
+    if (r) {
+      copyToExternalFolder(r.path)
+      console.log('[backup] Startup backup:', r.filename)
+    }
+  }, 3000)
+
+  // Then every 5 minutes
+  _backupInterval = setInterval(() => {
+    const r = createLocalBackup()
+    if (r) {
+      copyToExternalFolder(r.path)
+    }
+  }, 5 * 60 * 1000)
+}
+
+let mainWindow: BrowserWindow | null = null
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function addActivityLog(log: {
+  shift_id?: string | null
+  operateur?: string | null
+  action: string
+  details?: Record<string, unknown>
+  montant?: number | null
+}) {
+  try {
+    db.prepare(`
+      INSERT INTO activity_logs (id, shift_id, operateur, action, details, montant, created_at)
+      VALUES (@id, @shift_id, @operateur, @action, @details, @montant, @created_at)
+    `).run({
+      id: randomUUID(),
+      shift_id: log.shift_id ?? null,
+      operateur: log.operateur ?? null,
+      action: log.action,
+      details: JSON.stringify(log.details ?? {}),
+      montant: log.montant ?? null,
+      created_at: new Date().toISOString(),
+    })
+  } catch { /* never crash a write because logging failed */ }
+}
+
+function enqueueSync(table: string, operation: 'INSERT' | 'UPDATE' | 'DELETE', payload: Record<string, unknown>) {
+  try {
+    db.prepare(`
+      INSERT INTO sync_queue (id, table_name, operation, payload, record_id, created_at)
+      VALUES (@id, @table_name, @operation, @payload, @record_id, @created_at)
+    `).run({
+      id: randomUUID(),
+      table_name: table,
+      operation,
+      payload: JSON.stringify(payload),
+      record_id: String(payload.id ?? payload.key ?? ''),
+      created_at: new Date().toISOString(),
+    })
+  } catch { /* never crash a write because sync queueing failed */ }
+}
+
+function safeParseJson(value: unknown): Record<string, unknown> {
+  try { return typeof value === 'string' ? JSON.parse(value || '{}') : {} } catch { return {} }
+}
+
+function enqueueProductSnapshot(productId: unknown) {
+  if (!productId) return
+  const product = db.prepare('SELECT * FROM produits WHERE id = ?').get(productId) as Record<string, unknown> | undefined
+  if (product) enqueueSync('produits', 'UPDATE', product)
+}
+
+// ─── Window ───────────────────────────────────────────────────────────────────
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1366,
+    height: 768,
+    minWidth: 1100,
+    minHeight: 700,
+    show: false,
+    autoHideMenuBar: true,
+    icon: join(__dirname, '../../resources/icon.ico'),
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#FFD600',
+      symbolColor: '#1A1A1A',
+      height: 38
+    },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  Menu.setApplicationMenu(null)
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow!.show()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+app.whenReady().then(() => {
+  electronApp.setAppUserModelId('com.smlpos.desktop')
+
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window)
+  })
+
+  // Initialize database
+  try {
+    initDatabase()
+  } catch (err) {
+    console.error('DB init error:', err)
+  }
+
+  startAutoBackup()
+  setupIpcHandlers()
+  createWindow()
+  setupAutoUpdater(() => mainWindow)
+
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+// ─── IPC Handlers ────────────────────────────────────────────────────────────
+
+function setupIpcHandlers() {
+  // App version (used in Settings / About)
+  ipcMain.handle('app:version', () => app.getVersion())
+
+  ipcMain.handle('app:factoryReset', () => {
+    try {
+      wipeAllUserData()
+      relaunchFresh()
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('app:health', () => {
+    try {
+      db.prepare('SELECT 1').get()
+      const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'schema_version'`).get() as { value?: string } | undefined
+      const pending = db.prepare(`SELECT COUNT(*) as cnt FROM sync_queue WHERE synced_at IS NULL AND attempts < 10`).get() as { cnt: number }
+      return {
+        ok: true,
+        schemaVersion: row?.value ?? SCHEMA_VERSION,
+        expectedSchemaVersion: SCHEMA_VERSION,
+        dbPath: dbFilePath,
+        pendingSync: pending?.cnt ?? 0,
+      }
+    } catch (e) {
+      return { ok: false, error: String(e), expectedSchemaVersion: SCHEMA_VERSION }
+    }
+  })
+
+  // Generic DB query — dev only
+  if (is.dev) {
+    ipcMain.handle('db:query', (_event, sql: string, params: unknown[] = []) => {
+      try {
+        const stmt = db.prepare(sql)
+        return { data: stmt.all(...params), error: null }
+      } catch (err) {
+        return { data: null, error: String(err) }
+      }
+    })
+
+    ipcMain.handle('db:run', (_event, sql: string, params: unknown[] = []) => {
+      try {
+        const stmt = db.prepare(sql)
+        const result = stmt.run(...params)
+        return { data: result, error: null }
+      } catch (err) {
+        return { data: null, error: String(err) }
+      }
+    })
+
+    ipcMain.handle('db:get', (_event, sql: string, params: unknown[] = []) => {
+      try {
+        const stmt = db.prepare(sql)
+        return { data: stmt.get(...params), error: null }
+      } catch (err) {
+        return { data: null, error: String(err) }
+      }
+    })
+  }
+
+  // ─── Operateurs ─────────────────────────────────────────────────────────────
+  ipcMain.handle('operateurs:list', () => {
+    return db.prepare('SELECT * FROM operateurs WHERE actif = 1 ORDER BY nom').all()
+  })
+
+  ipcMain.handle('operateurs:upsert', (_e, op) => {
+    const stmt = db.prepare(`
+      INSERT INTO operateurs (id, nom, identifiant, role, actif)
+      VALUES (@id, @nom, @identifiant, @role, @actif)
+      ON CONFLICT(identifiant) DO UPDATE SET nom=excluded.nom, actif=excluded.actif
+    `)
+    const result = stmt.run(op)
+    enqueueSync('operateurs', 'UPDATE', op as Record<string, unknown>)
+    return result
+  })
+
+  // ─── Shifts ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('shifts:open', (_e, shift) => {
+    const stmt = db.prepare(`
+      INSERT INTO shifts (id, operateur_id, operateur_nom, fond_de_caisse, started_at)
+      VALUES (@id, @operateur_id, @operateur_nom, @fond_de_caisse, @started_at)
+    `)
+    const result = stmt.run(shift)
+    addActivityLog({ shift_id: shift.id, operateur: shift.operateur_nom, action: 'SHIFT_OPENED', details: { fond_de_caisse: shift.fond_de_caisse } })
+    enqueueSync('shifts', 'INSERT', shift)
+    return result
+  })
+
+  ipcMain.handle('shifts:close', (_e, id, data) => {
+    const stmt = db.prepare(`
+      UPDATE shifts SET ended_at=@ended_at, solde_theorique=@solde_theorique, notes_cloture=@notes_cloture
+      WHERE id=@id
+    `)
+    const result = stmt.run({ id, ...data })
+    addActivityLog({ shift_id: id, action: 'SHIFT_CLOSED', details: data })
+    enqueueSync('shifts', 'UPDATE', { id, ...data })
+    return result
+  })
+
+  ipcMain.handle('shifts:getActive', () => {
+    return db.prepare(`
+      SELECT * FROM shifts WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1
+    `).get()
+  })
+
+  ipcMain.handle('shifts:getToday', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    return db.prepare(`
+      SELECT * FROM shifts WHERE started_at >= ? ORDER BY started_at DESC
+    `).all(today)
+  })
+
+  ipcMain.handle('shifts:getSummary', (_e, shiftId: string) => {
+    const ventes = db.prepare(`
+      SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      FROM ventes WHERE shift_id = ? AND type = 'VENTE'
+    `).get(shiftId) as { total: number; count: number }
+    const reparations = db.prepare(`
+      SELECT COALESCE(SUM(total_estime),0) as total, COUNT(*) as count
+      FROM reparations WHERE shift_id = ?
+    `).get(shiftId) as { total: number; count: number }
+    const sorties = db.prepare(`
+      SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
+      FROM sorties_caisse WHERE shift_id = ?
+    `).get(shiftId) as { total: number; count: number }
+    const parMode = db.prepare(`
+      SELECT mode_paiement, COALESCE(SUM(total_ttc),0) as total
+      FROM ventes WHERE shift_id = ? AND type = 'VENTE'
+      GROUP BY mode_paiement
+    `).all(shiftId) as Array<{ mode_paiement: string; total: number }>
+    const creditsPercus = db.prepare(`
+      SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
+      FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'
+    `).get(shiftId) as { total: number; count: number }
+    return { ventes, reparations, sorties, parMode, creditsPercus }
+  })
+
+  // ─── Produits ────────────────────────────────────────────────────────────────
+  ipcMain.handle('produits:list', (_e, filters: { search?: string; type?: string; lowStock?: boolean } = {}) => {
+    let sql = 'SELECT * FROM produits WHERE actif = 1'
+    const params: unknown[] = []
+    if (filters.search) {
+      sql += ` AND (nom LIKE ? OR reference LIKE ? OR code_barre LIKE ? OR categorie LIKE ?)`
+      const s = `%${filters.search}%`
+      params.push(s, s, s, s)
+    }
+    if (filters.type) { sql += ' AND type = ?'; params.push(filters.type) }
+    if (filters.lowStock) { sql += ' AND stock_actuel <= stock_minimum' }
+    sql += ' ORDER BY nom'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('produits:findByBarcode', (_e, code) => {
+    return db.prepare('SELECT * FROM produits WHERE code_barre = ? AND actif = 1').get(code)
+  })
+
+  ipcMain.handle('produits:get', (_e, id) => {
+    return db.prepare('SELECT * FROM produits WHERE id = ?').get(id)
+  })
+
+  ipcMain.handle('produits:create', (_e, p) => {
+    const normalized = {
+      has_serial_number: 0, numero_serie: null,
+      tva_achat_pct: 0, marge_pct: null, coef_av: null,
+      cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
+      ...p
+    }
+    const stmt = db.prepare(`
+      INSERT INTO produits (id, code_barre, reference, nom, description, categorie, type,
+        prix_achat, prix_vente, tva_taux, tva_achat_pct, marge_pct, coef_av,
+        cout_supplementaire, cout_de_revient, prix_vente_ht, pvp,
+        stock_actuel, stock_minimum, fournisseur,
+        has_serial_number, numero_serie, actif, created_at, updated_at)
+      VALUES (@id, @code_barre, @reference, @nom, @description, @categorie, @type,
+        @prix_achat, @prix_vente, @tva_taux, @tva_achat_pct, @marge_pct, @coef_av,
+        @cout_supplementaire, @cout_de_revient, @prix_vente_ht, @pvp,
+        @stock_actuel, @stock_minimum, @fournisseur,
+        @has_serial_number, @numero_serie, 1, @created_at, @updated_at)
+    `)
+    const result = stmt.run(normalized)
+    addActivityLog({ action: 'PRODUCT_CREATED', details: { id: normalized.id, nom: normalized.nom, reference: normalized.reference } })
+    enqueueSync('produits', 'INSERT', normalized)
+    return result
+  })
+
+  ipcMain.handle('produits:update', (_e, id, p) => {
+    const normalized = {
+      has_serial_number: 0, numero_serie: null,
+      tva_achat_pct: 0, marge_pct: null, coef_av: null,
+      cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
+      source_tag: null,
+      ...p
+    }
+    const stmt = db.prepare(`
+      UPDATE produits SET
+        code_barre=@code_barre, reference=@reference, nom=@nom, description=@description, categorie=@categorie,
+        type=@type, prix_achat=@prix_achat, prix_vente=@prix_vente, tva_taux=@tva_taux,
+        tva_achat_pct=@tva_achat_pct, marge_pct=@marge_pct, coef_av=@coef_av,
+        cout_supplementaire=@cout_supplementaire, cout_de_revient=@cout_de_revient,
+        prix_vente_ht=@prix_vente_ht, pvp=@pvp,
+        stock_actuel=@stock_actuel, stock_minimum=@stock_minimum, fournisseur=@fournisseur,
+        has_serial_number=@has_serial_number, numero_serie=@numero_serie, source_tag=@source_tag,
+        updated_at=@updated_at
+      WHERE id=@id
+    `)
+    const result = stmt.run({ id, ...normalized })
+    addActivityLog({ action: 'PRODUCT_UPDATED', details: { id, nom: normalized.nom } })
+    enqueueSync('produits', 'UPDATE', { id, ...normalized })
+    return result
+  })
+
+  ipcMain.handle('produits:getSourceTags', () => {
+    return db.prepare(`SELECT DISTINCT source_tag FROM produits WHERE source_tag IS NOT NULL AND source_tag != '' ORDER BY source_tag`)
+      .all()
+      .map((r: unknown) => (r as { source_tag: string }).source_tag)
+  })
+
+  ipcMain.handle('produits:delete', (_e, id) => {
+    const result = db.prepare('UPDATE produits SET actif = 0 WHERE id = ?').run(id)
+    addActivityLog({ action: 'PRODUCT_DELETED', details: { id } })
+    enqueueSync('produits', 'UPDATE', { id, actif: 0 })
+    return result
+  })
+
+  ipcMain.handle('produits:adjustStock', (_e, id, delta) => {
+    const result = db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel + ?) WHERE id = ?').run(delta, id)
+    addActivityLog({ action: 'STOCK_ADJUSTED', details: { id, delta } })
+    enqueueProductSnapshot(id)
+    return result
+  })
+
+  // ─── Serial Numbers ───────────────────────────────────────────────────────
+  ipcMain.handle('serialNumbers:getByProduit', (_e, produitId: string) => {
+    return db.prepare('SELECT * FROM serial_numbers WHERE produit_id = ? ORDER BY created_at ASC').all(produitId)
+  })
+
+  ipcMain.handle('serialNumbers:bulkSet', (_e, produitId: string, snList: string[]) => {
+    // Replace all S/N for this product (only EN_STOCK — don't touch VENDU)
+    const now = new Date().toISOString()
+    db.transaction(() => {
+      db.prepare("DELETE FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK'").run(produitId)
+      const insert = db.prepare(`
+        INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
+        VALUES (?, ?, ?, 'EN_STOCK', ?, ?)
+      `)
+      for (const sn of snList) {
+        if (sn.trim()) {
+          const { randomUUID } = require('crypto') as typeof import('crypto')
+          insert.run(randomUUID(), produitId, sn.trim(), now, now)
+        }
+      }
+    })()
+    return { success: true }
+  })
+
+  ipcMain.handle('serialNumbers:markSold', (_e, produitId: string, venteId: string) => {
+    // Mark the first available EN_STOCK S/N as VENDU
+    const now = new Date().toISOString()
+    const sn = db.prepare("SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1").get(produitId) as { id: string } | undefined
+    if (sn) {
+      db.prepare("UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?").run(venteId, now, sn.id)
+      return { success: true, id: sn.id }
+    }
+    return { success: false }
+  })
+
+  ipcMain.handle('produits:bulkInsert', (_e, produits) => {
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO produits (id, code_barre, reference, nom, description, categorie, type,
+        prix_achat, prix_vente, tva_taux, stock_actuel, stock_minimum, fournisseur, actif, created_at, updated_at)
+      VALUES (@id, @code_barre, @reference, @nom, @description, @categorie, @type,
+        @prix_achat, @prix_vente, @tva_taux, @stock_actuel, @stock_minimum, @fournisseur, 1, @created_at, @updated_at)
+    `)
+    const transaction = db.transaction((items) => {
+      for (const item of items) insert.run(item)
+    })
+    transaction(produits)
+    addActivityLog({ action: 'PRODUCTS_IMPORTED', details: { count: produits.length } })
+    for (const p of produits) enqueueSync('produits', 'INSERT', p)
+    return { success: true }
+  })
+
+  // ─── Ventes ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('ventes:create', (_e, vente, lignes) => {
+    const insertVente = db.prepare(`
+      INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_nom, client_tel, client_adresse, client_matricule,
+        sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture, created_at)
+      VALUES (@id, @numero, @shift_id, @operateur_nom, @client_nom, @client_tel, @client_adresse, @client_matricule,
+        @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture, @created_at)
+    `)
+    const insertLigne = db.prepare(`
+      INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit)
+      VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit)
+    `)
+    const updateStock = db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?')
+
+    const transaction = db.transaction(() => {
+      insertVente.run({
+        client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+        ...vente
+      })
+      for (const ligne of lignes) {
+        insertLigne.run(ligne)
+        if (ligne.produit_id) updateStock.run(ligne.quantite, ligne.produit_id)
+      }
+    })
+    transaction()
+    const normalizedVente = {
+      client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+      ...vente,
+    }
+    addActivityLog({ shift_id: vente.shift_id, operateur: vente.operateur_nom, action: 'SALE_CREATED', montant: vente.total_ttc, details: { numero: vente.numero, mode: vente.mode_paiement, type_vente: normalizedVente.type_vente } })
+    enqueueSync('ventes', 'INSERT', normalizedVente)
+    for (const ligne of lignes) enqueueSync('lignes_vente', 'INSERT', ligne)
+    for (const ligne of lignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
+    return { success: true }
+  })
+
+  ipcMain.handle('ventes:list', (_e, filters: { shiftId?: string; dateFrom?: string; dateTo?: string; limit?: number; search?: string } = {}) => {
+    let sql = 'SELECT * FROM ventes WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.shiftId) { sql += ' AND shift_id = ?'; params.push(filters.shiftId) }
+    if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom.length === 10 ? filters.dateFrom + 'T00:00:00.000Z' : filters.dateFrom) }
+    if (filters.dateTo) { sql += ' AND created_at <= ?'; params.push(filters.dateTo.length === 10 ? filters.dateTo + 'T23:59:59.999Z' : filters.dateTo) }
+    if (filters.search) { sql += ' AND (numero LIKE ? OR client_nom LIKE ? OR client_tel LIKE ?)'; const s = `%${filters.search}%`; params.push(s, s, s) }
+    sql += ' ORDER BY created_at DESC'
+    if (filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit) }
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('ventes:getLignes', (_e, venteId) => {
+    return db.prepare('SELECT * FROM lignes_vente WHERE vente_id = ?').all(venteId)
+  })
+
+  ipcMain.handle('ventes:getLastNumber', (_e, prefix) => {
+    const row = db.prepare(`SELECT numero FROM ventes WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
+    if (!row) return 0
+    const parts = row.numero.split('-')
+    return parseInt(parts[parts.length - 1]) || 0
+  })
+
+  ipcMain.handle('reparations:getLastNumber', (_e, prefix) => {
+    const row = db.prepare(`SELECT numero FROM reparations WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
+    if (!row) return 0
+    const parts = row.numero.split('-')
+    return parseInt(parts[parts.length - 1]) || 0
+  })
+
+  // ─── Réparations ────────────────────────────────────────────────────────────
+  ipcMain.handle('reparations:create', (_e, rep, pieces) => {
+    const now = new Date().toISOString()
+    const normalizedRep = {
+      shift_id: null, operateur_nom: null, client_nom: null, client_tel: null,
+      marque: null, modele: null, total_final: 0, benefice: 0,
+      technicien: null, notes_technicien: null,
+      created_at: now, updated_at: now,
+      ...rep,
+    }
+    normalizedRep.benefice = (normalizedRep.total_final ?? 0) - (normalizedRep.main_oeuvre ?? 0)
+
+    const insertRep = db.prepare(`
+      INSERT INTO reparations (id, numero, shift_id, operateur_nom, client_nom, client_tel,
+        type_appareil, marque, modele, description_panne, main_oeuvre, acompte,
+        total_estime, total_final, benefice, statut, created_at, updated_at)
+      VALUES (@id, @numero, @shift_id, @operateur_nom, @client_nom, @client_tel,
+        @type_appareil, @marque, @modele, @description_panne, @main_oeuvre, @acompte,
+        @total_estime, @total_final, @benefice, @statut, @created_at, @updated_at)
+    `)
+    const insertPiece = db.prepare(`
+      INSERT INTO pieces_reparation (id, reparation_id, produit_id, designation, quantite, prix_unitaire, type)
+      VALUES (@id, @reparation_id, @produit_id, @designation, @quantite, @prix_unitaire, @type)
+    `)
+    const transaction = db.transaction(() => {
+      insertRep.run(normalizedRep)
+      for (const p of pieces) insertPiece.run({ produit_id: null, ...p })
+    })
+    transaction()
+    addActivityLog({ shift_id: normalizedRep.shift_id, operateur: normalizedRep.operateur_nom, action: 'REPAIR_CREATED', details: { numero: normalizedRep.numero, client: normalizedRep.client_nom }, montant: normalizedRep.total_final })
+    enqueueSync('reparations', 'INSERT', normalizedRep)
+    for (const p of pieces) {
+      const pieceRow = { produit_id: null, ...p }
+      enqueueSync('pieces_reparation', 'INSERT', pieceRow as Record<string, unknown>)
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('reparations:getBeneficeStats', (_e, mois?: string) => {
+    const targetMois = mois || new Date().toISOString().slice(0, 7)
+    const overall = db.prepare(`
+      SELECT SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net, COUNT(*) as nb
+      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut != 'ANNULE'
+    `).get(targetMois) as { benefice_net: number; nb: number }
+    const breakdown = db.prepare(`
+      SELECT type_appareil, COUNT(*) as nb,
+             SUM(COALESCE(main_oeuvre,0)) as total_pieces,
+             SUM(COALESCE(total_final,0)) as total_encaisse,
+             SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net
+      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut != 'ANNULE'
+      GROUP BY type_appareil
+    `).all(targetMois) as { type_appareil: string; nb: number; total_pieces: number; total_encaisse: number; benefice_net: number }[]
+
+    const beneficeTotal = overall?.benefice_net ?? 0
+    const partTiers = Math.round((beneficeTotal / 3) * 1000) / 1000
+
+    const enriched = breakdown.map(b => {
+      const partTechCat = Math.round((b.benefice_net / 3) * 1000) / 1000
+      if (b.type_appareil === 'SMARTPHONE') {
+        return {
+          ...b,
+          part_technicien: partTechCat,
+          part_hamdi: Math.round((partTechCat / 2) * 1000) / 1000,
+          part_hamma: Math.round((partTechCat / 2) * 1000) / 1000,
+        }
+      }
+      return { ...b, part_technicien: partTechCat, part_hamdi: null, part_hamma: null }
+    })
+
+    return {
+      overall,
+      breakdown: enriched,
+      part_sml: partTiers,
+      part_materiel: partTiers,
+      part_techniciens: partTiers,
+      // legacy compat
+      benefice_mootez: breakdown.find(r => r.type_appareil === 'SCOOTER')?.benefice_net ?? 0,
+    }
+  })
+
+  ipcMain.handle('reparations:list', (_e, filters: { shiftId?: string; statut?: string } = {}) => {
+    let sql = 'SELECT * FROM reparations WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.shiftId) { sql += ' AND shift_id = ?'; params.push(filters.shiftId) }
+    if (filters.statut) { sql += ' AND statut = ?'; params.push(filters.statut) }
+    sql += ' ORDER BY created_at DESC'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('reparations:updateStatut', (_e, id, statut) => {
+    const now = new Date().toISOString()
+    const result = db.prepare('UPDATE reparations SET statut = ?, updated_at = ? WHERE id = ?')
+      .run(statut, now, id)
+    addActivityLog({ action: 'REPAIR_STATUS_UPDATED', details: { id, statut } })
+    const row = db.prepare('SELECT * FROM reparations WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (row) enqueueSync('reparations', 'UPDATE', row)
+    return result
+  })
+
+  ipcMain.handle('reparations:getPieces', (_e, repId) => {
+    return db.prepare('SELECT * FROM pieces_reparation WHERE reparation_id = ?').all(repId)
+  })
+
+  // ─── Sorties Caisse ──────────────────────────────────────────────────────────
+  ipcMain.handle('sorties:create', (_e, s) => {
+    const now = new Date().toISOString()
+    const today = now.slice(0, 10)
+    // 1. Insert mouvement caisse interne (SORTIE)
+    const { randomUUID } = require('crypto') as typeof import('crypto')
+    const mvtId = randomUUID()
+    db.prepare(`
+      INSERT INTO mouvements_caisse_interne (id, date_journal, type, categorie, montant, note, operateur, created_at)
+      VALUES (?, ?, 'SORTIE', 'SORTIE_INTERNE', ?, ?, ?, ?)
+    `).run(mvtId, today, s.montant, s.note ?? null, s.operateur ?? null, now)
+    enqueueSync('mouvements_caisse_interne', 'INSERT', {
+      id: mvtId, date_journal: today, type: 'SORTIE', categorie: 'SORTIE_INTERNE',
+      montant: s.montant, note: s.note, operateur: s.operateur, created_at: now,
+    })
+
+    // 2. Insert sorties_caisse with link to mouvement interne
+    const sortie = { shift_id: null, ...s, mouvement_interne_id: mvtId }
+    db.prepare(`
+      INSERT INTO sorties_caisse (id, shift_id, montant, note, operateur, mouvement_interne_id, created_at)
+      VALUES (@id, @shift_id, @montant, @note, @operateur, @mouvement_interne_id, @created_at)
+    `).run(sortie)
+    addActivityLog({ shift_id: s.shift_id, operateur: s.operateur, action: 'CASH_OUT_CREATED', montant: s.montant, details: { note: s.note } })
+    enqueueSync('sorties_caisse', 'INSERT', sortie)
+    return { success: true }
+  })
+
+  ipcMain.handle('sorties:list', (_e, shiftId?: string) => {
+    if (shiftId) {
+      return db.prepare('SELECT * FROM sorties_caisse WHERE shift_id = ? ORDER BY created_at DESC').all(shiftId)
+    }
+    return db.prepare('SELECT * FROM sorties_caisse ORDER BY created_at DESC LIMIT 100').all()
+  })
+
+  ipcMain.handle('sorties:recentNotes', () => {
+    const rows = db.prepare(`
+      SELECT note, COUNT(*) as cnt FROM sorties_caisse
+      GROUP BY note ORDER BY cnt DESC LIMIT 10
+    `).all() as { note: string; cnt: number }[]
+    return rows.map(r => r.note)
+  })
+
+  // ─── Activity Logs ──────────────────────────────────────────────────────────
+  ipcMain.handle('logs:add', (_e, log) => {
+    const stmt = db.prepare(`
+      INSERT INTO activity_logs (id, shift_id, operateur, action, details, montant, created_at)
+      VALUES (@id, @shift_id, @operateur, @action, @details, @montant, @created_at)
+    `)
+    return stmt.run({ ...log, details: JSON.stringify(log.details || {}) })
+  })
+
+  ipcMain.handle('logs:list', (_e, filters: { shiftId?: string; action?: string; dateFrom?: string; dateTo?: string; limit?: number } = {}) => {
+    let sql = 'SELECT * FROM activity_logs WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.shiftId) { sql += ' AND shift_id = ?'; params.push(filters.shiftId) }
+    if (filters.action) { sql += ' AND action = ?'; params.push(filters.action) }
+    if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom) }
+    if (filters.dateTo) { sql += ' AND created_at <= ?'; params.push(filters.dateTo) }
+    sql += ' ORDER BY created_at DESC'
+    if (filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit) }
+    const rows = db.prepare(sql).all(...params) as Array<{ details: string } & Record<string, unknown>>
+    return rows.map(r => ({ ...r, details: safeParseJson(r.details) }))
+  })
+
+  // ─── Stats ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('stats:today', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const ventes = db.prepare(`
+      SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+    `).get(today) as { total: number; count: number }
+    const reparations = db.prepare(`
+      SELECT COALESCE(SUM(total_estime),0) as total, COUNT(*) as count
+      FROM reparations WHERE created_at >= ?
+    `).get(today) as { total: number; count: number }
+    const sorties = db.prepare(`
+      SELECT COALESCE(SUM(montant),0) as total FROM sorties_caisse WHERE created_at >= ?
+    `).get(today) as { total: number }
+    return { ventes, reparations, sorties }
+  })
+
+  ipcMain.handle('stats:byDate', (_e, dateFrom: string, dateTo: string) => {
+    const ventes = db.prepare(`
+      SELECT date(created_at) as date, SUM(total_ttc) as total, COUNT(*) as count
+      FROM ventes WHERE created_at >= ? AND created_at <= ? AND type = 'VENTE'
+      GROUP BY date(created_at) ORDER BY date
+    `).all(dateFrom, dateTo)
+    return { ventes }
+  })
+
+  ipcMain.handle('stats:dashboard', () => {
+    const today = new Date()
+    const todayStr = today.toISOString().slice(0, 10)
+    const yesterday = new Date(today)
+    yesterday.setDate(today.getDate() - 1)
+    const yesterdayStr = yesterday.toISOString().slice(0, 10)
+
+    const d30 = new Date(today)
+    d30.setDate(today.getDate() - 29)
+    const d30Str = d30.toISOString().slice(0, 10)
+
+    const dailyVentes = db.prepare(`
+      SELECT date(created_at) as date, COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+      GROUP BY date(created_at) ORDER BY date
+    `).all(d30Str) as Array<{ date: string; total: number; count: number }>
+
+    const todayVentes = db.prepare(`
+      SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+    `).get(todayStr) as { total: number; count: number }
+
+    const yestVentes = db.prepare(`
+      SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      FROM ventes WHERE created_at >= ? AND created_at < ? AND type = 'VENTE'
+    `).get(yesterdayStr, todayStr) as { total: number; count: number }
+
+    const repsEnCours = db.prepare(`
+      SELECT COUNT(*) as count FROM reparations WHERE statut IN ('EN_ATTENTE','EN_COURS')
+    `).get() as { count: number }
+
+    const parMode = db.prepare(`
+      SELECT mode_paiement, COUNT(*) as count, COALESCE(SUM(total_ttc),0) as total
+      FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+      GROUP BY mode_paiement ORDER BY total DESC
+    `).all(d30Str) as Array<{ mode_paiement: string; count: number; total: number }>
+
+    const lowStock = db.prepare(`
+      SELECT nom, stock_actuel, stock_minimum FROM produits
+      WHERE actif=1 AND stock_actuel <= stock_minimum
+      ORDER BY (stock_actuel - stock_minimum) ASC LIMIT 5
+    `).all() as Array<{ nom: string; stock_actuel: number; stock_minimum: number }>
+
+    const topProduits = db.prepare(`
+      SELECT lv.designation, SUM(lv.total_ligne) as revenue, SUM(lv.quantite) as qty
+      FROM lignes_vente lv
+      JOIN ventes v ON lv.vente_id = v.id
+      WHERE v.created_at >= ? AND v.type = 'VENTE'
+      GROUP BY lv.designation ORDER BY revenue DESC LIMIT 5
+    `).all(d30Str) as Array<{ designation: string; revenue: number; qty: number }>
+
+    return { dailyVentes, todayVentes, yestVentes, repsEnCours, parMode, lowStock, topProduits }
+  })
+
+  // ─── Services POS ────────────────────────────────────────────────────────────
+  ipcMain.handle('servicesPOS:list', () => {
+    return db.prepare('SELECT * FROM services_pos WHERE actif = 1 ORDER BY nom').all()
+  })
+
+  ipcMain.handle('servicesPOS:find', (_e, code: string) => {
+    return db.prepare('SELECT * FROM services_pos WHERE code_barre = ? AND actif = 1').get(code) ?? null
+  })
+
+  ipcMain.handle('transactionsServices:create', (_e, t) => {
+    const result = db.prepare(`
+      INSERT INTO transactions_services (id, shift_id, service_id, service_nom, montant_frais, note, operateur, created_at)
+      VALUES (@id, @shift_id, @service_id, @service_nom, @montant_frais, @note, @operateur, @created_at)
+    `).run(t)
+    addActivityLog({ shift_id: t.shift_id, operateur: t.operateur, action: 'SERVICE_TRANSACTION_CREATED', montant: t.montant_frais, details: { service_nom: t.service_nom } })
+    enqueueSync('transactions_services', 'INSERT', t)
+    return result
+  })
+
+  ipcMain.handle('transactionsServices:list', (_e, shiftId?: string) => {
+    if (shiftId) {
+      return db.prepare('SELECT * FROM transactions_services WHERE shift_id = ? ORDER BY created_at DESC').all(shiftId)
+    }
+    return db.prepare('SELECT * FROM transactions_services ORDER BY created_at DESC LIMIT 100').all()
+  })
+
+  // ─── Catégories ──────────────────────────────────────────────────────────────
+  ipcMain.handle('categories:list', () => {
+    return db.prepare('SELECT * FROM categories ORDER BY nom').all()
+  })
+
+  ipcMain.handle('categories:create', (_e, cat: { id: string; nom: string; icone?: string }) => {
+    const stmt = db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES (@id, @nom, @icone)`)
+    const normalized = { icone: null, ...cat }
+    const result = stmt.run(normalized)
+    enqueueSync('categories', 'INSERT', normalized)
+    return result
+  })
+
+  ipcMain.handle('produits:checkBarcodeUnique', (_e, code: string, excludeId?: string) => {
+    let row: unknown
+    if (excludeId) {
+      row = db.prepare('SELECT id FROM produits WHERE code_barre = ? AND id != ?').get(code, excludeId)
+    } else {
+      row = db.prepare('SELECT id FROM produits WHERE code_barre = ?').get(code)
+    }
+    return { unique: !row }
+  })
+
+  // ─── Factures Clients ────────────────────────────────────────────────────────
+  ipcMain.handle('facturesClients:list', (_e, filters: { venteId?: string; dateFrom?: string } = {}) => {
+    let sql = 'SELECT * FROM factures_clients WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.venteId) { sql += ' AND vente_id = ?'; params.push(filters.venteId) }
+    if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom) }
+    sql += ' ORDER BY created_at DESC'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('facturesClients:create', (_e, facture, _lignes) => {
+    const result = db.prepare(`
+      INSERT INTO factures_clients (id, numero, shift_id, vente_id, type_facture,
+        client_nom, client_tel, client_adresse, client_matricule,
+        total_ht, total_tva, total_ttc, created_at)
+      VALUES (@id, @numero, @shift_id, @vente_id, @type_facture,
+        @client_nom, @client_tel, @client_adresse, @client_matricule,
+        @total_ht, @total_tva, @total_ttc, @created_at)
+    `).run(facture)
+    addActivityLog({ shift_id: facture.shift_id, action: 'CLIENT_INVOICE_CREATED', montant: facture.total_ttc, details: { numero: facture.numero, client: facture.client_nom } })
+    enqueueSync('factures_clients', 'INSERT', facture)
+    return result
+  })
+
+  ipcMain.handle('facturesClients:getLastNumber', (_e, prefix: string) => {
+    const row = db.prepare(`SELECT numero FROM factures_clients WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
+    if (!row) return 0
+    const parts = row.numero.split('-')
+    return parseInt(parts[parts.length - 1]) || 0
+  })
+
+  // ─── Fournisseurs ────────────────────────────────────────────────────────────
+  ipcMain.handle('fournisseurs:list', (_e, filters: { search?: string } = {}) => {
+    let sql = 'SELECT * FROM fournisseurs WHERE actif = 1'
+    const params: unknown[] = []
+    if (filters.search) {
+      sql += ' AND (nom LIKE ? OR contact_nom LIKE ? OR telephone LIKE ?)'
+      const s = `%${filters.search}%`
+      params.push(s, s, s)
+    }
+    sql += ' ORDER BY nom'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('fournisseurs:get', (_e, id: string) => {
+    return db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(id)
+  })
+
+  ipcMain.handle('fournisseurs:create', (_e, f: Record<string, unknown>) => {
+    const row = bindRow({
+      contact_nom: null,
+      telephone: null,
+      email: null,
+      adresse: null,
+      matricule_fiscal: null,
+      rib: null,
+      notes: null,
+      id: '',
+      nom: '',
+      created_at: new Date().toISOString(),
+    }, f)
+    const result = db.prepare(`
+      INSERT INTO fournisseurs (id, nom, contact_nom, telephone, email, adresse, matricule_fiscal, rib, solde_du, notes, actif, created_at)
+      VALUES (@id, @nom, @contact_nom, @telephone, @email, @adresse, @matricule_fiscal, @rib, 0, @notes, 1, @created_at)
+    `).run(row)
+    addActivityLog({ action: 'SUPPLIER_CREATED', details: { id: row.id, nom: row.nom } })
+    enqueueSync('fournisseurs', 'INSERT', row)
+    return result
+  })
+
+  ipcMain.handle('fournisseurs:update', (_e, id: string, f) => {
+    const result = db.prepare(`
+      UPDATE fournisseurs SET nom=@nom, contact_nom=@contact_nom, telephone=@telephone,
+        email=@email, adresse=@adresse, matricule_fiscal=@matricule_fiscal, rib=@rib, notes=@notes
+      WHERE id=@id
+    `).run({ id, ...f })
+    addActivityLog({ action: 'SUPPLIER_UPDATED', details: { id, nom: f.nom } })
+    enqueueSync('fournisseurs', 'UPDATE', { id, ...f })
+    return result
+  })
+
+  // ─── Fournisseur Commerciaux ─────────────────────────────────────────────────
+  ipcMain.handle('fournisseurCommerciaux:getByFournisseur', (_e, fournisseurId: string) => {
+    return db.prepare(`SELECT * FROM fournisseur_commerciaux WHERE fournisseur_id = ? AND actif = 1 ORDER BY created_at`).all(fournisseurId)
+  })
+
+  ipcMain.handle('fournisseurCommerciaux:create', (_e, commercial) => {
+    const c = commercial as { id: string; fournisseur_id: string; nom: string; telephone?: string; email?: string }
+    db.prepare(`
+      INSERT INTO fournisseur_commerciaux (id, fournisseur_id, nom, telephone, email, actif, created_at)
+      VALUES (@id, @fournisseur_id, @nom, @telephone, @email, 1, datetime('now'))
+    `).run({ telephone: null, email: null, ...c })
+    return { success: true }
+  })
+
+  ipcMain.handle('fournisseurCommerciaux:bulkCreate', (_e, commerciaux: unknown[]) => {
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO fournisseur_commerciaux (id, fournisseur_id, nom, telephone, email, actif, created_at)
+      VALUES (@id, @fournisseur_id, @nom, @telephone, @email, 1, datetime('now'))
+    `)
+    const run = db.transaction((items: unknown[]) => {
+      for (const c of items) stmt.run(c as Record<string, unknown>)
+    })
+    run(commerciaux)
+    return { success: true }
+  })
+
+  // ─── Factures Fournisseurs ───────────────────────────────────────────────────
+  ipcMain.handle('facturesFournisseurs:list', (_e, filters: { fournisseurId?: string; statut?: string } = {}) => {
+    let sql = `
+      SELECT ff.*, f.nom as fournisseur_nom
+      FROM factures_fournisseurs ff
+      LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
+      WHERE 1=1
+    `
+    const params: unknown[] = []
+    if (filters.fournisseurId) { sql += ' AND ff.fournisseur_id = ?'; params.push(filters.fournisseurId) }
+    if (filters.statut) { sql += ' AND ff.statut_paiement = ?'; params.push(filters.statut) }
+    sql += ' ORDER BY ff.date_facture DESC'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('facturesFournisseurs:create', (_e, facture, lignes) => {
+    const insertFacture = db.prepare(`
+      INSERT INTO factures_fournisseurs (id, numero_facture, fournisseur_id, date_facture, date_echeance,
+        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception, created_at)
+      VALUES (@id, @numero_facture, @fournisseur_id, @date_facture, @date_echeance,
+        @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception, @created_at)
+    `)
+    const insertLigne = db.prepare(`
+      INSERT INTO lignes_facture_fournisseur (id, facture_id, produit_id, designation, quantite,
+        ancien_prix_achat, nouveau_prix_achat, prix_vente_suggere, prix_vente_applique, tva_taux)
+      VALUES (@id, @facture_id, @produit_id, @designation, @quantite,
+        @ancien_prix_achat, @nouveau_prix_achat, @prix_vente_suggere, @prix_vente_applique, @tva_taux)
+    `)
+    const updatePrixAchat = db.prepare(`UPDATE produits SET prix_achat=?, updated_at=? WHERE id=?`)
+    const updatePrixVente = db.prepare(`UPDATE produits SET prix_vente=?, updated_at=? WHERE id=?`)
+    const updateStock = db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id=?`)
+    const updateSolde = db.prepare(`UPDATE fournisseurs SET solde_du = solde_du + ? WHERE id=?`)
+
+    const f = facture as Record<string, unknown>
+    const isBL = f.type === 'FACTURE_ACHAT_BL'
+    const factureWithDefaults = {
+      ...f,
+      type: f.type ?? 'FACTURE_ACHAT',
+      statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
+    }
+    const transaction = db.transaction(() => {
+      insertFacture.run(factureWithDefaults)
+      for (const l of lignes) {
+        insertLigne.run(l)
+        if (l.produit_id && !isBL) {
+          const now = new Date().toISOString()
+          updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
+          const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
+          if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
+          updateStock.run(l.quantite, l.produit_id)
+        }
+      }
+      updateSolde.run(facture.montant_ttc, facture.fournisseur_id)
+    })
+    transaction()
+    addActivityLog({ action: 'SUPPLIER_INVOICE_CREATED', montant: facture.montant_ttc, details: { numero: facture.numero_facture, type: factureWithDefaults.type } })
+    enqueueSync('factures_fournisseurs', 'INSERT', factureWithDefaults)
+    for (const l of lignes) enqueueSync('lignes_facture_fournisseur', 'INSERT', l)
+    if (!isBL) for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
+    return { success: true }
+  })
+
+  ipcMain.handle('facturesFournisseurs:annuler', (_e, factureId: string) => {
+    db.prepare(`UPDATE factures_fournisseurs SET statut_paiement='ANNULE' WHERE id=?`).run(factureId)
+    addActivityLog({ action: 'SUPPLIER_INVOICE_CANCELLED', details: { factureId } })
+    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_paiement: 'ANNULE' })
+    return { success: true }
+  })
+
+  ipcMain.handle('facturesFournisseurs:marquerRecu', (_e, factureId: string) => {
+    const facture = db.prepare(`SELECT * FROM factures_fournisseurs WHERE id=?`).get(factureId) as Record<string, unknown> | undefined
+    if (!facture || facture.type !== 'FACTURE_ACHAT_BL' || facture.statut_reception === 'ARRIVE') {
+      return { success: false, error: 'Facture non trouvée ou déjà reçue' }
+    }
+    const lignes = db.prepare(`SELECT * FROM lignes_facture_fournisseur WHERE facture_id=?`).all(factureId) as Record<string, unknown>[]
+    const now = new Date().toISOString()
+    const updatePrixAchat = db.prepare(`UPDATE produits SET prix_achat=?, updated_at=? WHERE id=?`)
+    const updatePrixVente = db.prepare(`UPDATE produits SET prix_vente=?, updated_at=? WHERE id=?`)
+    const updateStock = db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id=?`)
+    const markRecu = db.prepare(`UPDATE factures_fournisseurs SET statut_reception='ARRIVE' WHERE id=?`)
+    db.transaction(() => {
+      for (const l of lignes) {
+        if (l.produit_id) {
+          updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
+          const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
+          if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
+          updateStock.run(l.quantite, l.produit_id)
+        }
+      }
+      markRecu.run(factureId)
+    })()
+    addActivityLog({ action: 'SUPPLIER_INVOICE_RECEIVED', details: { factureId } })
+    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_reception: 'ARRIVE' })
+    for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
+    return { success: true }
+  })
+
+  ipcMain.handle('facturesFournisseurs:getLastNumber', (_e, fournisseurId: string) => {
+    const row = db.prepare(`SELECT COUNT(*) as cnt FROM factures_fournisseurs WHERE fournisseur_id=?`).get(fournisseurId) as { cnt: number }
+    return (row?.cnt ?? 0) + 1
+  })
+
+  ipcMain.handle('paiementsFournisseurs:create', (_e, p: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      facture_id: '',
+      fournisseur_id: '',
+      montant: 0,
+      mode_paiement: 'ESPECES',
+      reference_cheque: null,
+      date_paiement: new Date().toISOString().slice(0, 10),
+      notes: null,
+      created_at: new Date().toISOString(),
+    }, p)
+    const insertPaiement = db.prepare(`
+      INSERT INTO paiements_fournisseurs (id, facture_id, fournisseur_id, montant, mode_paiement,
+        reference_cheque, date_paiement, notes, created_at)
+      VALUES (@id, @facture_id, @fournisseur_id, @montant, @mode_paiement,
+        @reference_cheque, @date_paiement, @notes, @created_at)
+    `)
+    const updateFacture = db.prepare(`
+      UPDATE factures_fournisseurs SET montant_paye = montant_paye + ?,
+        statut_paiement = CASE
+          WHEN montant_paye + ? >= montant_ttc THEN 'PAYE'
+          WHEN montant_paye + ? > 0 THEN 'PARTIEL'
+          ELSE statut_paiement END
+      WHERE id=?
+    `)
+    const updateFournisseur = db.prepare(`UPDATE fournisseurs SET solde_du = MAX(0, solde_du - ?) WHERE id=?`)
+
+    const transaction = db.transaction(() => {
+      insertPaiement.run(row)
+      updateFacture.run(row.montant, row.montant, row.montant, row.facture_id)
+      updateFournisseur.run(row.montant, row.fournisseur_id)
+    })
+    transaction()
+    addActivityLog({ action: 'SUPPLIER_PAYMENT_CREATED', montant: row.montant, details: { facture_id: row.facture_id, mode: row.mode_paiement } })
+    enqueueSync('paiements_fournisseurs', 'INSERT', row)
+    const facture = db.prepare('SELECT * FROM factures_fournisseurs WHERE id = ?').get(row.facture_id) as Record<string, unknown> | undefined
+    if (facture) enqueueSync('factures_fournisseurs', 'UPDATE', facture)
+    const fournisseur = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(row.fournisseur_id) as Record<string, unknown> | undefined
+    if (fournisseur) enqueueSync('fournisseurs', 'UPDATE', fournisseur)
+    return { success: true }
+  })
+
+  // ─── Caisse Interne ──────────────────────────────────────────────────────────
+  ipcMain.handle('caisseInterne:getToday', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    let row = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown> | undefined
+    if (!row) {
+      const yesterday = db.prepare('SELECT solde_ouverture, total_entrees, total_sorties FROM caisse_interne ORDER BY date_journal DESC LIMIT 1').get() as { solde_ouverture: number; total_entrees: number; total_sorties: number } | undefined
+      const soldeOuverture = yesterday
+        ? yesterday.solde_ouverture + yesterday.total_entrees - yesterday.total_sorties
+        : 100
+      const id = `ci-${today}`
+      db.prepare(`INSERT OR IGNORE INTO caisse_interne (id, date_journal, solde_ouverture) VALUES (?, ?, ?)`).run(id, today, soldeOuverture)
+      row = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown>
+      if (row) enqueueSync('caisse_interne', 'INSERT', row)
+    }
+    return row
+  })
+
+  ipcMain.handle('caisseInterne:mouvementsList', (_e, filters: Record<string, unknown> = {}) => {
+    let sql = 'SELECT * FROM mouvements_caisse_interne WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.dateFrom)  { sql += ' AND date_journal >= ?'; params.push(filters.dateFrom) }
+    if (filters.dateTo)    { sql += ' AND date_journal <= ?'; params.push(filters.dateTo) }
+    if (filters.type)      { sql += ' AND type = ?'; params.push(filters.type) }
+    if (filters.categorie) { sql += ' AND categorie = ?'; params.push(filters.categorie) }
+    if (filters.operateur) { sql += ' AND operateur LIKE ?'; params.push(`%${filters.operateur}%`) }
+    if (filters.search)    { sql += ' AND (note LIKE ? OR reference_id LIKE ? OR categorie LIKE ?)'; const s = `%${filters.search}%`; params.push(s, s, s) }
+    sql += ' ORDER BY created_at ASC'
+    if (!filters.dateFrom && !filters.dateTo) sql += ' LIMIT 500'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('caisseInterne:getStats', (_e, dateFrom: string, dateTo: string) => {
+    const byAgent = db.prepare(`
+      SELECT operateur,
+        SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END) as total_entrees,
+        SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END) as total_sorties,
+        COUNT(*) as count
+      FROM mouvements_caisse_interne
+      WHERE date_journal >= ? AND date_journal <= ?
+      GROUP BY operateur ORDER BY (total_entrees + total_sorties) DESC
+    `).all(dateFrom, dateTo)
+
+    const byCategorie = db.prepare(`
+      SELECT categorie, type,
+        COUNT(*) as count, SUM(montant) as total
+      FROM mouvements_caisse_interne
+      WHERE date_journal >= ? AND date_journal <= ?
+      GROUP BY categorie, type ORDER BY total DESC
+    `).all(dateFrom, dateTo)
+
+    const byDay = db.prepare(`
+      SELECT date_journal,
+        SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END) as entrees,
+        SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END) as sorties,
+        COUNT(*) as count
+      FROM mouvements_caisse_interne
+      WHERE date_journal >= ? AND date_journal <= ?
+      GROUP BY date_journal ORDER BY date_journal ASC
+    `).all(dateFrom, dateTo)
+
+    const agents = db.prepare(`
+      SELECT DISTINCT operateur FROM mouvements_caisse_interne
+      WHERE date_journal >= ? AND date_journal <= ? ORDER BY operateur
+    `).all(dateFrom, dateTo) as { operateur: string }[]
+
+    const openingBalance = db.prepare(`
+      SELECT solde_ouverture, total_entrees, total_sorties FROM caisse_interne
+      WHERE date_journal = ? LIMIT 1
+    `).get(dateFrom) as { solde_ouverture: number; total_entrees: number; total_sorties: number } | undefined
+
+    return { byAgent, byCategorie, byDay, agents, openingBalance }
+  })
+
+  ipcMain.handle('caisseInterne:addMouvement', (_e, m) => {
+    const insert = db.prepare(`
+      INSERT INTO mouvements_caisse_interne (id, date_journal, type, categorie, montant, reference_id, note, operateur, created_at)
+      VALUES (@id, @date_journal, @type, @categorie, @montant, @reference_id, @note, @operateur, @created_at)
+    `)
+    const updateCaisse = db.prepare(m.type === 'ENTREE'
+      ? `UPDATE caisse_interne SET total_entrees = total_entrees + ? WHERE date_journal = ?`
+      : `UPDATE caisse_interne SET total_sorties = total_sorties + ? WHERE date_journal = ?`
+    )
+    const transaction = db.transaction(() => {
+      insert.run(m)
+      updateCaisse.run(m.montant, m.date_journal)
+    })
+    transaction()
+    addActivityLog({ operateur: m.operateur, action: 'INTERNAL_CASH_MOVEMENT_CREATED', montant: m.montant, details: { type: m.type, categorie: m.categorie, note: m.note } })
+    enqueueSync('mouvements_caisse_interne', 'INSERT', m)
+    const ci = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(m.date_journal) as Record<string, unknown> | undefined
+    if (ci) enqueueSync('caisse_interne', 'UPDATE', ci)
+    return { success: true }
+  })
+
+  ipcMain.handle('caisseInterne:transferShift', (_e, shiftId: string) => {
+    const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shiftId) as Record<string, unknown> | undefined
+    if (!shift) return { error: 'Shift not found' }
+    if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
+
+    const ventesTotal = db.prepare(`SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes WHERE shift_id = ? AND type = 'VENTE'`).get(shiftId) as { total: number }
+    const repsTotal = db.prepare(`SELECT COALESCE(SUM(total_estime),0) as total FROM reparations WHERE shift_id = ?`).get(shiftId) as { total: number }
+    const servicesTotal = db.prepare(`SELECT COALESCE(SUM(montant_frais),0) as total FROM transactions_services WHERE shift_id = ?`).get(shiftId) as { total: number }
+    const total = ventesTotal.total + repsTotal.total + servicesTotal.total
+    if (total <= 0) return { success: true, montant: 0 }
+
+    const today = new Date().toISOString().slice(0, 10)
+    const id = `mvt-${Date.now()}`
+    const m = {
+      id, date_journal: today,
+      type: 'ENTREE', categorie: 'TRANSFERT_CAISSE_EXTERNE',
+      montant: total, reference_id: shiftId,
+      note: `Transfert recettes shift — ${(shift as { operateur_nom?: string }).operateur_nom ?? ''}`,
+      operateur: 'superadmin', created_at: new Date().toISOString()
+    }
+    db.prepare(`
+      INSERT INTO mouvements_caisse_interne (id, date_journal, type, categorie, montant, reference_id, note, operateur, created_at)
+      VALUES (@id, @date_journal, @type, @categorie, @montant, @reference_id, @note, @operateur, @created_at)
+    `).run(m)
+    db.prepare(`UPDATE caisse_interne SET total_entrees = total_entrees + ? WHERE date_journal = ?`).run(total, today)
+    db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
+    addActivityLog({ shift_id: shiftId, action: 'SHIFT_TRANSFERRED_TO_INTERNAL_CASH', montant: total })
+    enqueueSync('mouvements_caisse_interne', 'INSERT', m)
+    enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
+    return { success: true, montant: total }
+  })
+
+  // ── Ventes en Ligne ───────────────────────────────────────────────────────
+  ipcMain.handle('ventesLigne:list', (_e, filters: Record<string, unknown> = {}) => {
+    let sql = `SELECT * FROM ventes_en_ligne`
+    const params: unknown[] = []
+    const where: string[] = []
+    if (filters.statut) { where.push(`statut = ?`); params.push(filters.statut) }
+    if (filters.search) { where.push(`(client_nom LIKE ? OR numero LIKE ?)`); params.push(`%${filters.search}%`, `%${filters.search}%`) }
+    if (where.length) sql += ` WHERE ` + where.join(' AND ')
+    sql += ` ORDER BY created_at DESC LIMIT 200`
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('ventesLigne:create', (_e, commande: Record<string, unknown>) => {
+    db.prepare(`
+      INSERT INTO ventes_en_ligne
+        (id,numero,shift_id,operateur_nom,client_nom,client_tel,client_adresse,
+         produits_json,montant_ttc,frais_livraison,frais_retour,statut,livraison_nom,note,created_at,updated_at)
+      VALUES
+        (@id,@numero,@shift_id,@operateur_nom,@client_nom,@client_tel,@client_adresse,
+         @produits_json,@montant_ttc,@frais_livraison,@frais_retour,@statut,@livraison_nom,@note,@created_at,@updated_at)
+    `).run(commande)
+    addActivityLog({ shift_id: commande.shift_id as string, operateur: commande.operateur_nom as string, action: 'ONLINE_ORDER_CREATED', montant: commande.montant_ttc as number, details: { numero: commande.numero, client: commande.client_nom } })
+    enqueueSync('ventes_en_ligne', 'INSERT', commande)
+    return { success: true }
+  })
+
+  ipcMain.handle('ventesLigne:updateStatut', (_e, id: string, statut: string, extra: Record<string, unknown> = {}) => {
+    const now = new Date().toISOString()
+    const cmd = db.prepare(`SELECT * FROM ventes_en_ligne WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    if (!cmd) return { error: 'Not found' }
+
+    if (statut === 'RETOUR') {
+      const frais = (extra.frais_retour as number) ?? (cmd.frais_retour as number) ?? 4
+      const sortieId = `sc-ret-${Date.now()}`
+      const sortieRow = {
+        id: sortieId, shift_id: extra.shift_id ?? null, montant: frais,
+        note: `Frais retour ${cmd.numero}`, operateur: extra.operateur ?? null, created_at: now,
+      }
+      db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
+        .run(sortieId, sortieRow.shift_id, frais, sortieRow.note, sortieRow.operateur, now)
+      enqueueSync('sorties_caisse', 'INSERT', sortieRow)
+    }
+    if (statut === 'CONFIRME') {
+      const lines = JSON.parse(cmd.produits_json as string) as Array<{ produit_id?: string; quantite: number }>
+      for (const l of lines) {
+        if (l.produit_id) {
+          db.prepare(`UPDATE produits SET stock_actuel = stock_actuel - ?, updated_at = ? WHERE id = ?`).run(l.quantite, now, l.produit_id)
+          enqueueProductSnapshot(l.produit_id)
+        }
+      }
+    }
+    if (statut === 'LIVRE') {
+      const montant = (extra.montant_recu as number) ?? 0
+      if (montant > 0) db.prepare(`UPDATE ventes_en_ligne SET montant_recu = ?, updated_at = ? WHERE id = ?`).run(montant, now, id)
+      if (extra.reference_livraison) db.prepare(`UPDATE ventes_en_ligne SET reference_livraison = ? WHERE id = ?`).run(extra.reference_livraison, id)
+    }
+    if (statut === 'REGLE') {
+      const montant = (extra.montant_net as number) ?? (cmd.montant_recu as number) ?? 0
+      if (montant > 0) {
+        const today = now.slice(0, 10)
+        const mvtId = `mvt-vl-${Date.now()}`
+        const mvtRow = {
+          id: mvtId, date_journal: today, type: 'ENTREE', categorie: 'VENTE_EN_LIGNE_REGLEMENT',
+          montant, reference_id: id, note: `Règlement vente en ligne ${cmd.numero}`,
+          operateur: extra.operateur ?? 'superadmin', created_at: now,
+        }
+        db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(mvtId, today, 'ENTREE', 'VENTE_EN_LIGNE_REGLEMENT', montant, id, mvtRow.note, mvtRow.operateur, now)
+        db.prepare(`UPDATE caisse_interne SET total_entrees = total_entrees + ? WHERE date_journal = ?`).run(montant, today)
+        db.prepare(`UPDATE ventes_en_ligne SET montant_net = ?, updated_at = ? WHERE id = ?`).run(montant, now, id)
+        enqueueSync('mouvements_caisse_interne', 'INSERT', mvtRow)
+        const ci = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown> | undefined
+        if (ci) enqueueSync('caisse_interne', 'UPDATE', ci)
+      }
+    }
+    if (statut === 'ANNULE') {
+      const prevStatut = cmd.statut as string
+      if (prevStatut === 'CONFIRME' || prevStatut === 'LIVRE') {
+        const lines = JSON.parse(cmd.produits_json as string) as Array<{ produit_id?: string; quantite: number }>
+        for (const l of lines) {
+          if (l.produit_id) {
+            db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ?, updated_at = ? WHERE id = ?`).run(l.quantite, now, l.produit_id)
+            enqueueProductSnapshot(l.produit_id)
+          }
+        }
+      }
+    }
+    db.prepare(`UPDATE ventes_en_ligne SET statut = ?, updated_at = ? WHERE id = ?`).run(statut, now, id)
+    addActivityLog({ action: 'ONLINE_ORDER_STATUS_UPDATED', details: { id, statut, ...extra } })
+    const updatedCmd = db.prepare('SELECT * FROM ventes_en_ligne WHERE id = ?').get(id) as Record<string, unknown>
+    enqueueSync('ventes_en_ligne', 'UPDATE', updatedCmd ?? { id, statut, updated_at: now })
+    return { success: true }
+  })
+
+  ipcMain.handle('ventesLigne:getLastNumber', (_e, prefix: string) => {
+    const row = db.prepare(`SELECT numero FROM ventes_en_ligne WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
+    if (!row) return 0
+    const parts = row.numero.split('-')
+    return parseInt(parts[parts.length - 1]) || 0
+  })
+
+  // ── Clients ────────────────────────────────────────────────────────────────
+  ipcMain.handle('clients:list', (_e, filters: Record<string, unknown> = {}) => {
+    if (filters.search) {
+      return db.prepare(`SELECT * FROM clients WHERE actif = 1 AND (nom LIKE ? OR telephone LIKE ?) ORDER BY nom`).all(`%${filters.search}%`, `%${filters.search}%`)
+    }
+    return db.prepare(`SELECT * FROM clients WHERE actif = 1 ORDER BY nom`).all()
+  })
+
+  ipcMain.handle('clients:create', (_e, client: Record<string, unknown>) => {
+    const { montant_credit_initial, agent_initial, note_credit, ...clientData } = client as Record<string, unknown>
+    const creditInitial = (montant_credit_initial as number) || 0
+    db.prepare(`INSERT INTO clients (id,nom,telephone,email,adresse,matricule_fiscal,credit_limite,solde_credit,organisation_id,agent,actif,notes,created_at) VALUES (@id,@nom,@telephone,@email,@adresse,@matricule_fiscal,@credit_limite,@solde_credit,@organisation_id,@agent,@actif,@notes,@created_at)`).run({
+      id: clientData.id ?? null,
+      nom: clientData.nom ?? null,
+      telephone: clientData.telephone ?? null,
+      email: clientData.email ?? null,
+      adresse: clientData.adresse ?? null,
+      matricule_fiscal: clientData.matricule_fiscal ?? null,
+      credit_limite: clientData.credit_limite ?? 500,
+      solde_credit: clientData.solde_credit ?? 0,
+      organisation_id: clientData.organisation_id ?? null,
+      agent: clientData.agent ?? agent_initial ?? null,
+      actif: clientData.actif ?? 1,
+      notes: clientData.notes ?? null,
+      created_at: clientData.created_at ?? new Date().toISOString(),
+    })
+    if (creditInitial > 0) {
+      const now = new Date().toISOString()
+      const id = `cr-init-${Date.now()}`
+      const creditRow = {
+        id, client_id: clientData.id, client_nom: clientData.nom, shift_id: null,
+        type: 'CREDIT', montant: creditInitial, reference: null,
+        note: 'Crédit initial à la création', operateur: agent_initial ?? 'superadmin', created_at: now,
+      }
+      db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .run(id, clientData.id, clientData.nom, null, 'CREDIT', creditInitial, null, 'Crédit initial à la création', agent_initial ?? 'superadmin', now)
+      db.prepare(`UPDATE clients SET solde_credit = solde_credit + ? WHERE id = ?`).run(creditInitial, clientData.id)
+      enqueueSync('credits_clients', 'INSERT', creditRow)
+    }
+    const clientSnapshot = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientData.id) as Record<string, unknown>
+    addActivityLog({ action: 'CLIENT_CREATED', details: { id: clientData.id, nom: clientData.nom } })
+    enqueueSync('clients', 'INSERT', clientSnapshot ?? clientData)
+    return { success: true }
+  })
+
+  ipcMain.handle('clients:update', (_e, id: string, data: Record<string, unknown>) => {
+    const fields = Object.keys(data).filter(k => k !== 'id').map(k => `${k} = @${k}`).join(', ')
+    if (fields) db.prepare(`UPDATE clients SET ${fields} WHERE id = @id`).run({ ...data, id })
+    addActivityLog({ action: 'CLIENT_UPDATED', details: { id, ...data } })
+    enqueueSync('clients', 'UPDATE', { id, ...data })
+    return { success: true }
+  })
+
+  // ── Crédits Clients ────────────────────────────────────────────────────────
+  ipcMain.handle('credits:list', (_e, clientId?: string) => {
+    if (clientId) return db.prepare(`SELECT cc.*, c.solde_credit FROM credits_clients cc LEFT JOIN clients c ON c.id = cc.client_id WHERE cc.client_id = ? ORDER BY cc.created_at DESC`).all(clientId)
+    return db.prepare(`SELECT cc.*, c.solde_credit, c.nom as _client_nom FROM credits_clients cc LEFT JOIN clients c ON c.id = cc.client_id ORDER BY cc.created_at DESC LIMIT 200`).all()
+  })
+
+  ipcMain.handle('credits:create', (_e, credit: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      client_id: '',
+      client_nom: '',
+      shift_id: null,
+      type: 'CREDIT',
+      montant: 0,
+      reference: null,
+      note: null,
+      operateur: 'superadmin',
+      created_at: new Date().toISOString(),
+    }, credit)
+    db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (@id,@client_id,@client_nom,@shift_id,@type,@montant,@reference,@note,@operateur,@created_at)`).run(row)
+    const delta = row.type === 'CREDIT' ? row.montant as number : -(row.montant as number)
+    db.prepare(`UPDATE clients SET solde_credit = solde_credit + ? WHERE id = ?`).run(delta, row.client_id)
+    if (row.type === 'PAIEMENT' && row.shift_id) {
+      db.prepare(`UPDATE shifts SET total_credits_recus = total_credits_recus + ? WHERE id = ?`).run(row.montant as number, row.shift_id)
+    }
+    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: row.type === 'CREDIT' ? 'CLIENT_CREDIT_CREATED' : 'CLIENT_PAYMENT_RECEIVED', montant: row.montant as number, details: { client_nom: row.client_nom } })
+    enqueueSync('credits_clients', 'INSERT', row)
+    const clientSnapshot = db.prepare('SELECT * FROM clients WHERE id = ?').get(row.client_id) as Record<string, unknown> | undefined
+    if (clientSnapshot) enqueueSync('clients', 'UPDATE', clientSnapshot)
+    return { success: true }
+  })
+
+  // ── Paramètres App ─────────────────────────────────────────────────────────
+  ipcMain.handle('settings:getAll', () => {
+    const rows = db.prepare(`SELECT key, value FROM app_settings`).all() as { key: string; value: string }[]
+    return Object.fromEntries(rows.map(r => [r.key, r.value]))
+  })
+
+  ipcMain.handle('settings:get', (_e, key: string) => {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key) as { value: string } | undefined
+    return row?.value ?? null
+  })
+
+  ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+    db.prepare(`INSERT OR REPLACE INTO app_settings (key,value,updated_at) VALUES (?,?,?)`).run(key, value, new Date().toISOString())
+    addActivityLog({ action: 'SETTING_UPDATED', details: { key, value } })
+    enqueueSync('app_settings', 'UPDATE', { key, value })
+    return { success: true }
+  })
+
+  ipcMain.handle('settings:setMany', (_e, data: Record<string, string>) => {
+    const stmt = db.prepare(`INSERT OR REPLACE INTO app_settings (key,value,updated_at) VALUES (?,?,?)`)
+    const now = new Date().toISOString()
+    db.transaction(() => { for (const [k, v] of Object.entries(data)) stmt.run(k, v, now) })()
+    addActivityLog({ action: 'SETTINGS_UPDATED', details: data })
+    for (const [k, v] of Object.entries(data)) enqueueSync('app_settings', 'UPDATE', { key: k, value: v })
+    return { success: true }
+  })
+
+  // ── Retours (Returns) ──────────────────────────────────────────────────────
+  ipcMain.handle('retours:create', (_e, retour: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      vente_id: '',
+      vente_numero: '',
+      shift_id: null,
+      produit_id: null,
+      designation: '',
+      quantite: 0,
+      prix_unitaire: 0,
+      motif: null,
+      type_retour: 'SANS_PROBLEME',
+      statut: 'EN_ATTENTE',
+      resolution: null,
+      montant_rembourse: 0,
+      operateur: 'superadmin',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, retour)
+    db.prepare(`INSERT INTO retours (id,vente_id,vente_numero,shift_id,produit_id,designation,quantite,prix_unitaire,motif,type_retour,statut,resolution,montant_rembourse,operateur,created_at,updated_at) VALUES (@id,@vente_id,@vente_numero,@shift_id,@produit_id,@designation,@quantite,@prix_unitaire,@motif,@type_retour,@statut,@resolution,@montant_rembourse,@operateur,@created_at,@updated_at)`).run(row)
+    if (row.type_retour === 'SANS_PROBLEME' && row.produit_id) {
+      db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?`).run(row.quantite as number, row.produit_id)
+    }
+    if ((row.montant_rembourse as number) > 0 && row.shift_id) {
+      const sortieId = `ret-${row.id}`
+      const sortieRow = {
+        id: sortieId, shift_id: row.shift_id, montant: row.montant_rembourse,
+        note: `Remboursement retour: ${row.designation}`, operateur: row.operateur, created_at: row.created_at,
+      }
+      db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
+        .run(sortieId, row.shift_id, row.montant_rembourse, sortieRow.note, row.operateur, row.created_at)
+      enqueueSync('sorties_caisse', 'INSERT', sortieRow)
+    }
+    if (row.type_retour === 'SANS_PROBLEME' && row.produit_id) {
+      enqueueProductSnapshot(row.produit_id as string)
+    }
+    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: 'RETURN_CREATED', montant: row.montant_rembourse as number, details: { designation: row.designation, type: row.type_retour } })
+    enqueueSync('retours', 'INSERT', row)
+    return { success: true }
+  })
+
+  ipcMain.handle('retours:list', (_e, filters: Record<string, unknown> = {}) => {
+    if (filters.statut) return db.prepare(`SELECT * FROM retours WHERE statut = ? ORDER BY created_at DESC`).all(filters.statut)
+    return db.prepare(`SELECT * FROM retours ORDER BY created_at DESC LIMIT 300`).all()
+  })
+
+  ipcMain.handle('retours:updateStatut', (_e, id: string, statut: string, extra?: Record<string, unknown>) => {
+    const now = new Date().toISOString()
+    db.prepare(`UPDATE retours SET statut = ?, resolution = ?, updated_at = ? WHERE id = ?`).run(statut, extra?.resolution ?? null, now, id)
+    addActivityLog({ action: 'RETURN_STATUS_UPDATED', details: { id, statut, resolution: extra?.resolution } })
+    enqueueSync('retours', 'UPDATE', { id, statut, resolution: extra?.resolution ?? null })
+    return { success: true }
+  })
+
+  // ── Ventes: Cancel ─────────────────────────────────────────────────────────
+  ipcMain.handle('ventes:annuler', (_e, id: string, data: Record<string, unknown>) => {
+    const now = new Date().toISOString()
+    db.transaction(() => {
+      db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par=@annule_par, annule_at=@annule_at, annule_motif=@annule_motif WHERE id=@id`)
+        .run({ id, annule_par: data.annule_par, annule_at: now, annule_motif: data.annule_motif })
+      const lignes = db.prepare(`SELECT produit_id, quantite FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as { produit_id: string; quantite: number }[]
+      for (const l of lignes) {
+        db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?`).run(l.quantite, l.produit_id)
+      }
+    })()
+    addActivityLog({ action: 'SALE_CANCELLED', details: { id, ...data } })
+    enqueueSync('ventes', 'UPDATE', { id, statut: 'ANNULEE', annule_at: now, ...data })
+    const lignes = db.prepare(`SELECT produit_id FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as { produit_id: string }[]
+    for (const l of lignes) enqueueProductSnapshot(l.produit_id)
+    return { success: true }
+  })
+
+  // ── Organisations ───────────────────────────────────────────────────────────
+  ipcMain.handle('organisations:list', () => {
+    return db.prepare(`SELECT * FROM organisations WHERE actif = 1 ORDER BY nom`).all()
+  })
+  ipcMain.handle('organisations:create', (_e, org: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      nom: '',
+      telephone: null,
+      email: null,
+      adresse: null,
+      matricule_fiscal: null,
+      notes: null,
+      created_at: new Date().toISOString(),
+    }, org)
+    db.prepare(`INSERT INTO organisations (id,nom,telephone,email,adresse,matricule_fiscal,notes,created_at) VALUES (@id,@nom,@telephone,@email,@adresse,@matricule_fiscal,@notes,@created_at)`).run(row)
+    addActivityLog({ action: 'ORGANISATION_CREATED', details: { id: row.id, nom: row.nom } })
+    enqueueSync('organisations', 'INSERT', row)
+    return { success: true }
+  })
+  ipcMain.handle('organisations:update', (_e, id: string, data: Record<string, unknown>) => {
+    const sets = Object.keys(data).map(k => `${k}=@${k}`).join(',')
+    db.prepare(`UPDATE organisations SET ${sets} WHERE id=@id`).run({ ...data, id })
+    addActivityLog({ action: 'ORGANISATION_UPDATED', details: { id, ...data } })
+    enqueueSync('organisations', 'UPDATE', { id, ...data })
+    return { success: true }
+  })
+  ipcMain.handle('organisations:delete', (_e, id: string) => {
+    db.prepare(`UPDATE organisations SET actif=0 WHERE id=?`).run(id)
+    addActivityLog({ action: 'ORGANISATION_DELETED', details: { id } })
+    enqueueSync('organisations', 'UPDATE', { id, actif: 0 })
+    return { success: true }
+  })
+
+  // ── Personnels ──────────────────────────────────────────────────────────────
+  ipcMain.handle('personnels:list', () => {
+    return db.prepare(`SELECT * FROM personnels WHERE actif = 1 ORDER BY nom`).all()
+  })
+  ipcMain.handle('personnels:create', (_e, p: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      nom: '',
+      prenom: null,
+      poste: null,
+      telephone: null,
+      cin: null,
+      date_embauche: null,
+      salaire_base: null,
+      notes: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, p)
+    db.prepare(`INSERT INTO personnels (id,nom,prenom,poste,telephone,cin,date_embauche,salaire_base,notes,created_at,updated_at) VALUES (@id,@nom,@prenom,@poste,@telephone,@cin,@date_embauche,@salaire_base,@notes,@created_at,@updated_at)`).run(row)
+    addActivityLog({ action: 'STAFF_CREATED', details: { id: row.id, nom: row.nom, poste: row.poste } })
+    enqueueSync('personnels', 'INSERT', row)
+    return { success: true }
+  })
+  ipcMain.handle('personnels:update', (_e, id: string, data: Record<string, unknown>) => {
+    const cols = Object.keys(data)
+    const sets = cols.map(k => `${k}=@${k}`).join(',')
+    db.prepare(`UPDATE personnels SET ${sets}, updated_at=datetime('now') WHERE id=@id`).run({ ...data, id })
+    addActivityLog({ action: 'STAFF_UPDATED', details: { id, ...data } })
+    enqueueSync('personnels', 'UPDATE', { id, ...data })
+    return { success: true }
+  })
+  ipcMain.handle('personnels:delete', (_e, id: string) => {
+    db.prepare(`UPDATE personnels SET actif=0 WHERE id=?`).run(id)
+    addActivityLog({ action: 'STAFF_DELETED', details: { id } })
+    enqueueSync('personnels', 'UPDATE', { id, actif: 0 })
+    return { success: true }
+  })
+
+  ipcMain.handle('mouvementsPersonnels:list', (_e, filters: Record<string, unknown> = {}) => {
+    let sql = `SELECT mp.*, p.nom || ' ' || COALESCE(p.prenom,'') as personnel_nom_full FROM mouvements_personnels mp LEFT JOIN personnels p ON p.id = mp.personnel_id WHERE 1=1`
+    const params: unknown[] = []
+    if (filters.personnel_id) { sql += ' AND mp.personnel_id = ?'; params.push(filters.personnel_id) }
+    if (filters.type) { sql += ' AND mp.type = ?'; params.push(filters.type) }
+    if (filters.mois) { sql += ' AND mp.mois = ?'; params.push(filters.mois) }
+    sql += ' ORDER BY mp.created_at DESC LIMIT 500'
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('mouvementsPersonnels:create', (_e, mvt: Record<string, unknown>) => {
+    const row = bindRow({
+      id: '',
+      personnel_id: '',
+      type: 'AVANCE',
+      montant: 0,
+      mois: null,
+      note: null,
+      operateur: 'superadmin',
+      created_at: new Date().toISOString(),
+    }, mvt)
+    db.transaction(() => {
+      db.prepare(`INSERT INTO mouvements_personnels (id,personnel_id,type,montant,mois,note,operateur,created_at) VALUES (@id,@personnel_id,@type,@montant,@mois,@note,@operateur,@created_at)`).run(row)
+      const type = row.type as string
+      const montant = row.montant as number
+      const pid = row.personnel_id as string
+      if (type === 'AVANCE') db.prepare(`UPDATE personnels SET avance_solde = avance_solde + ? WHERE id = ?`).run(montant, pid)
+      else if (type === 'AVANCE_REMBOURSEMENT') db.prepare(`UPDATE personnels SET avance_solde = MAX(0, avance_solde - ?) WHERE id = ?`).run(montant, pid)
+      else if (type === 'CREDIT_PERSONNEL') db.prepare(`UPDATE personnels SET credit_solde = credit_solde + ? WHERE id = ?`).run(montant, pid)
+      else if (type === 'CREDIT_REMBOURSEMENT') db.prepare(`UPDATE personnels SET credit_solde = MAX(0, credit_solde - ?) WHERE id = ?`).run(montant, pid)
+      if (['SALAIRE', 'AVANCE', 'CREDIT_PERSONNEL'].includes(type)) {
+        const categorie = type === 'SALAIRE' ? 'SALAIRE' : type === 'AVANCE' ? 'AVANCE_PERSONNEL' : 'CHARGE'
+        db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now'),'SORTIE',?,?,?,?,?,?)`)
+          .run(`mci-${row.id}`, categorie, montant, pid, row.note ?? type, row.operateur, row.created_at)
+      }
+    })()
+    addActivityLog({ operateur: row.operateur as string, action: 'STAFF_MOVEMENT_CREATED', montant: row.montant as number, details: { type: row.type, personnel_id: row.personnel_id, mois: row.mois } })
+    enqueueSync('mouvements_personnels', 'INSERT', row)
+    const personnel = db.prepare('SELECT * FROM personnels WHERE id = ?').get(mvt.personnel_id) as Record<string, unknown> | undefined
+    if (personnel) enqueueSync('personnels', 'UPDATE', personnel)
+    return { success: true }
+  })
+
+  // ── Documents (Facture/Devis/BL) ─────────────────────────────────────────
+  ipcMain.handle('documents:list', (_e, filters: Record<string, unknown> = {}) => {
+    let sql = `SELECT * FROM documents WHERE 1=1`
+    const params: unknown[] = []
+    if (filters.type_document) { sql += ' AND type_document = ?'; params.push(filters.type_document) }
+    if (filters.statut) { sql += ' AND statut = ?'; params.push(filters.statut) }
+    if (filters.client_id) { sql += ' AND client_id = ?'; params.push(filters.client_id) }
+    if (filters.fournisseur_id) { sql += ' AND fournisseur_id = ?'; params.push(filters.fournisseur_id) }
+    if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom + 'T00:00:00.000Z') }
+    if (filters.dateTo) { sql += ' AND created_at <= ?'; params.push(filters.dateTo + 'T23:59:59.999Z') }
+    sql += ' ORDER BY created_at DESC LIMIT 500'
+    return db.prepare(sql).all(...params)
+  })
+  ipcMain.handle('documents:create', (_e, doc: Record<string, unknown>, lignes: Record<string, unknown>[]) => {
+    const now = new Date().toISOString()
+    const normalizedDoc = {
+      vente_id: null, fournisseur_id: null, client_id: null,
+      client_nom: null, client_tel: null, client_adresse: null, client_matricule: null,
+      shift_id: null, statut_paiement: 'PAYE', montant_paye: 0,
+      date_echeance: null, layout_snapshot: null, contenu_json: null,
+      updated_at: now, created_at: now,
+      ...doc,
+    }
+    db.transaction(() => {
+      db.prepare(`INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at) VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)`).run(normalizedDoc)
+      for (const l of lignes) {
+        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
+        db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)`).run(nl)
+      }
+    })()
+    addActivityLog({ shift_id: doc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: doc.type_document, numero: doc.numero, client: doc.client_nom }, montant: doc.total_ttc as number })
+    enqueueSync('documents', 'INSERT', normalizedDoc)
+    for (const l of lignes) {
+      const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
+      enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
+    }
+    return { success: true }
+  })
+  ipcMain.handle('documents:update', (_e, id: string, data: Record<string, unknown>) => {
+    const cols = Object.keys(data)
+    const sets = cols.map(k => `${k}=@${k}`).join(',')
+    db.prepare(`UPDATE documents SET ${sets}, updated_at=datetime('now') WHERE id=@id`).run({ ...data, id })
+    addActivityLog({ action: 'DOCUMENT_UPDATED', details: { id, ...data } })
+    enqueueSync('documents', 'UPDATE', { id, ...data })
+    return { success: true }
+  })
+  ipcMain.handle('documents:getLignes', (_e, documentId: string) => {
+    return db.prepare(`SELECT * FROM lignes_document WHERE document_id = ?`).all(documentId)
+  })
+  ipcMain.handle('documents:getLastNumber', (_e, prefix: string) => {
+    const row = db.prepare(`SELECT numero FROM documents WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
+    if (!row) return 0
+    const parts = row.numero.split('-')
+    return parseInt(parts[parts.length - 1]) || 0
+  })
+
+  // Révocation
+  ipcMain.handle('documents:revoquer', (_e, id: string, motif: string, par: string) => {
+    const now = new Date().toISOString()
+    db.prepare(`UPDATE documents SET statut='REVOQUE', revoque_par=?, revoque_at=?, revoque_motif=?, updated_at=? WHERE id=?`)
+      .run(par, now, motif, now, id)
+    addActivityLog({ action: 'FACTURE_REVOQUEE', details: { id, motif, par } })
+    enqueueSync('documents', 'UPDATE', { id, statut: 'REVOQUE', revoque_par: par, revoque_at: now, revoque_motif: motif })
+    return { success: true }
+  })
+
+  // Count pending BL (NON_ARRIVE) for notification
+  ipcMain.handle('factures:countBLPending', () => {
+    const row = db.prepare(`SELECT COUNT(*) as cnt FROM factures_fournisseurs WHERE statut_reception = 'NON_ARRIVE' AND (statut_paiement IS NULL OR statut_paiement != 'ANNULE')`).get() as { cnt: number }
+    return row?.cnt ?? 0
+  })
+
+  ipcMain.handle('factures:listBLPending', () => {
+    return db.prepare(`
+      SELECT ff.id, ff.numero_facture, ff.fournisseur_nom, ff.montant_ttc, ff.created_at,
+        CAST((julianday('now') - julianday(ff.created_at)) AS INTEGER) AS jours_attente
+      FROM factures_fournisseurs ff
+      WHERE ff.statut_reception = 'NON_ARRIVE' AND (ff.statut_paiement IS NULL OR ff.statut_paiement != 'ANNULE')
+      ORDER BY ff.created_at ASC
+    `).all()
+  })
+
+  // ── Documents: list all (unified view — documents + factures_fournisseurs) ──
+  ipcMain.handle('documents:listAll', (_e, filters: Record<string, unknown> = {}) => {
+    const params: unknown[] = []
+    let typeCond = ''
+    if (filters.type_document && filters.type_document !== 'TOUS') {
+      typeCond = ` AND type_document = ?`
+      params.push(filters.type_document)
+    }
+    let dateCond = ''
+    if (filters.dateFrom) { dateCond += ` AND created_at >= ?`; params.push(filters.dateFrom + 'T00:00:00.000Z') }
+    if (filters.dateTo)   { dateCond += ` AND created_at <= ?`; params.push(filters.dateTo + 'T23:59:59.999Z') }
+
+    const docs = db.prepare(`
+      SELECT d.*, NULL as fournisseur_nom, 'documents' AS _source
+      FROM documents d
+      WHERE 1=1 ${typeCond} ${dateCond}
+      ORDER BY created_at DESC LIMIT 300
+    `).all(...params) as Record<string, unknown>[]
+
+    // If type filter is vente-only, skip fournisseur factures
+    const typeStr = (filters.type_document ?? '') as string
+    const fetchFF = !typeStr || typeStr === 'TOUS' || typeStr === 'FACTURE_ACHAT' || typeStr === 'FACTURE_ACHAT_BL'
+    let ffDocs: Record<string, unknown>[] = []
+    if (fetchFF) {
+      const ffParams: unknown[] = []
+      let ffTypeCond = ''
+      if (typeStr === 'FACTURE_ACHAT')    { ffTypeCond = ` AND type = ?`; ffParams.push('FACTURE_ACHAT') }
+      if (typeStr === 'FACTURE_ACHAT_BL') { ffTypeCond = ` AND type = ?`; ffParams.push('FACTURE_ACHAT_BL') }
+      ffDocs = db.prepare(`
+        SELECT ff.id, ff.numero_facture AS numero, ff.type AS type_document,
+          CASE WHEN ff.statut_reception = 'NON_ARRIVE' THEN 'NON_ARRIVE'
+               WHEN ff.statut_paiement = 'ANNULE' THEN 'ANNULE'
+               ELSE 'ACTIF' END AS statut,
+          ff.fournisseur_id, f.nom AS fournisseur_nom,
+          NULL AS client_nom, NULL AS client_tel,
+          ff.montant_ht AS total_ht, ff.montant_tva AS total_tva,
+          ff.montant_ttc AS total_ttc, ff.statut_paiement,
+          ff.montant_paye, ff.exo, ff.timbre, ff.ht_7, ff.tva_7, ff.ht_19, ff.tva_19, ff.total_remise,
+          ff.created_at, ff.created_at AS updated_at, 'ff' AS _source
+        FROM factures_fournisseurs ff
+        LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
+        WHERE 1=1 ${ffTypeCond}
+        ORDER BY ff.created_at DESC LIMIT 300
+      `).all(...ffParams) as Record<string, unknown>[]
+    }
+
+    return [...docs, ...ffDocs].sort((a, b) =>
+      String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
+    ).slice(0, 500)
+  })
+
+  // ── Sync Queue (production-safe, no raw SQL exposure) ──────────────────────
+  const SYNC_ALLOWED_TABLES = new Set([
+    'operateurs', 'categories', 'fournisseurs', 'organisations', 'clients',
+    'shifts', 'services_pos', 'transactions_services', 'produits', 'ventes',
+    'lignes_vente', 'factures_clients', 'reparations', 'pieces_reparation',
+    'sorties_caisse', 'factures_fournisseurs', 'lignes_facture_fournisseur',
+    'paiements_fournisseurs', 'credits_clients', 'retours', 'ventes_en_ligne',
+    'caisse_interne', 'mouvements_caisse_interne', 'personnels',
+    'mouvements_personnels', 'documents', 'lignes_document', 'activity_logs',
+    'app_settings',
+  ])
+
+  ipcMain.handle('sync:shifts:getFondDeCaisse', (_e, shiftId: string) => {
+    const row = db.prepare('SELECT fond_de_caisse FROM shifts WHERE id = ? LIMIT 1').get(shiftId) as { fond_de_caisse?: number } | undefined
+    return row?.fond_de_caisse ?? null
+  })
+
+  const SYNC_MAX_ATTEMPTS = 10 // give up after 10 consecutive failures
+
+  ipcMain.handle('sync:queue:getPending', () => {
+    // Only return items that haven't exceeded max attempts
+    return db.prepare(
+      `SELECT id, table_name, operation, payload FROM sync_queue
+       WHERE synced_at IS NULL AND attempts < ${SYNC_MAX_ATTEMPTS}
+       ORDER BY created_at ASC LIMIT 100`
+    ).all()
+  })
+
+  ipcMain.handle('sync:queue:markSynced', (_e, id: string) => {
+    db.prepare(`UPDATE sync_queue SET synced_at = ? WHERE id = ?`).run(new Date().toISOString(), id)
+    return { success: true }
+  })
+
+  ipcMain.handle('sync:queue:markFailed', (_e, id: string, errorMsg: string) => {
+    db.prepare(`UPDATE sync_queue SET attempts = attempts + 1, last_error = ? WHERE id = ?`).run(errorMsg, id)
+    return { success: true }
+  })
+
+  ipcMain.handle('sync:queue:cleanup', () => {
+    const cutoff = new Date(Date.now() - 7 * 86400 * 1000).toISOString()
+    // Also purge permanently failed items (≥ max attempts) older than 1 day
+    const failCutoff = new Date(Date.now() - 86400 * 1000).toISOString()
+    db.prepare(`DELETE FROM sync_queue WHERE synced_at IS NOT NULL AND synced_at < ?`).run(cutoff)
+    const { changes } = db.prepare(
+      `DELETE FROM sync_queue WHERE attempts >= ${SYNC_MAX_ATTEMPTS} AND created_at < ?`
+    ).run(failCutoff)
+    return { deleted: changes }
+  })
+
+  ipcMain.handle('sync:queue:pendingCount', () => {
+    // Only count items that are still retryable (not permanently failed)
+    const row = db.prepare(
+      `SELECT COUNT(*) as cnt FROM sync_queue WHERE synced_at IS NULL AND attempts < ${SYNC_MAX_ATTEMPTS}`
+    ).get() as { cnt: number }
+    return row.cnt ?? 0
+  })
+
+  ipcMain.handle('sync:queue:failedCount', () => {
+    const row = db.prepare(
+      `SELECT COUNT(*) as cnt FROM sync_queue WHERE synced_at IS NULL AND attempts >= ${SYNC_MAX_ATTEMPTS}`
+    ).get() as { cnt: number }
+    return row.cnt ?? 0
+  })
+
+  ipcMain.handle('sync:queue:purgeAllFailed', () => {
+    const { changes } = db.prepare(
+      `DELETE FROM sync_queue WHERE synced_at IS NULL AND attempts >= ${SYNC_MAX_ATTEMPTS}`
+    ).run()
+    return { deleted: changes }
+  })
+
+  ipcMain.handle('sync:queue:resetAllFailed', () => {
+    // Reset failed items back to 0 attempts so they get retried
+    const { changes } = db.prepare(
+      `UPDATE sync_queue SET attempts = 0, last_error = NULL WHERE synced_at IS NULL AND attempts >= ${SYNC_MAX_ATTEMPTS}`
+    ).run()
+    return { reset: changes }
+  })
+
+  ipcMain.handle('sync:queue:getErrors', () => {
+    // Return pending+failed items with their error messages for debugging
+    return db.prepare(
+      `SELECT id, table_name, operation, attempts, last_error, created_at
+       FROM sync_queue WHERE synced_at IS NULL
+       ORDER BY attempts DESC, created_at DESC LIMIT 30`
+    ).all()
+  })
+
+  ipcMain.handle('sync:queue:purgeAll', () => {
+    // Nuclear option: delete all pending sync items (data stays local)
+    const { changes } = db.prepare(`DELETE FROM sync_queue WHERE synced_at IS NULL`).run()
+    return { deleted: changes }
+  })
+
+  ipcMain.handle('sync:bootstrap:tableData', (_e, tableName: string, onlyActive?: boolean) => {
+    if (!SYNC_ALLOWED_TABLES.has(tableName)) return []
+    const whereActive = onlyActive ? ' WHERE actif = 1' : ''
+    try {
+      return db.prepare(`SELECT * FROM ${tableName}${whereActive}`).all()
+    } catch {
+      return []
+    }
+  })
+
+  // Window controls
+  ipcMain.handle('window:minimize', () => mainWindow?.minimize())
+  ipcMain.handle('window:maximize', () => {
+    if (mainWindow?.isMaximized()) mainWindow.restore()
+    else mainWindow?.maximize()
+  })
+  ipcMain.handle('window:close', () => mainWindow?.close())
+
+  // ─── Print ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('print:label', async (_event, html: string) => {
+    const res = await printHtmlInHiddenWindow(html, { silent: false, printBackground: true, color: true, pageSize: 'A4' })
+    return res.success
+  })
+
+  ipcMain.handle('print:getPrinters', async () => {
+    if (!mainWindow) return []
+    try {
+      return await mainWindow.webContents.getPrintersAsync()
+    } catch { return [] }
+  })
+
+  ipcMain.handle('print:printContent', async (_event, html: string, printerName: string, options: Record<string, unknown> = {}) => {
+    return printHtmlInHiddenWindow(html, {
+      printerName: printerName || undefined,
+      silent: options.silent === true,
+      printBackground: options.printBackground !== false,
+      color: options.color !== false,
+      copies: typeof options.copies === 'number' ? options.copies : 1,
+      pageSize: (options.pageSize as string) || 'A4',
+    })
+  })
+
+  // ─── Backup ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('backup:create', () => {
+    const r = createLocalBackup()
+    if (!r) return { success: false, error: 'Backup failed' }
+    const external = copyToExternalFolder(r.path)
+    return { success: true, filename: r.filename, path: r.path, external }
+  })
+
+  ipcMain.handle('backup:list', () => {
+    const backupDir = getBackupDir()
+    const files = readdirSync(backupDir)
+      .filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
+      .map(f => {
+        const s = statSync(join(backupDir, f))
+        return { name: f, size: s.size, time: s.mtimeMs, path: join(backupDir, f) }
+      })
+      .sort((a, b) => b.time - a.time)
+    return files
+  })
+
+  ipcMain.handle('backup:getStats', () => {
+    const backupDir = getBackupDir()
+    const files = existsSync(backupDir)
+      ? readdirSync(backupDir).filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
+      : []
+    const latest = files.sort().pop()
+    const lastTime = latest ? statSync(join(backupDir, latest)).mtimeMs : null
+    const totalSize = files.reduce((acc, f) => {
+      try { return acc + statSync(join(backupDir, f)).size } catch { return acc }
+    }, 0)
+    const dbSize = existsSync(dbFilePath) ? statSync(dbFilePath).size : 0
+    return { count: files.length, lastTime, totalSize, dbSize, dbPath: dbFilePath, backupDir }
+  })
+
+  ipcMain.handle('backup:openFolder', () => {
+    shell.openPath(getBackupDir())
+  })
+
+  ipcMain.handle('backup:chooseExternalFolder', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: 'Dossier de sauvegarde externe (Google Drive, USB, etc.)',
+    })
+    if (result.canceled || !result.filePaths.length) return { canceled: true }
+    return { path: result.filePaths[0] }
+  })
+
+  ipcMain.handle('backup:restore', async (_e, backupPath: string) => {
+    try {
+      if (!existsSync(backupPath)) return { success: false, error: 'Fichier introuvable' }
+      // Safety: backup current state first
+      createLocalBackup()
+      // Close DB, copy, then restart
+      db.close()
+      copyFileSync(backupPath, dbFilePath)
+      // Relaunch the app
+      app.relaunch()
+      app.exit(0)
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+}

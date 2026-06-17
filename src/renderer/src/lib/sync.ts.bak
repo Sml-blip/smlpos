@@ -1,0 +1,162 @@
+/**
+ * SMLPOS Offline Sync Engine
+ *
+ * Architecture:
+ *  1. All writes go to local SQLite first (via IPC).
+ *  2. Each write enqueues a record in `sync_queue` (id, table, operation, payload, synced_at=null).
+ *  3. When online + Supabase configured, processSyncQueue() runs every N seconds,
+ *     upserts pending records to Supabase, marks them synced.
+ *  4. On reconnect, flushes the queue immediately.
+ */
+import { supabase, isSupabaseEnabled } from './supabase'
+
+const api = window.api
+
+let _running = false
+let _intervalId: ReturnType<typeof setInterval> | null = null
+
+/** Tables that are synced to Supabase (excludes local-only tables). */
+const SYNC_TABLES = [
+  'operateurs',
+  'shifts',
+  'produits',
+  'ventes',
+  'lignes_vente',
+  'reparations',
+  'pieces_reparation',
+  'sorties_caisse',
+  'services_pos',
+  'transactions_services',
+  'factures_clients',
+  'fournisseurs',
+  'factures_fournisseurs',
+  'lignes_facture_fournisseur',
+  'paiements_fournisseurs',
+  'caisse_interne',
+  'mouvements_caisse_interne',
+  'activity_logs',
+]
+
+/**
+ * Enqueue a change for sync.
+ * Called automatically after every successful IPC write.
+ */
+export async function enqueueSync(
+  table: string,
+  operation: 'INSERT' | 'UPDATE' | 'DELETE',
+  payload: Record<string, unknown>
+) {
+  if (!SYNC_TABLES.includes(table)) return
+  try {
+    await api.dbRun(
+      `INSERT INTO sync_queue (id, table_name, operation, payload, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        crypto.randomUUID(),
+        table,
+        operation,
+        JSON.stringify(payload),
+        new Date().toISOString(),
+      ]
+    )
+  } catch (e) {
+    console.warn('[sync] Failed to enqueue:', e)
+  }
+}
+
+/**
+ * Process all pending sync_queue entries, push to Supabase.
+ * Returns number of records synced.
+ */
+export async function processSyncQueue(): Promise<number> {
+  if (!isSupabaseEnabled || !supabase) return 0
+  if (!navigator.onLine) return 0
+
+  let synced = 0
+  try {
+    const rows = (await api.dbQuery(
+      `SELECT * FROM sync_queue WHERE synced_at IS NULL ORDER BY created_at ASC LIMIT 100`
+    ) as unknown) as { id: string; table_name: string; operation: string; payload: string }[]
+
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload)
+      let error: { message: string } | null = null
+
+      if (row.operation === 'DELETE') {
+        const { error: e } = await supabase
+          .from(row.table_name)
+          .delete()
+          .eq('id', payload.id)
+        error = e
+      } else {
+        // INSERT or UPDATE → upsert by id
+        const { error: e } = await supabase
+          .from(row.table_name)
+          .upsert(payload, { onConflict: 'id' })
+        error = e
+      }
+
+      if (!error) {
+        await api.dbRun(
+          `UPDATE sync_queue SET synced_at = ? WHERE id = ?`,
+          [new Date().toISOString(), row.id]
+        )
+        synced++
+      } else {
+        console.warn(`[sync] Failed to sync ${row.table_name}#${payload.id}:`, error.message)
+      }
+    }
+
+    // Cleanup old synced entries (> 7 days)
+    await api.dbRun(
+      `DELETE FROM sync_queue WHERE synced_at IS NOT NULL AND synced_at < ?`,
+      [new Date(Date.now() - 7 * 86400 * 1000).toISOString()]
+    )
+  } catch (e) {
+    console.warn('[sync] processSyncQueue error:', e)
+  }
+  return synced
+}
+
+/** Count pending records in the sync queue. */
+export async function getPendingCount(): Promise<number> {
+  try {
+    const rows = (await api.dbQuery(
+      `SELECT COUNT(*) as cnt FROM sync_queue WHERE synced_at IS NULL`
+    ) as unknown) as { cnt: number }[]
+    return rows[0]?.cnt ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/** Start background sync polling (every 30s). */
+export function startSyncPolling(intervalMs = 30_000) {
+  if (_running || !isSupabaseEnabled) return
+  _running = true
+
+  // Immediate flush on start
+  processSyncQueue().then(n => {
+    if (n > 0) console.info(`[sync] Flushed ${n} pending records on startup`)
+  })
+
+  _intervalId = setInterval(() => {
+    processSyncQueue()
+  }, intervalMs)
+
+  // Flush on reconnect
+  window.addEventListener('online', () => {
+    processSyncQueue().then(n => {
+      if (n > 0) console.info(`[sync] Flushed ${n} records on reconnect`)
+    })
+  })
+}
+
+/** Stop background sync polling. */
+export function stopSyncPolling() {
+  if (_intervalId) {
+    clearInterval(_intervalId)
+    _intervalId = null
+  }
+  _running = false
+}

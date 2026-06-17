@@ -1,0 +1,4 @@
+-- DEPRECATED: use supabase/migrations/001_full_schema.sql (new projects)
+-- and supabase/migrations/002_patches.sql (existing projects)
+--
+-- Canonical schema lives in supabase/migrations/
