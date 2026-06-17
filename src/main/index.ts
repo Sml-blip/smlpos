@@ -216,9 +216,10 @@ function setupIpcHandlers() {
 
   ipcMain.handle('app:factoryReset', () => {
     try {
-      wipeAllUserData()
+      const result = wipeAllUserData()
+      if (!result.ok) return { success: false, error: result.error ?? 'Échec réinitialisation' }
       relaunchFresh()
-      return { success: true }
+      return { success: true, deferred: result.deferred === true }
     } catch (e) {
       return { success: false, error: String(e) }
     }

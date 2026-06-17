@@ -598,7 +598,12 @@ function FactoryResetCard() {
     setResetting(true)
     try {
       Object.keys(localStorage).filter(k => k.startsWith('smlpos_')).forEach(k => localStorage.removeItem(k))
-      await api.factoryReset?.()
+      const res = await api.factoryReset?.() as { success?: boolean; error?: string; deferred?: boolean } | undefined
+      if (res && res.success === false) {
+        showToast('error', res.error ?? 'Échec de la réinitialisation')
+        setResetting(false)
+      }
+      // App relaunches on success — no toast needed
     } catch {
       showToast('error', 'Échec de la réinitialisation')
       setResetting(false)
@@ -612,7 +617,7 @@ function FactoryResetCard() {
           <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
           <span>
             Efface la base SQLite, toutes les ventes, le stock modifié, les clients et les sauvegardes locales.
-            Les paramètres reviennent aux valeurs par défaut. Action irréversible.
+            Le catalogue produits sera vide (pas de réimport automatique). Action irréversible.
           </span>
         </div>
         <Field label="Tapez REINITIALISER pour confirmer">

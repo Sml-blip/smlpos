@@ -1,7 +1,14 @@
 // Auto-generated from ETAT_Produit Excel — 1146 produits
 import type Database from 'better-sqlite3'
+import { app } from 'electron'
+import { consumeSkipProductSeedFlag } from './userDataWipe'
 
 export function seedProductsIfEmpty(db: Database.Database): void {
+  if (app.isPackaged && consumeSkipProductSeedFlag()) {
+    console.log('[seed] Skipped product catalog — factory reset / first use')
+    return
+  }
+
   const row = db.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }
   if (row.cnt > 0) return // Déjà peuplé
 

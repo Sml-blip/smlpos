@@ -1,10 +1,18 @@
 import { app } from 'electron'
-import { existsSync, unlinkSync, rmSync } from 'fs'
-import { join } from 'path'
-import { db, dbFilePath } from './db'
+import { db } from './db'
+import {
+  applyPendingWipeBeforeDbOpen,
+  deleteAllLocalDataFiles,
+  getUserDataDir,
+  requestWipeFlags,
+} from './userDataWipe'
 
-/** Delete SQLite DB, WAL files, and local backups — next launch is first-run state. */
-export function wipeAllUserData(): void {
+export { applyPendingWipeBeforeDbOpen } from './userDataWipe'
+
+/** Close DB, delete files, relaunch. If delete fails, flag ensures wipe before DB opens next launch. */
+export function wipeAllUserData(): { ok: boolean; error?: string; deferred?: boolean } {
+  requestWipeFlags()
+
   try {
     db.pragma('wal_checkpoint(TRUNCATE)')
   } catch { /* ignore */ }
@@ -12,19 +20,14 @@ export function wipeAllUserData(): void {
     db.close()
   } catch { /* ignore */ }
 
-  for (const suffix of ['', '-wal', '-shm']) {
-    const p = suffix ? `${dbFilePath}${suffix}` : dbFilePath
-    if (existsSync(p)) {
-      try { unlinkSync(p) } catch { /* ignore */ }
-    }
+  const result = deleteAllLocalDataFiles(getUserDataDir())
+  if (!result.ok) {
+    console.warn('[factoryReset] Files still locked — wipe will run on next launch:', result.errors.join('; '))
+    return { ok: true, deferred: true }
   }
 
-  const backupDir = join(app.getPath('userData'), 'backups')
-  if (existsSync(backupDir)) {
-    try { rmSync(backupDir, { recursive: true, force: true }) } catch { /* ignore */ }
-  }
-
-  console.log('[factoryReset] User data wiped:', app.getPath('userData'))
+  console.log('[factoryReset] User data wiped:', getUserDataDir())
+  return { ok: true }
 }
 
 export function relaunchFresh(): void {
