@@ -28,6 +28,7 @@ import ToastProvider from './components/ToastProvider'
 import UpdateModal from './components/UpdateModal'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
+import { applyAgentTheme, loadAgentTheme } from './lib/agentTheme'
 import type { Operateur, Shift } from './lib/types'
 
 const api = window.api
@@ -126,6 +127,10 @@ export default function App() {
     setupLock().then(fn => { cleanup = fn })
     return () => cleanup?.()
   }, [setupLock])
+
+  useEffect(() => {
+    applyAgentTheme(loadAgentTheme(currentOperateur?.id))
+  }, [currentOperateur?.id])
 
   return (
     <div className="h-screen flex flex-col bg-surface overflow-hidden">

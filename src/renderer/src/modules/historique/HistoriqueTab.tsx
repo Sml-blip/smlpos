@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import DocumentPrintModal from './DocumentPrintModal'
+import { ConvertVenteDocModal, printVenteTicketQuick } from './VenteHistoriqueActions'
+import type { Document as DocType } from '../../lib/types'
 import { ACTIVITY_LABELS, formatActivityDetails } from '../../lib/activityLabels'
 
 const api = window.api
@@ -100,6 +102,7 @@ export default function HistoriqueTab() {
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
+  const [convertVente, setConvertVente] = useState<Vente | null>(null)
   const [activityLogs, setActivityLogs] = useState<Array<{
     id: string; shift_id?: string; operateur?: string; action: string; details?: unknown; montant?: number; created_at: string
   }>>([])
@@ -185,8 +188,9 @@ export default function HistoriqueTab() {
     setUpdatingStatut(null)
   }
 
-  const totalVentes = ventes.filter(v => v.type === 'VENTE').reduce((s, v) => s + v.total_ttc, 0)
-  const totalReparations = reparations.reduce((s, r) => s + r.total_estime, 0)
+  const activeVentes = ventes.filter(v => v.type === 'VENTE' && v.statut !== 'ANNULEE')
+  const totalVentes = activeVentes.reduce((s, v) => s + v.total_ttc, 0)
+  const totalReparations = reparations.filter(r => r.statut !== 'ANNULE').reduce((s, r) => s + r.total_estime, 0)
 
   const exportVentes = () => {
     const rows = ventes.map(v => ({
@@ -300,10 +304,10 @@ export default function HistoriqueTab() {
       <div className="grid grid-cols-4 gap-3 px-4 py-3 bg-surface border-b border-border flex-shrink-0">
         <div className="bg-white rounded-xl border border-border px-4 py-3 shadow-card">
           <div className="text-xs font-semibold text-text-secondary mb-1 flex items-center gap-1">
-            <ShoppingBag size={12} /> Ventes du jour
+            <ShoppingBag size={12} /> Ventes (période)
           </div>
           <div className="text-lg font-bold font-price">{formatPrice(totalVentes)}</div>
-          <div className="text-xs text-text-muted">{ventes.filter(v => v.type === 'VENTE').length} transactions</div>
+          <div className="text-xs text-text-muted">{activeVentes.length} transactions actives</div>
         </div>
         <div className="bg-white rounded-xl border border-border px-4 py-3 shadow-card">
           <div className="text-xs font-semibold text-text-secondary mb-1 flex items-center gap-1">
@@ -368,11 +372,13 @@ export default function HistoriqueTab() {
       <div className="flex-1 overflow-y-auto">
         {subTab === 'ventes' && (
             <VentesTable
-              ventes={ventes}
-              expandedVente={expandedVente}
-              venteLignes={venteLignes}
-              onToggle={toggleVente}
-              onCancel={setCancelTarget}
+            ventes={ventes}
+            expandedVente={expandedVente}
+            venteLignes={venteLignes}
+            onToggle={toggleVente}
+            onCancel={setCancelTarget}
+            onPrintTicket={(v) => void printVenteTicketQuick(v)}
+            onConvert={setConvertVente}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
             />
         )}
@@ -535,6 +541,13 @@ export default function HistoriqueTab() {
       {printDoc && (
         <DocumentPrintModal doc={printDoc} onClose={() => setPrintDoc(null)} />
       )}
+      {convertVente && (
+        <ConvertVenteDocModal
+          vente={convertVente}
+          onClose={() => setConvertVente(null)}
+          onCreated={() => { setConvertVente(null); load() }}
+        />
+      )}
     </div>
   )
 }
@@ -542,10 +555,11 @@ export default function HistoriqueTab() {
 // ─── Ventes Table ─────────────────────────────────────────────────────────────
 
 function VentesTable({
-  ventes, expandedVente, venteLignes, onToggle, onCancel, emptyHint,
+  ventes, expandedVente, venteLignes, onToggle, onCancel, onPrintTicket, onConvert, emptyHint,
 }: {
   ventes: Vente[]; expandedVente: string | null; venteLignes: Record<string, LigneVente[]>
-  onToggle: (id: string) => void; onCancel: (v: Vente) => void; emptyHint?: string
+  onToggle: (id: string) => void; onCancel: (v: Vente) => void
+  onPrintTicket: (v: Vente) => void; onConvert: (v: Vente) => void; emptyHint?: string
 }) {
   if (ventes.length === 0) {
     return (
@@ -568,6 +582,7 @@ function VentesTable({
           <th className="text-right px-4 py-2.5 text-xs font-semibold text-text-secondary">Remises</th>
           <th className="text-right px-4 py-2.5 text-xs font-semibold text-text-secondary">Total TTC</th>
           <th className="text-center px-4 py-2.5 text-xs font-semibold text-text-secondary">Statut</th>
+          <th className="text-center px-4 py-2.5 text-xs font-semibold text-text-secondary">Actions</th>
           <th className="w-8 px-4 py-2.5"></th>
         </tr>
       </thead>
@@ -601,10 +616,24 @@ function VentesTable({
                   ) : (
                     <button
                       onClick={e => { e.stopPropagation(); onCancel(v) }}
-                      className="text-xs text-red-600 hover:bg-red-50 border border-red-200 px-2 py-0.5 rounded-lg flex items-center gap-1"
+                      className="text-xs text-red-600 hover:bg-red-50 border border-red-200 px-2 py-0.5 rounded-lg flex items-center gap-1 mx-auto"
                     >
                       <Ban size={10} /> Annuler
                     </button>
+                  )}
+                </td>
+                <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
+                  {!annulee && (
+                    <div className="flex items-center justify-center gap-1 flex-wrap">
+                      <button type="button" onClick={() => onPrintTicket(v)} title="Imprimer ticket"
+                        className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary">
+                        <Printer size={12} />
+                      </button>
+                      <button type="button" onClick={() => onConvert(v)} title="Facture / BL / Devis"
+                        className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary text-[10px] font-bold px-2">
+                        Doc
+                      </button>
+                    </div>
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-center text-text-muted">
@@ -613,7 +642,7 @@ function VentesTable({
               </tr>
               {expandedVente === v.id && (
                 <tr className="bg-accent-50">
-                  <td colSpan={8} className="px-6 py-3">
+                  <td colSpan={9} className="px-6 py-3">
                     <div className="text-xs font-semibold text-text-secondary mb-2 flex items-center gap-1">
                       <Eye size={12} /> Détail de la vente
                       {annulee && v.annule_motif && <span className="ml-2 text-red-600">— Motif: {v.annule_motif}</span>}

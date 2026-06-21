@@ -43,7 +43,7 @@ const DEFAULTS: Record<string, string> = {
   invoice_prefix_vente:  'VTE',
   invoice_footer:        'Merci pour votre confiance !',
   invoice_show_tva:      'true',
-  invoice_timbre_fiscal: 'false',
+  invoice_timbre_fiscal: 'true',
   tva_defaut_pct:        '19',
   // POS / Caisse
   fond_de_caisse_defaut: '100',

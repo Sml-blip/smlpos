@@ -4,51 +4,36 @@ import type { TypeAppareil, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReparationNumber } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { printLabelHtml } from '../../lib/nativePrint'
-import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench } from 'lucide-react'
+import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench, AlertTriangle } from 'lucide-react'
 
 const api = window.api
 
 function printFicheReparation(data: {
   numero: string; clientNom: string; clientTel: string
   typeAppareil: string; marque: string; modele: string
-  panne: string; pieces: { designation: string; quantite: number; prix_unitaire: number }[]
-  mainOeuvre: number; totalFinal: number; acompte: number
+  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; destock: boolean }[]
+  piecesAchat: number; totalFinal: number; acompte: number; benefice: number
 }) {
   const dateStr = new Date().toLocaleDateString('fr-TN')
   const lignesPieces = data.pieces.map(p =>
-    `<tr><td>${p.designation}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_unitaire.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_unitaire).toFixed(3)}</td></tr>`
+    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
   ).join('')
   const html = `<!DOCTYPE html><html><head><title>Fiche Réparation ${data.numero}</title>
-  <style>
-    @page{size:A4;margin:15mm} body{font-family:Arial,sans-serif;font-size:12px}
-    h2{font-size:16px;margin:0 0 4px} .sub{color:#555;margin-bottom:12px;font-size:11px}
-    table{width:100%;border-collapse:collapse;margin-top:10px;font-size:11px}
-    th{background:#f5f5f5;border:1px solid #ccc;padding:5px 8px;text-align:left}
-    td{border:1px solid #ddd;padding:5px 8px}
-    .total{font-weight:bold;background:#fffde7} .info{margin-bottom:8px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
-  </style></head><body>
+  <style>@page{size:A4;margin:15mm} body{font-family:Arial,sans-serif;font-size:12px}
+  table{width:100%;border-collapse:collapse;margin-top:10px} th,td{border:1px solid #ddd;padding:5px 8px}
+  th{background:#f5f5f5}.total{font-weight:bold;background:#fffde7}</style></head><body>
   <h2>Fiche Réparation — ${data.numero}</h2>
-  <div class="sub">Date: ${dateStr}</div>
-  <div class="grid">
-    <div class="info"><b>Client :</b> ${data.clientNom}</div>
-    <div class="info"><b>Téléphone :</b> ${data.clientTel}</div>
-    <div class="info"><b>Appareil :</b> ${data.typeAppareil}</div>
-    <div class="info"><b>Marque / Modèle :</b> ${data.marque} ${data.modele}</div>
-  </div>
-  <div class="info"><b>Panne décrite :</b> ${data.panne}</div>
-  <table>
-    <thead><tr><th>Pièce / Prestation</th><th style="text-align:center">Qté</th><th style="text-align:right">PU</th><th style="text-align:right">Total</th></tr></thead>
-    <tbody>${lignesPieces}<tr class="total"><td colspan="3"><b>Total client</b></td><td style="text-align:right"><b>${data.totalFinal.toFixed(3)} DT</b></td></tr>
-    ${data.acompte > 0 ? `<tr><td colspan="3">Acompte versé</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
-    ${data.acompte > 0 ? `<tr class="total"><td colspan="3"><b>Reste à payer</b></td><td style="text-align:right"><b>${(data.totalFinal - data.acompte).toFixed(3)} DT</b></td></tr>` : ''}
-    </tbody>
-  </table>
-  <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:40px">
-    <div><div style="border-top:1px solid #000;padding-top:4px;font-size:11px">Signature technicien</div></div>
-    <div><div style="border-top:1px solid #000;padding-top:4px;font-size:11px">Signature client</div></div>
-  </div>
-  </body></html>`
+  <p>Date: ${dateStr} · Client: ${data.clientNom} · Tél: ${data.clientTel}</p>
+  <p>Appareil: ${data.typeAppareil} ${data.marque} ${data.modele}</p>
+  <p><b>Panne:</b> ${data.panne}</p>
+  <table><thead><tr><th>Pièce</th><th>Qté</th><th>PU achat</th><th>Total achat</th></tr></thead><tbody>
+  ${lignesPieces}
+  <tr class="total"><td colspan="3">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
+  <tr class="total"><td colspan="3">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
+  ${data.acompte > 0 ? `<tr><td colspan="3">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
+  ${data.acompte > 0 ? `<tr class="total"><td colspan="3">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
+  <tr class="total"><td colspan="3">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
+  </tbody></table></body></html>`
   void printLabelHtml(html)
 }
 
@@ -63,9 +48,14 @@ interface PieceInput {
   produit_id?: string
   designation: string
   quantite: number
+  prix_achat: number
   prix_unitaire: number
+  destock_stock: boolean
   type: 'F' | 'NF'
+  stock_actuel?: number
 }
+
+const parseMoney = (s: string) => parseFloat(s.replace(',', '.')) || 0
 
 export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const { currentShift } = useAppStore()
@@ -76,16 +66,16 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [modele, setModele] = useState('')
   const [panne, setPanne] = useState('')
   const [pieces, setPieces] = useState<PieceInput[]>([])
-  const [acompte, setAcompte] = useState('0')
-  const [totalFinal, setTotalFinal] = useState('0')
+  const [acompte, setAcompte] = useState('')
+  const [totalFinal, setTotalFinal] = useState('')
   const [pieceSearch, setPieceSearch] = useState('')
   const [pieceResults, setPieceResults] = useState<Produit[]>([])
   const [loading, setLoading] = useState(false)
 
-  // main_oeuvre = sum of all pieces (auto-calculated)
-  const mainOeuvre = pieces.reduce((s, p) => s + p.quantite * p.prix_unitaire, 0)
-  const totalFinalNum = parseFloat(totalFinal) || 0
-  const benefice = totalFinalNum - mainOeuvre
+  const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
+  const totalFinalNum = parseMoney(totalFinal)
+  const acompteNum = parseMoney(acompte)
+  const benefice = totalFinalNum - piecesAchat
 
   const searchPieces = async (q: string) => {
     if (q.length < 2) { setPieceResults([]); return }
@@ -95,15 +85,24 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
 
   const addPiece = (p?: Produit) => {
     if (p) {
-      setPieces(prev => [...prev, { produit_id: p.id, designation: p.nom, quantite: 1, prix_unitaire: p.prix_vente, type: p.type }])
+      setPieces(prev => [...prev, {
+        produit_id: p.id,
+        designation: p.nom,
+        quantite: 1,
+        prix_achat: p.prix_achat ?? 0,
+        prix_unitaire: p.prix_vente,
+        destock_stock: false,
+        type: p.type,
+        stock_actuel: p.stock_actuel,
+      }])
     } else {
-      setPieces(prev => [...prev, { designation: '', quantite: 1, prix_unitaire: 0, type: 'NF' }])
+      setPieces(prev => [...prev, { designation: '', quantite: 1, prix_achat: 0, prix_unitaire: 0, destock_stock: false, type: 'NF' }])
     }
     setPieceSearch('')
     setPieceResults([])
   }
 
-  const canSave = panne.trim() && mainOeuvre > 0 && totalFinalNum > 0
+  const canSave = panne.trim() && pieces.length > 0 && totalFinalNum > 0
 
   const handleSave = async () => {
     if (!canSave) return
@@ -112,8 +111,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       const lastNum = await api.reparationsGetLastNumber(prefix) as number
       const numero = generateReparationNumber(lastNum)
       const repId = generateId()
-
       const now = new Date().toISOString()
+
       const rep = {
         id: repId,
         numero,
@@ -125,11 +124,11 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         marque: marque || null,
         modele: modele || null,
         description_panne: panne,
-        main_oeuvre: mainOeuvre,
-        acompte: parseFloat(acompte) || 0,
+        main_oeuvre: piecesAchat,
+        acompte: acompteNum,
         total_estime: totalFinalNum,
         total_final: totalFinalNum,
-        benefice: benefice,
+        benefice,
         statut: 'EN_ATTENTE',
         created_at: now,
         updated_at: now,
@@ -142,6 +141,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         designation: p.designation,
         quantite: p.quantite,
         prix_unitaire: p.prix_unitaire,
+        prix_achat: p.prix_achat,
+        destock_stock: p.destock_stock ? 1 : 0,
         type: p.type,
       }))
 
@@ -153,83 +154,63 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-in">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
           <h2 className="font-bold flex items-center gap-2"><Wrench size={16} /> Nouvelle Réparation</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Client */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Nom client</label>
-              <input value={clientNom} onChange={e => setClientNom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" placeholder="Nom du client..." />
+              <input value={clientNom} onChange={e => setClientNom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
             </div>
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Téléphone</label>
-              <input value={clientTel} onChange={e => setClientTel(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" placeholder="+216..." />
+              <input value={clientTel} onChange={e => setClientTel(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
 
-          {/* Appareil */}
           <div>
-            <label className="block text-xs font-semibold text-text-secondary mb-2">Type d'appareil</label>
+            <label className="block text-xs font-semibold text-text-secondary mb-2">Type d&apos;appareil</label>
             <div className="flex gap-2 flex-wrap">
               {APPAREILS.map(a => (
-                <button key={a.id} onClick={() => setTypeAppareil(a.id)}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${typeAppareil === a.id ? 'border-accent-500 bg-accent-50 text-text-primary' : 'border-border hover:bg-muted text-text-secondary'}`}>
+                <button key={a.id} type="button" onClick={() => setTypeAppareil(a.id)}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium ${typeAppareil === a.id ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted'}`}>
                   {a.icon} {a.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Marque/Modèle */}
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Marque</label>
-              <input value={marque} onChange={e => setMarque(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" placeholder="Samsung, Apple..." />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Modèle</label>
-              <input value={modele} onChange={e => setModele(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" placeholder="Galaxy A54..." />
-            </div>
+            <input value={marque} onChange={e => setMarque(e.target.value)} placeholder="Marque" className="border border-border rounded-lg px-3 py-2 text-sm" />
+            <input value={modele} onChange={e => setModele(e.target.value)} placeholder="Modèle" className="border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
 
-          {/* Panne */}
           <div>
-            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Description de la panne <span className="text-danger">*</span></label>
-            <textarea value={panne} onChange={e => setPanne(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm h-20 resize-none" placeholder="Décrire le problème..." />
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Description de la panne *</label>
+            <textarea value={panne} onChange={e => setPanne(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm h-20 resize-none" />
           </div>
 
-          {/* Pièces */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-text-secondary">Pièces utilisées</label>
-              <button onClick={() => addPiece()} className="text-xs text-accent-600 font-semibold flex items-center gap-1 hover:text-accent-500">
-                <Plus size={12} /> Ajouter libre
-              </button>
+              <label className="text-xs font-semibold text-text-secondary">Pièces / composants</label>
+              <button type="button" onClick={() => addPiece()} className="text-xs text-accent-600 font-semibold flex items-center gap-1"><Plus size={12} /> Ligne libre</button>
             </div>
-
-            {/* Search pieces */}
             <div className="relative mb-2">
               <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-2 bg-muted">
                 <Search size={13} className="text-text-muted" />
-                <input
-                  value={pieceSearch}
-                  onChange={e => { setPieceSearch(e.target.value); searchPieces(e.target.value) }}
-                  className="flex-1 bg-transparent text-sm outline-none"
-                  placeholder="Rechercher dans le stock..."
-                />
+                <input value={pieceSearch} onChange={e => { setPieceSearch(e.target.value); void searchPieces(e.target.value) }}
+                  className="flex-1 bg-transparent text-sm outline-none" placeholder="Rechercher stock (cat. Réparation, écrans, pièces…)…" />
               </div>
               {pieceResults.length > 0 && (
                 <div className="absolute top-full left-0 right-0 z-10 bg-white border border-border rounded-lg shadow-lg mt-1">
                   {pieceResults.map(p => (
-                    <button key={p.id} onClick={() => addPiece(p)}
-                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left text-sm border-b border-border last:border-0">
+                    <button key={p.id} type="button" onClick={() => addPiece(p)} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left text-sm border-b last:border-0">
                       <span className={p.type === 'F' ? 'badge-F' : 'badge-NF'}>{p.type}</span>
                       <span className="flex-1 truncate">{p.nom}</span>
-                      <span className="font-price text-xs">{formatPrice(p.prix_vente)}</span>
+                      <span className="text-xs text-text-muted">Stock: {p.stock_actuel}</span>
                     </button>
                   ))}
                 </div>
@@ -237,35 +218,42 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {pieces.map((p, i) => (
-              <div key={i} className="flex items-center gap-2 mb-2">
-                <input value={p.designation} onChange={e => { const u = [...pieces]; u[i].designation = e.target.value; setPieces(u) }} className="flex-1 border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation..." />
-                <input type="text" inputMode="numeric" value={p.quantite} onChange={e => { const u = [...pieces]; u[i].quantite = parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1; setPieces(u) }} className="w-14 border border-border rounded-lg px-2 py-1.5 text-sm font-price text-center" />
-                <input type="text" inputMode="decimal" value={p.prix_unitaire} onChange={e => { const u = [...pieces]; u[i].prix_unitaire = parseFloat(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0; setPieces(u) }} className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" />
-                <button onClick={() => setPieces(pieces.filter((_, j) => j !== i))} className="text-danger hover:text-red-700"><Trash2 size={14} /></button>
+              <div key={i} className="flex flex-wrap items-center gap-2 mb-2 p-2 border border-border rounded-lg bg-muted/30">
+                <input value={p.designation} onChange={e => { const u = [...pieces]; u[i].designation = e.target.value; setPieces(u) }}
+                  className="flex-1 min-w-[120px] border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation" />
+                <input type="text" inputMode="numeric" value={p.quantite} onChange={e => { const u = [...pieces]; u[i].quantite = parseInt(e.target.value.replace(/\D/g, '')) || 1; setPieces(u) }}
+                  className="w-12 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
+                <input type="text" inputMode="decimal" value={p.prix_achat} onChange={e => { const u = [...pieces]; u[i].prix_achat = parseMoney(e.target.value); setPieces(u) }}
+                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix achat TND" />
+                <label className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 cursor-pointer whitespace-nowrap">
+                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; setPieces(u) }} />
+                  <AlertTriangle size={11} /> Dégât / déstock
+                </label>
+                {p.produit_id && p.destock_stock && (
+                  <span className="text-[10px] text-text-muted">Stock: {p.stock_actuel ?? '?'}</span>
+                )}
+                <button type="button" onClick={() => setPieces(pieces.filter((_, j) => j !== i))} className="text-danger"><Trash2 size={14} /></button>
               </div>
             ))}
           </div>
 
-          {/* Financials */}
-          {!panne.trim() && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Description de la panne obligatoire.</p>}
-          {panne.trim() && mainOeuvre === 0 && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Ajoutez au moins une pièce avant de sauvegarder.</p>}
-          {panne.trim() && mainOeuvre > 0 && totalFinalNum === 0 && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Le total client doit être supérieur à zéro.</p>}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Pièces (DT)</label>
-              <div className={`border bg-muted rounded-lg px-3 py-2 font-price text-sm ${mainOeuvre === 0 ? 'border-red-300 text-red-600' : 'border-border text-text-muted'}`}>{formatPrice(mainOeuvre)}</div>
-              <p className="text-[10px] text-text-muted mt-0.5">Auto-calculé</p>
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Pièces achat (TND)</label>
+              <div className="border border-border bg-muted rounded-lg px-3 py-2 font-price text-sm">{formatPrice(piecesAchat)}</div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Acompte (DT)</label>
-              <input type="text" inputMode="decimal" value={acompte} onChange={e => setAcompte(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))} className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price" />
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Acompte client (TND)</label>
+              <input type="text" inputMode="decimal" value={acompte} onChange={e => setAcompte(e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price" placeholder="0.000" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Total client (DT) <span className="text-danger">*</span></label>
-              <input type="text" inputMode="decimal" value={totalFinal} onChange={e => setTotalFinal(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))} className="w-full border border-accent-400 rounded-lg px-3 py-2 text-sm font-price font-bold" />
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Total client (TND) *</label>
+              <input type="text" inputMode="decimal" value={totalFinal} onChange={e => setTotalFinal(e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-accent-400 rounded-lg px-3 py-2 text-sm font-price font-bold" placeholder="0.000" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Bénéfice</label>
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Bénéfice technicien</label>
               <div className={`border rounded-lg px-3 py-2 font-price font-bold text-sm ${benefice >= 0 ? 'border-green-300 bg-green-50 text-green-800' : 'border-red-300 bg-red-50 text-red-800'}`}>
                 {benefice >= 0 ? '+' : ''}{formatPrice(benefice)}
               </div>
@@ -274,21 +262,17 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex gap-3 px-6 py-4 border-t border-border">
-          <button onClick={onClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl transition-colors">Annuler</button>
-          <button
-            onClick={() => printFicheReparation({
-              numero: 'BROUILLON', clientNom, clientTel,
-              typeAppareil, marque, modele, panne,
-              pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_unitaire: p.prix_unitaire })),
-              mainOeuvre, totalFinal: parseFloat(totalFinal) || 0, acompte: parseFloat(acompte) || 0,
-            })}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-muted hover:bg-border border border-border text-text-primary font-semibold rounded-xl text-sm transition-colors"
-          >
+          <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Annuler</button>
+          <button type="button" onClick={() => printFicheReparation({
+            numero: 'BROUILLON', clientNom, clientTel, typeAppareil, marque, modele, panne,
+            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, destock: p.destock_stock })),
+            piecesAchat, totalFinal: totalFinalNum, acompte: acompteNum, benefice,
+          })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">
             <PrinterIcon size={14} /> Aperçu
           </button>
-          <button onClick={handleSave} disabled={!canSave || loading}
-            className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors">
-            {loading ? 'Enregistrement...' : 'Enregistrer'}
+          <button type="button" onClick={() => void handleSave()} disabled={!canSave || loading}
+            className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 font-bold py-2.5 rounded-xl">
+            {loading ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </div>
       </div>

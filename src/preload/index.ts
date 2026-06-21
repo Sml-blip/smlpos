@@ -162,6 +162,8 @@ const api = {
   documentsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('documents:update', id, data),
   documentsRevoquer: (id: string, motif: string, par: string) => ipcRenderer.invoke('documents:revoquer', id, motif, par),
   documentsGetLignes: (documentId: string) => ipcRenderer.invoke('documents:getLignes', documentId),
+  documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
+    ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),
   documentsGetLastNumber: (prefix: string) => ipcRenderer.invoke('documents:getLastNumber', prefix),
   facturesCountBLPending: () => ipcRenderer.invoke('factures:countBLPending'),
   facturesListBLPending: () => ipcRenderer.invoke('factures:listBLPending'),

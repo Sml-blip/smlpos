@@ -5,7 +5,7 @@ import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
 import { printLabelHtml } from '../../lib/nativePrint'
-import { code128Svg } from '../../lib/barcode'
+import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
 import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
@@ -1239,21 +1239,10 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
   }
 
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
-    const svg = code128Svg(code, { width: 300, height: 64, showText: false })
-    const html = `<!DOCTYPE html><html><head><title>Étiquette</title><style>
-      @page{size:58mm auto;margin:2mm}
-      body{font-family:Arial,sans-serif;text-align:center;margin:0;padding:4px;background:#fff}
-      .nom{font-size:11px;font-weight:bold;margin-bottom:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:300px;display:inline-block}
-      .prix{font-size:18px;font-weight:bold;margin:3px 0}
-      .ref{font-size:9px;color:#555;margin-top:2px}
-      svg{display:block;margin:0 auto}
-    </style></head><body>
-    <div class="nom">${nom.slice(0, 30).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-    ${svg}
-    <div class="prix">${prix.toFixed(3)} DT</div>
-    <div class="ref">${ref}</div>
-    </body></html>`
-    void printLabelHtml(html)
+    if (!code?.trim()) return
+    const labelNom = nom.trim() || ref.trim() || 'Produit'
+    const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
+    void printLabelHtml(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref))
   }
 
   const handleQuickCreateProduct = async (lineId: string) => {

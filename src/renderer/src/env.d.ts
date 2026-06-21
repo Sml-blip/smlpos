@@ -146,6 +146,7 @@ interface Window {
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
     documentsUpdate: (id: string, data: unknown) => Promise<unknown>
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
+    documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: { total_ht: number; total_tva: number; total_ttc: number }) => Promise<{ success?: boolean }>
     documentsGetLastNumber: (prefix: string) => Promise<number>
 
     // Paramètres App

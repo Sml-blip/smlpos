@@ -7,9 +7,16 @@ const PAGE_SIZE = 80 // rows rendered per scroll page
 import Fuse from 'fuse.js'
 import type { Produit, Categorie, SerialNumber } from '../../lib/types'
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
-import { code128Svg } from '../../lib/barcode'
 import { loadData, runAction } from '../../lib/apiCall'
 import { printLabelHtml } from '../../lib/nativePrint'
+import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
+import {
+  computeProductPricing,
+  pricingFromPrixAchatTtc,
+  pricingFromMargePct,
+  pricingFromCoefAv,
+  pricingFromPrixVente,
+} from '../../lib/productPricing'
 import { usePrintThermal } from '../../lib/usePrint'
 import {
   Search, Plus, Edit2, Trash2, Download, Upload, Package,
@@ -20,7 +27,7 @@ import * as XLSX from 'xlsx'
 
 const api = window.api
 
-const DEFAULT_CATEGORIES = ['Général', 'Électronique', 'Informatique', 'Accessoires', 'Pièces', 'Consommables', 'Autre']
+const DEFAULT_CATEGORIES = ['Général', 'Réparation', 'Électronique', 'Informatique', 'Accessoires', 'Pièces', 'Consommables', 'Autre']
 
 type SortKey = 'nom' | 'prix_vente' | 'stock_actuel' | 'categorie'
 type SortDir = 'asc' | 'desc'
@@ -41,6 +48,7 @@ interface ProductFormData {
   tva_taux: string
   stock_actuel: string
   stock_minimum: string
+  prix_achat_ttc: string
   fournisseur: string
   source_tag: string
   has_serial_number: boolean
@@ -62,6 +70,7 @@ const emptyForm = (): ProductFormData => ({
   tva_taux: '0',
   stock_actuel: '0',
   stock_minimum: '5',
+  prix_achat_ttc: '',
   fournisseur: '',
   source_tag: '',
   has_serial_number: false,
@@ -242,7 +251,8 @@ export default function InventaireTab() {
       prix_vente: String(p.prix_vente),
       tva_taux: String(p.tva_taux ?? 0),
       stock_actuel: String(p.stock_actuel),
-      stock_minimum: String(p.stock_minimum),
+      stock_minimum: String(p.stock_minimum ?? 5),
+      prix_achat_ttc: p.prix_achat_ttc != null ? String(p.prix_achat_ttc) : '',
       fournisseur: p.fournisseur || '',
       source_tag: (p as unknown as { source_tag?: string }).source_tag || '',
       has_serial_number: !!(p.has_serial_number),
@@ -417,73 +427,22 @@ export default function InventaireTab() {
   }
 
   // Pricing helpers
-  const computePricing = (data: ProductFormData) => {
-    const prixAchatHT = parseFloat(data.prix_achat) || 0
-    const coutSupp = parseFloat(data.cout_supplementaire) || 0
-    const tvaAchat = parseFloat(data.tva_achat_pct) || 0
-    const tvaTaux = parseFloat(data.tva_taux) || 0
-    const coutRevient = prixAchatHT + coutSupp
-    const prixAchatTTC = coutRevient * (1 + tvaAchat / 100)
-    const prixVente = parseFloat(data.prix_vente) || 0
-    const prixVenteHT = tvaTaux > 0 ? prixVente / (1 + tvaTaux / 100) : prixVente
-    const coef = coutRevient > 0 ? prixVenteHT / coutRevient : 0
-    const marge = (coef - 1) * 100
-    const isBelowCost = coutRevient > 0 && prixVente < prixAchatTTC
-    return { coutRevient, prixAchatTTC, prixVenteHT, coef, marge, isBelowCost }
+  const computePricing = (data: ProductFormData) => computeProductPricing(data)
+
+  const onPrixAchatTtcChange = (val: string) => {
+    setFormData(prev => ({ ...prev, ...pricingFromPrixAchatTtc(prev, val) }))
   }
 
-  // When marge_pct changes → update coef_av and prix_vente
   const onMargePctChange = (val: string) => {
-    const marge = parseFloat(val)
-    const prixAchatHT = parseFloat(formData.prix_achat) || 0
-    const coutSupp = parseFloat(formData.cout_supplementaire) || 0
-    const tvaTaux = parseFloat(formData.tva_taux) || 0
-    const coutRevient = prixAchatHT + coutSupp
-    const newCoef = 1 + marge / 100
-    const pvHT = coutRevient * newCoef
-    const pvTTC = pvHT * (1 + tvaTaux / 100)
-    setFormData(prev => ({
-      ...prev,
-      marge_pct: val,
-      coef_av: isNaN(newCoef) ? '' : newCoef.toFixed(4),
-      prix_vente: isNaN(pvTTC) || coutRevient === 0 ? prev.prix_vente : pvTTC.toFixed(3),
-    }))
+    setFormData(prev => ({ ...prev, ...pricingFromMargePct(prev, val) }))
   }
 
-  // When coef_av changes → update marge_pct and prix_vente
   const onCoefAvChange = (val: string) => {
-    const coef = parseFloat(val)
-    const prixAchatHT = parseFloat(formData.prix_achat) || 0
-    const coutSupp = parseFloat(formData.cout_supplementaire) || 0
-    const tvaTaux = parseFloat(formData.tva_taux) || 0
-    const coutRevient = prixAchatHT + coutSupp
-    const newMarge = (coef - 1) * 100
-    const pvHT = coutRevient * coef
-    const pvTTC = pvHT * (1 + tvaTaux / 100)
-    setFormData(prev => ({
-      ...prev,
-      coef_av: val,
-      marge_pct: isNaN(newMarge) ? '' : newMarge.toFixed(2),
-      prix_vente: isNaN(pvTTC) || coutRevient === 0 ? prev.prix_vente : pvTTC.toFixed(3),
-    }))
+    setFormData(prev => ({ ...prev, ...pricingFromCoefAv(prev, val) }))
   }
 
-  // When prix_vente changes directly → back-calculate marge and coef
   const onPrixVenteChange = (val: string) => {
-    const pv = parseFloat(val) || 0
-    const prixAchatHT = parseFloat(formData.prix_achat) || 0
-    const coutSupp = parseFloat(formData.cout_supplementaire) || 0
-    const tvaTaux = parseFloat(formData.tva_taux) || 0
-    const coutRevient = prixAchatHT + coutSupp
-    const pvHT = tvaTaux > 0 ? pv / (1 + tvaTaux / 100) : pv
-    const coef = coutRevient > 0 ? pvHT / coutRevient : 0
-    const marge = (coef - 1) * 100
-    setFormData(prev => ({
-      ...prev,
-      prix_vente: val,
-      coef_av: coutRevient > 0 && !isNaN(coef) ? coef.toFixed(4) : prev.coef_av,
-      marge_pct: coutRevient > 0 && !isNaN(marge) ? marge.toFixed(2) : prev.marge_pct,
-    }))
+    setFormData(prev => ({ ...prev, ...pricingFromPrixVente(prev, val) }))
     if (formErrors.prix_vente) setFormErrors(prev => ({ ...prev, prix_vente: undefined }))
   }
 
@@ -505,22 +464,10 @@ export default function InventaireTab() {
 
   // Print barcode label — uses Electron IPC print (58mm thermal)
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
-    if (!code) return
-    const svg = code128Svg(code, { width: 300, height: 64, showText: false, bgColor: '#ffffff', barColor: '#000000' })
-    const html = `<!DOCTYPE html><html><head><title>Étiquette</title><style>
-      @page{size:58mm auto;margin:2mm}
-      body{font-family:Arial,sans-serif;text-align:center;margin:0;padding:4px;background:#fff}
-      .nom{font-size:11px;font-weight:bold;margin-bottom:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:300px;display:inline-block}
-      .prix{font-size:18px;font-weight:bold;margin:3px 0}
-      .ref{font-size:9px;color:#555;margin-top:2px}
-      svg{display:block;margin:0 auto}
-    </style></head><body>
-    <div class="nom">${nom.slice(0, 30).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-    ${svg}
-    <div class="prix">${prix.toFixed(3)} DT</div>
-    <div class="ref">${ref}</div>
-    </body></html>`
-    void printLabelHtml(html, '58mm')
+    if (!code?.trim()) return
+    const labelNom = nom.trim() || ref.trim() || 'Produit'
+    const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
+    void printLabelHtml(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref))
   }
 
   // Save new category
@@ -977,14 +924,18 @@ export default function InventaireTab() {
                         </div>
                       </div>
                     </div>
-                    {/* Prix Achat TTC — read-only computed */}
+                    {/* Prix Achat TTC — editable */}
                     <div className="grid grid-cols-2 gap-3 px-4 pb-3 pt-1 border-b border-border">
                       <div>
-                        <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT) ✅</label>
-                        <div className="border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800">
-                          {formatPrice(pricing.prixAchatTTC)}
-                        </div>
-                        <p className="text-[10px] text-text-muted mt-0.5">= HT × (1 + TVA Achat)</p>
+                        <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT)</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={formData.prix_achat_ttc || pricing.prixAchatTTC.toFixed(3)}
+                          onChange={e => onPrixAchatTtcChange(e.target.value.replace(/[^0-9.,]/g, ''))}
+                          className="w-full border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800"
+                        />
+                        <p className="text-[10px] text-text-muted mt-0.5">Saisie directe → recalcule HT</p>
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-green-700 mb-1">Prix Vente HT (DT) ✅</label>
@@ -1085,11 +1036,12 @@ export default function InventaireTab() {
                 <div>
                   <label className="block text-xs font-semibold text-text-secondary mb-1.5">Stock minimum</label>
                   <input
-                    type="text"
-                    inputMode="numeric"
+                    type="number"
+                    min={0}
+                    step={1}
                     value={formData.stock_minimum}
                     onChange={e => f('stock_minimum', e.target.value.replace(/[^0-9]/g, ''))}
-                    className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price"
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price bg-white"
                   />
                 </div>
               </div>

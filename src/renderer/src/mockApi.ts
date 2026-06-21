@@ -425,6 +425,7 @@ const mockApi = {
   documentsList: async () => [],
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
   documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  documentsReplaceLignes: async (_documentId: string, _lignes: unknown[], _totals: unknown) => ({ success: true }),
   documentsGetLignes: async () => [],
   documentsGetLastNumber: async () => 0,
 
@@ -448,7 +449,7 @@ const mockApi = {
     company_matricule: '1820629/E', company_rib: '08062021061000261191',
     company_email: '', invoice_primary_color: '#F59E0B',
     facture_layout: 'professionnel', invoice_prefix_facture: 'FAC', invoice_prefix_vente: 'VTE',
-    invoice_footer: 'Merci pour votre confiance !', invoice_show_tva: 'true', invoice_timbre_fiscal: 'false', tva_defaut_pct: '19',
+    invoice_footer: 'Merci pour votre confiance !', invoice_show_tva: 'true', invoice_timbre_fiscal: 'true', tva_defaut_pct: '19',
     fond_de_caisse_defaut: '100', frais_retour_colis: '4', credit_max_client: '500',
     marge_defaut_pct: '30', pos_show_calculator: 'true', pos_confirm_sortie: 'true',
     impression_largeur: '80', impression_copies: '1', impression_auto_print: 'false',

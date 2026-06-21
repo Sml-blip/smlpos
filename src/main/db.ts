@@ -680,6 +680,11 @@ export function initDatabase() {
   // lignes_document: numéro de série
   try { db.exec(`ALTER TABLE lignes_document ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
 
+  try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
+
+  db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES ('cat-reparation', 'Réparation', '🔧')`).run()
+
   // Default settings — keys must match SettingsTab DEFAULTS
   const settingsDefaults: Record<string, string> = {
     // Entreprise
@@ -697,7 +702,7 @@ export function initDatabase() {
     invoice_prefix_vente:    'VTE',
     invoice_footer:          'Merci pour votre confiance !',
     invoice_show_tva:        'true',
-    invoice_timbre_fiscal:   'false',
+    invoice_timbre_fiscal:   'true',
     tva_defaut_pct:          '19',
     // POS
     fond_de_caisse_defaut:   '100',

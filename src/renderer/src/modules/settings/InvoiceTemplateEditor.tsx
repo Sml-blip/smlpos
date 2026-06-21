@@ -60,7 +60,7 @@ const DEFAULT_CONFIG: TemplateConfig = {
   primaryColor: '#F59E0B',
   showTva: true,
   showFooter: true,
-  showTimbre: false,
+  showTimbre: true,
 }
 
 interface Props {
@@ -78,7 +78,7 @@ export default function InvoiceTemplateEditor({ onClose }: Props) {
     company_rib: '08062021061000261191',
     company_logo: SML_LOGO,
     invoice_footer: 'Merci pour votre confiance !',
-    invoice_timbre_fiscal: 'false',
+    invoice_timbre_fiscal: 'true',
   })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)

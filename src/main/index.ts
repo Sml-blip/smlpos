@@ -582,14 +582,30 @@ function setupIpcHandlers() {
         @total_estime, @total_final, @benefice, @statut, @created_at, @updated_at)
     `)
     const insertPiece = db.prepare(`
-      INSERT INTO pieces_reparation (id, reparation_id, produit_id, designation, quantite, prix_unitaire, type)
-      VALUES (@id, @reparation_id, @produit_id, @designation, @quantite, @prix_unitaire, @type)
+      INSERT INTO pieces_reparation (id, reparation_id, produit_id, designation, quantite, prix_unitaire, prix_achat, destock_stock, type)
+      VALUES (@id, @reparation_id, @produit_id, @designation, @quantite, @prix_unitaire, @prix_achat, @destock_stock, @type)
     `)
+    const updateStock = db.prepare(`UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?), updated_at = datetime('now') WHERE id = ?`)
     const transaction = db.transaction(() => {
       insertRep.run(normalizedRep)
-      for (const p of pieces) insertPiece.run({ produit_id: null, ...p })
+      for (const p of pieces) {
+        const row = {
+          produit_id: null,
+          prix_achat: 0,
+          destock_stock: 0,
+          ...p,
+        }
+        insertPiece.run(row)
+        if (row.produit_id && row.destock_stock) {
+          updateStock.run(row.quantite ?? 1, row.produit_id)
+        }
+      }
     })
     transaction()
+    for (const p of pieces) {
+      const row = p as { produit_id?: string; destock_stock?: number }
+      if (row.produit_id && row.destock_stock) enqueueProductSnapshot(row.produit_id)
+    }
     addActivityLog({ shift_id: normalizedRep.shift_id, operateur: normalizedRep.operateur_nom, action: 'REPAIR_CREATED', details: { numero: normalizedRep.numero, client: normalizedRep.client_nom }, montant: normalizedRep.total_final })
     enqueueSync('reparations', 'INSERT', normalizedRep)
     for (const p of pieces) {
@@ -1684,6 +1700,25 @@ function setupIpcHandlers() {
   })
   ipcMain.handle('documents:getLignes', (_e, documentId: string) => {
     return db.prepare(`SELECT * FROM lignes_document WHERE document_id = ?`).all(documentId)
+  })
+
+  ipcMain.handle('documents:replaceLignes', (_e, documentId: string, lignes: Record<string, unknown>[], totals: { total_ht: number; total_tva: number; total_ttc: number }) => {
+    const insertLigne = db.prepare(`
+      INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit)
+      VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)
+    `)
+    db.transaction(() => {
+      db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
+      for (const l of lignes) {
+        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l, document_id: documentId }
+        insertLigne.run(nl)
+      }
+      db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, updated_at=datetime('now') WHERE id=?`).run(
+        totals.total_ht, totals.total_tva, totals.total_ttc, documentId,
+      )
+    })()
+    addActivityLog({ action: 'DOCUMENT_LINES_UPDATED', details: { documentId, lineCount: lignes.length } })
+    return { success: true }
   })
   ipcMain.handle('documents:getLastNumber', (_e, prefix: string) => {
     const row = db.prepare(`SELECT numero FROM documents WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${prefix}%`) as { numero: string } | undefined
