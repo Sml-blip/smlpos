@@ -1,4 +1,4 @@
-import { forwardRef } from 'react'
+import { forwardRef, type CSSProperties } from 'react'
 import { amountToWordsDT } from '../lib/amountToWords'
 import { INVOICE_COMPANY } from '../lib/invoiceCompany'
 
@@ -120,6 +120,14 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
   const fillerCount = isUltra ? 0 : Math.max(0, 12 - lignes.length)
   const totalQty = lignes.reduce((s, l) => s + l.quantite, 0)
 
+  const colWidths = showTva
+    ? ['6%', '42%', '4%', '10%', '4%', '4%', '14%', '16%']
+    : ['7%', '46%', '5%', '11%', '5%', '13%', '13%']
+
+  const cellPad = isUltra ? '2px 3px' : '5px 4px'
+  const numCell: CSSProperties = { padding: cellPad, textAlign: 'right', whiteSpace: 'nowrap', fontSize: isUltra ? 7 : 9 }
+  const centerCell: CSSProperties = { ...numCell, textAlign: 'center' }
+
   const C = {
     text: '#1E293B',
     textLight: '#64748B',
@@ -191,14 +199,20 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
       {/* Lines table */}
       <div style={{ flex: 1 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', border: `1px solid ${C.border}`, borderRadius: '12px 12px 0 0', overflow: 'hidden' }}>
+          <colgroup>
+            {colWidths.map((w, i) => (
+              <col key={i} style={{ width: w }} />
+            ))}
+          </colgroup>
           <thead>
             <tr style={{ background: C.primary, color: '#fff' }}>
               {['Code', 'Désignation', 'Qté', 'PU HT', 'Rem.', showTva ? 'TVA' : null, 'HT', 'TTC'].filter(Boolean).map((h, i) => (
                 <th key={h!} style={{
-                  padding: isUltra ? '3px 4px' : '7px 8px',
+                  padding: isUltra ? '3px 3px' : '6px 4px',
                   textAlign: i >= 2 ? (i === 2 || (showTva && i === 5) ? 'center' : 'right') : 'left',
                   fontWeight: 600,
-                  fontSize: isUltra ? 7 : 9,
+                  fontSize: isUltra ? 7 : 8,
+                  whiteSpace: 'nowrap',
                   borderRight: i < 7 ? '1px solid rgba(255,255,255,0.15)' : undefined,
                 }}>{h}</th>
               ))}
@@ -207,16 +221,16 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
           <tbody>
             {lignes.map((l, idx) => (
               <tr key={l.id} style={{ background: idx % 2 === 0 ? C.white : C.surface }}>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.reference || '—'}</td>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.designation}</td>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'center', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.quantite}</td>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'right', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.prix_unitaire)}</td>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'right', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.remise_pct ? `${l.remise_pct}%` : '0%'}</td>
+                <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: isUltra ? 7 : 9 }}>{l.reference || '—'}</td>
+                <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.designation}>{l.designation}</td>
+                <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.quantite}</td>
+                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.prix_unitaire)}</td>
+                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.remise_pct ? `${l.remise_pct}%` : '0%'}</td>
                 {showTva && (
-                  <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'center', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.tva_taux}%</td>
+                  <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.tva_taux}%</td>
                 )}
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'right', borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.total_ht)}</td>
-                <td style={{ padding: isUltra ? '2px 4px' : '6px 8px', textAlign: 'right', borderBottom: `1px solid ${C.borderLight}`, background: C.primarySoft, fontWeight: 600 }}>{fmt3(l.total_ttc)}</td>
+                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.total_ht)}</td>
+                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, background: C.primarySoft, fontWeight: 600 }}>{fmt3(l.total_ttc)}</td>
               </tr>
             ))}
             {!isUltra && Array.from({ length: fillerCount }).map((_, i) => (

@@ -9,19 +9,19 @@ export default {
     extend: {
       colors: {
         accent: {
-          50: '#FFFDE7',
+          50: 'var(--accent-soft)',
           100: '#FFF9C4',
           200: '#FFF176',
           400: '#FFEE58',
-          500: '#FFD600',
-          600: '#F9A825',
+          500: 'var(--accent-500)',
+          600: 'var(--accent-600)',
         },
         surface: 'var(--bg-surface)',
         muted: 'var(--bg-muted)',
         border: 'var(--border)',
         'text-primary': 'var(--text-primary)',
         'text-secondary': 'var(--text-secondary)',
-        'text-muted': '#9E9E9E',
+        'text-muted': 'var(--text-muted)',
         success: '#2E7D32',
         danger: '#C62828',
         warning: '#E65100',

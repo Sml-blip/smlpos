@@ -8,7 +8,7 @@ import Fuse from 'fuse.js'
 import type { Produit, Categorie, SerialNumber } from '../../lib/types'
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
-import { printLabelHtml } from '../../lib/nativePrint'
+import { printFullHtmlDocument } from '../../lib/nativePrint'
 import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
 import {
   computeProductPricing,
@@ -467,7 +467,10 @@ export default function InventaireTab() {
     if (!code?.trim()) return
     const labelNom = nom.trim() || ref.trim() || 'Produit'
     const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
-    void printLabelHtml(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref))
+    void printFullHtmlDocument(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref), {
+      pageSize: '58mm',
+      settingsKey: 'impression_printer_ticket',
+    })
   }
 
   // Save new category

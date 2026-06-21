@@ -9,21 +9,22 @@ export interface BarcodeLabelOptions {
 
 /** 4cm × 2cm label: product name + barcode + price (TND) */
 export function buildBarcodeLabelHtml(code: string, nom: string, prix: number, ref = ''): string {
-  const displayName = (nom || ref || 'Produit').trim().slice(0, 40)
+  const displayName = (nom || ref || 'Produit').trim().slice(0, 36)
   const safeName = displayName.replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const safeRef = (ref || code).replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const priceStr = `${(Number.isFinite(prix) ? prix : 0).toFixed(3)} DT`
+  const priceNum = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
+  const priceStr = `${priceNum.toFixed(3)} DT`
 
   const svg = code128Svg(code, {
     width: 118,
-    height: 32,
+    height: 30,
     showText: true,
     bgColor: '#ffffff',
     barColor: '#000000',
   })
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Étiquette ${safeRef}</title><style>
-    @page { size: 40mm 20mm; margin: 0.8mm; }
+    @page { size: 40mm 20mm; margin: 0.6mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: 40mm; height: 20mm;
@@ -35,26 +36,23 @@ export function buildBarcodeLabelHtml(code: string, nom: string, prix: number, r
     }
     .label {
       width: 100%; height: 100%;
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-rows: auto 1fr auto auto;
       align-items: center;
-      justify-content: space-between;
-      padding: 0.6mm 1mm 0.8mm;
+      padding: 0.5mm 1mm 0.6mm;
       text-align: center;
     }
     .name {
       width: 100%;
-      font-size: 7.5pt;
+      font-size: 6.5pt;
       font-weight: 700;
-      line-height: 1.15;
-      max-height: 9.5pt;
+      line-height: 1.1;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       color: #000;
     }
     .barcode-wrap {
-      flex: 1;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -64,40 +62,32 @@ export function buildBarcodeLabelHtml(code: string, nom: string, prix: number, r
     .barcode-wrap svg {
       display: block;
       max-width: 36mm;
-      max-height: 11mm;
+      max-height: 10mm;
       height: auto;
     }
-    .footer {
-      width: 100%;
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 1mm;
-    }
     .price {
-      font-size: 10pt;
-      font-weight: 800;
+      font-size: 11pt;
+      font-weight: 900;
       color: #000;
       letter-spacing: -0.02em;
       white-space: nowrap;
+      line-height: 1;
+      padding: 0.2mm 0;
     }
     .ref {
-      font-size: 5.5pt;
-      color: #333;
+      font-size: 5pt;
+      color: #444;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 18mm;
-      text-align: right;
+      width: 100%;
     }
   </style></head><body>
     <div class="label">
       <div class="name" title="${safeName}">${safeName}</div>
       <div class="barcode-wrap">${svg}</div>
-      <div class="footer">
-        <span class="price">${priceStr}</span>
-        <span class="ref">${safeRef}</span>
-      </div>
+      <div class="price">${priceStr}</div>
+      <div class="ref">${safeRef}</div>
     </div>
   </body></html>`
 }

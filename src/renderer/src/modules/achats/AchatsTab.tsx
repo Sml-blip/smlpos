@@ -4,7 +4,7 @@ import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
-import { printLabelHtml } from '../../lib/nativePrint'
+import { printFullHtmlDocument } from '../../lib/nativePrint'
 import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
 import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
@@ -1242,7 +1242,10 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
     if (!code?.trim()) return
     const labelNom = nom.trim() || ref.trim() || 'Produit'
     const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
-    void printLabelHtml(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref))
+    void printFullHtmlDocument(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref), {
+      pageSize: '58mm',
+      settingsKey: 'impression_printer_ticket',
+    })
   }
 
   const handleQuickCreateProduct = async (lineId: string) => {
