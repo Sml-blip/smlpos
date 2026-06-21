@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import {
-  Settings, Building2, FileText, ShieldCheck, Printer, Save, RefreshCw,
+  Settings, FileText, ShieldCheck, Printer, Save, RefreshCw,
   Check, Info, Eye, EyeOff, Layout, Upload, X,
   HardDrive, FolderOpen, CloudUpload, Database, RotateCcw,
   Copy, CheckCircle, AlertTriangle, Clock
@@ -15,10 +15,9 @@ import { showToast } from '../../lib/toast'
 
 const api = window.api
 
-type TabId = 'entreprise' | 'facture' | 'pos' | 'securite' | 'impression' | 'sauvegarde'
+type TabId = 'facture' | 'pos' | 'securite' | 'impression' | 'sauvegarde'
 
 const SECTIONS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'entreprise',  label: 'Entreprise',      icon: <Building2 size={14} /> },
   { id: 'facture',     label: 'Factures',         icon: <FileText size={14} /> },
   { id: 'pos',         label: 'Point de vente',   icon: <Settings size={14} /> },
   { id: 'impression',  label: 'Impression',       icon: <Printer size={14} /> },
@@ -78,7 +77,7 @@ const DEFAULTS: Record<string, string> = {
 }
 
 export default function SettingsTab() {
-  const [activeSection, setActiveSection] = useState<TabId>('entreprise')
+  const [activeSection, setActiveSection] = useState<TabId>('facture')
   const [values, setValues] = useState<Record<string, string>>(DEFAULTS)
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -157,7 +156,6 @@ export default function SettingsTab() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
-          {activeSection === 'entreprise'  && <EntrepriseSection values={values} set={set} appVer={appVer} />}
           {activeSection === 'facture'     && <FactureSection values={values} set={set} toggle={toggle} />}
           {activeSection === 'pos'         && <POSSection values={values} set={set} toggle={toggle} />}
           {activeSection === 'impression'  && <ImpressionSection values={values} set={set} toggle={toggle} />}
@@ -222,103 +220,6 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 // ── Sections ──────────────────────────────────────────────────────────────────
-function LogoUpload({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const fileRef = useRef<HTMLInputElement>(null)
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = ev => onChange(ev.target?.result as string)
-    reader.readAsDataURL(file)
-  }
-  return (
-    <div className="flex items-center gap-3">
-      {value ? (
-        <div className="relative flex-shrink-0">
-          <img src={value} alt="Logo" className="w-16 h-16 object-contain rounded-xl border border-border bg-white p-1" />
-          <button
-            onClick={() => { onChange(''); if (fileRef.current) fileRef.current.value = '' }}
-            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-danger text-white flex items-center justify-center shadow"
-          >
-            <X size={10} />
-          </button>
-        </div>
-      ) : (
-        <div className="w-16 h-16 flex-shrink-0 rounded-xl border-2 border-dashed border-border bg-muted flex items-center justify-center text-text-muted">
-          <Upload size={20} />
-        </div>
-      )}
-      <div>
-        <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" id="logo-upload" />
-        <label
-          htmlFor="logo-upload"
-          className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 bg-muted hover:bg-border border border-border rounded-lg text-xs font-semibold transition-colors"
-        >
-          <Upload size={12} />
-          {value ? 'Changer le logo' : 'Importer un logo'}
-        </label>
-        <p className="text-xs text-text-muted mt-1">PNG, JPG, SVG · affiché sur les factures</p>
-      </div>
-    </div>
-  )
-}
-
-function EntrepriseSection({ values, set, appVer }: { values: Record<string, string>; set: (k: string, v: string) => void; appVer: string }) {
-  return (
-    <div className="max-w-2xl space-y-5">
-      <Card>
-        <Section title="Logo de l'entreprise">
-          <LogoUpload value={values['company_logo'] ?? ''} onChange={v => set('company_logo', v)} />
-        </Section>
-      </Card>
-      <Card>
-        <Section title="Informations de la société">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <Field label="Nom de l'entreprise *">
-                <TextInput value={values['company_name']} onChange={v => set('company_name', v)} placeholder="SML Store" />
-              </Field>
-            </div>
-            <div className="col-span-2">
-              <Field label="Sous-titre (factures)" hint="Ex: Vente · Installation · Maintenance">
-                <TextInput value={values['company_subtitle'] ?? ''} onChange={v => set('company_subtitle', v)} placeholder="Activité principale" />
-              </Field>
-            </div>
-            <Field label="Téléphone">
-              <TextInput value={values['company_phone']} onChange={v => set('company_phone', v)} placeholder="+216 00 000 000" />
-            </Field>
-            <Field label="Email">
-              <TextInput type="email" value={values['company_email']} onChange={v => set('company_email', v)} placeholder="contact@example.com" />
-            </Field>
-            <div className="col-span-2">
-              <Field label="Adresse">
-                <TextInput value={values['company_address']} onChange={v => set('company_address', v)} placeholder="Rue, ville, pays" />
-              </Field>
-            </div>
-            <Field label="Matricule fiscal">
-              <TextInput value={values['company_matricule']} onChange={v => set('company_matricule', v)} placeholder="0000000X" />
-            </Field>
-            <Field label="RIB / IBAN">
-              <TextInput value={values['company_rib']} onChange={v => set('company_rib', v)} />
-            </Field>
-          </div>
-        </Section>
-      </Card>
-      <Card>
-        <Section title="À propos">
-          <div className="space-y-1 text-sm text-text-secondary">
-            <div className="flex justify-between"><span>Version</span><span className="font-semibold text-text-primary">SMLPOS v{appVer}</span></div>
-            <div className="flex justify-between"><span>Base de données</span><span className="font-semibold text-text-primary">SQLite (local)</span></div>
-            <div className="flex justify-between"><span>Sync cloud</span><span className="font-semibold text-text-primary">Supabase</span></div>
-          </div>
-          <div className="mt-4 pt-4 border-t border-border">
-            <UpdateCheckButton />
-          </div>
-        </Section>
-      </Card>
-    </div>
-  )
-}
 
 function FactureSection({ values, set, toggle }: { values: Record<string, string>; set: (k: string, v: string) => void; toggle: (k: string) => void }) {
   return (
@@ -529,7 +430,7 @@ function OperateurPinField({ label, pinKey, values, set }: { label: string; pinK
   )
 }
 
-function SecuriteSection({ values, set, toggle, appVer: _appVer }: { values: Record<string, string>; set: (k: string, v: string) => void; toggle: (k: string) => void; appVer: string }) {
+function SecuriteSection({ values, set, toggle, appVer }: { values: Record<string, string>; set: (k: string, v: string) => void; toggle: (k: string) => void; appVer: string }) {
   return (
     <div className="max-w-2xl space-y-5">
       {/* Per-operator PINs */}
@@ -581,6 +482,19 @@ function SecuriteSection({ values, set, toggle, appVer: _appVer }: { values: Rec
       </Card>
 
       <FactoryResetCard />
+
+      <Card>
+        <Section title="À propos">
+          <div className="space-y-1 text-sm text-text-secondary">
+            <div className="flex justify-between"><span>Version</span><span className="font-semibold text-text-primary">SMLPOS v{appVer}</span></div>
+            <div className="flex justify-between"><span>Base de données</span><span className="font-semibold text-text-primary">SQLite (local)</span></div>
+            <div className="flex justify-between"><span>Sync cloud</span><span className="font-semibold text-text-primary">Supabase</span></div>
+          </div>
+          <div className="mt-4 pt-4 border-t border-border">
+            <UpdateCheckButton />
+          </div>
+        </Section>
+      </Card>
     </div>
   )
 }

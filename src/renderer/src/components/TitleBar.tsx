@@ -3,6 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import logoUrl from '../assets/logo.svg'
+import ThemeToggle from './ThemeToggle'
 import { useState, useEffect, useRef } from 'react'
 
 const api = window.api
@@ -66,8 +67,9 @@ export default function TitleBar() {
         <div className="ml-auto text-sm font-medium capitalize">{dateStr}</div>
       </div>
 
-      {/* BL notification bell */}
-      <div ref={dropdownRef} className="relative flex items-center h-full px-1">
+      {/* Theme + BL notification */}
+      <div ref={dropdownRef} className="relative flex items-center h-full">
+        <ThemeToggle compact />
         <button
           onClick={() => setShowBL(v => !v)}
           className="relative w-[38px] h-full flex items-center justify-center hover:bg-black/10 transition-colors"

@@ -1,5 +1,6 @@
 import { forwardRef } from 'react'
 import { amountToWordsDT } from '../lib/amountToWords'
+import { INVOICE_COMPANY } from '../lib/invoiceCompany'
 
 export interface InvoiceCompanySettings {
   company_name?: string
@@ -88,14 +89,14 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
   const isFacture = doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F'
   const timbre = isFacture ? 1.0 : 0
 
-  const companyName = settings.company_name || 'SML Store'
-  const companySubtitle = settings.company_subtitle || settings.company_address || ''
-  const companyAddress = settings.company_address || ''
-  const companyPhone = settings.company_phone || ''
-  const companyMatricule = settings.company_matricule || ''
-  const companyLogo = settings.company_logo || ''
-  const companyRib = settings.boutique_rib || settings.company_rib || ''
-  const footer = settings.invoice_footer || 'Merci pour votre confiance !'
+  const companyName = INVOICE_COMPANY.name
+  const companySubtitle = INVOICE_COMPANY.subtitle
+  const companyAddress = `${INVOICE_COMPANY.address} — ${INVOICE_COMPANY.city}`
+  const companyPhone = INVOICE_COMPANY.phone
+  const companyMatricule = INVOICE_COMPANY.matricule
+  const companyLogo = INVOICE_COMPANY.logo
+  const companyRib = INVOICE_COMPANY.rib
+  const footer = settings.invoice_footer || INVOICE_COMPANY.footer
 
   const tvaMap = new Map<number, { base: number; montant: number }>()
   lignes.forEach(l => {

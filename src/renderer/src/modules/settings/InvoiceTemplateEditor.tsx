@@ -4,7 +4,7 @@ import { cn } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import InvoicePrintTemplate from '../../components/InvoicePrintTemplate'
 import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
-import { SML_LOGO } from '../../assets/sml-logo'
+import { INVOICE_COMPANY } from '../../lib/invoiceCompany'
 
 const api = window.api
 
@@ -70,14 +70,14 @@ interface Props {
 export default function InvoiceTemplateEditor({ onClose }: Props) {
   const [config, setConfig] = useState<TemplateConfig>(DEFAULT_CONFIG)
   const [companySettings, setCompanySettings] = useState<Record<string, string>>({
-    company_name: 'SML Informatiques',
-    company_subtitle: 'Vente · Installation · Maintenance',
-    company_address: 'Cité Ain Mnekh, 7100 Kef',
-    company_phone: '78 203 905',
-    company_matricule: '1820629/E',
-    company_rib: '08062021061000261191',
-    company_logo: SML_LOGO,
-    invoice_footer: 'Merci pour votre confiance !',
+    company_name: INVOICE_COMPANY.name,
+    company_subtitle: INVOICE_COMPANY.subtitle,
+    company_address: `${INVOICE_COMPANY.address} — ${INVOICE_COMPANY.city}`,
+    company_phone: INVOICE_COMPANY.phone,
+    company_matricule: INVOICE_COMPANY.matricule,
+    company_rib: INVOICE_COMPANY.rib,
+    company_logo: INVOICE_COMPANY.logo,
+    invoice_footer: INVOICE_COMPANY.footer,
     invoice_timbre_fiscal: 'true',
   })
   const [saving, setSaving] = useState(false)
@@ -86,7 +86,12 @@ export default function InvoiceTemplateEditor({ onClose }: Props) {
   useEffect(() => {
     loadData('Chargement modèle facture', async () => {
       const all = await api.settingsGetAll() as Record<string, string>
-      setCompanySettings(prev => ({ ...prev, ...all }))
+      setCompanySettings(prev => ({
+        ...prev,
+        invoice_footer: all.invoice_footer ?? prev.invoice_footer,
+        invoice_show_tva: all.invoice_show_tva ?? 'true',
+        invoice_timbre_fiscal: all.invoice_timbre_fiscal ?? 'true',
+      }))
       if (all.invoice_template_json && all.invoice_template_json !== '{}') {
         try {
           const parsed = JSON.parse(all.invoice_template_json)

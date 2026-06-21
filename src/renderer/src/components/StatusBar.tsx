@@ -1,13 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
-import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, Palette } from 'lucide-react'
-import {
-  AGENT_THEME_OPTIONS,
-  applyAgentTheme,
-  loadAgentTheme,
-  saveAgentTheme,
-  type AgentThemeId,
-} from '../lib/agentTheme'
+import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
 import { getPendingCount, getFailedCount, processSyncQueue, resetFailedItems, purgeFailedItems } from '../lib/sync'
@@ -19,8 +12,7 @@ const api = window.api
 type SyncErrorRow = { id: string; table_name: string; operation: string; attempts: number; last_error: string | null; created_at: string }
 
 export default function StatusBar() {
-  const { isOnline, currentShift, currentOperateur } = useAppStore()
-  const [agentTheme, setAgentTheme] = useState<AgentThemeId>(() => loadAgentTheme(currentOperateur?.id))
+  const { isOnline, currentShift } = useAppStore()
   const [time, setTime] = useState(new Date())
   const [showFermeture, setShowFermeture] = useState(false)
   const [pendingSync, setPendingSync] = useState(0)
@@ -37,18 +29,6 @@ export default function StatusBar() {
       setDbHealth({ ok: !!h?.ok, error: h?.error })
     }).catch(() => setDbHealth(null))
   }, [])
-
-  useEffect(() => {
-    const theme = loadAgentTheme(currentOperateur?.id)
-    setAgentTheme(theme)
-    applyAgentTheme(theme)
-  }, [currentOperateur?.id])
-
-  const handleThemeChange = (theme: AgentThemeId) => {
-    setAgentTheme(theme)
-    applyAgentTheme(theme)
-    if (currentOperateur?.id) saveAgentTheme(currentOperateur.id, theme)
-  }
 
   useEffect(() => {
     if (!showErrorModal) return
@@ -130,7 +110,7 @@ export default function StatusBar() {
 
   return (
     <>
-      <div className="h-7 flex items-center gap-4 px-4 bg-white border-t border-border text-xs text-text-secondary flex-shrink-0 relative">
+      <div className="h-7 flex items-center gap-4 px-4 bg-[var(--bg-primary)] border-t border-border text-xs text-text-secondary flex-shrink-0 relative">
         {dbHealth && !dbHealth.ok && (
           <div className="absolute inset-x-0 -top-6 h-6 bg-red-600 text-white text-[10px] flex items-center justify-center font-semibold">
             Erreur base de données — {dbHealth.error ?? 'vérifiez les migrations'}
@@ -141,24 +121,6 @@ export default function StatusBar() {
           {isOnline ? <Wifi size={11} /> : <WifiOff size={11} />}
           {isOnline ? 'En ligne' : 'Hors ligne'}
         </div>
-
-        {currentOperateur && (
-          <>
-            <span className="text-border">|</span>
-            <label className="flex items-center gap-1" title="Thème personnel">
-              <Palette size={10} />
-              <select
-                value={agentTheme}
-                onChange={e => handleThemeChange(e.target.value as AgentThemeId)}
-                className="bg-transparent border border-border rounded px-1 py-0.5 text-[10px] font-semibold outline-none cursor-pointer"
-              >
-                {AGENT_THEME_OPTIONS.map(o => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
 
         {currentShift && (
           <>

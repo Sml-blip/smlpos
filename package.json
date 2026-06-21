@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.8",
+  "version": "1.9.9",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "dev:browser": "vite --config vite.browser.config.ts",
     "build": "electron-vite build",
-    "prepackage": "node scripts/check-env.mjs",
+    "prepackage": "node scripts/check-env.mjs && node scripts/generate-icon.mjs",
     "preview": "electron-vite preview",
     "package": "npm run prepackage && npm run build && electron-builder",
     "package:msi": "npm run prepackage && npm run build && electron-builder --win msi",
@@ -74,7 +74,9 @@
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
+    "sharp": "^0.33.5",
     "tailwindcss": "^3.4.17",
+    "to-ico": "^1.1.5",
     "typescript": "^5.7.2"
   },
   "build": {
@@ -98,7 +100,9 @@
         "to": "resources"
       }
     ],
+    "icon": "resources/icon.png",
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         {
           "target": "nsis",

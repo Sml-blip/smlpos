@@ -146,7 +146,7 @@ export default function App() {
       <TitleBar />
 
       {/* Tab Navigation — scrollable to fit all 12 tabs */}
-      <div className="flex items-center gap-0 bg-white border-b border-border px-2 pt-1 flex-shrink-0 overflow-x-auto">
+      <div className="flex items-center gap-0 bg-[var(--bg-primary)] border-b border-border px-2 pt-1 flex-shrink-0 overflow-x-auto">
         {TABS.map(tab => {
           const active = activeTab === tab.id
           return (

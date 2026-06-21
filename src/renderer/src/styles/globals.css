@@ -74,3 +74,12 @@ input:focus, textarea:focus, select:focus {
   font-family: 'JetBrains Mono', monospace;
   font-variant-numeric: tabular-nums;
 }
+
+[data-agent-theme="dark"] .bg-white {
+  background-color: var(--bg-primary) !important;
+}
+
+[data-agent-theme="dark"] .bg-surface,
+[data-agent-theme="dark"] .bg-muted {
+  color-scheme: dark;
+}

@@ -137,7 +137,18 @@ function enqueueProductSnapshot(productId: unknown) {
 
 // ─── Window ───────────────────────────────────────────────────────────────────
 
+function resolveAppIcon(): string {
+  const candidates = [
+    join(process.resourcesPath, 'resources/icon.ico'),
+    join(process.resourcesPath, 'resources/icon.png'),
+    join(__dirname, '../../resources/icon.ico'),
+    join(__dirname, '../../resources/icon.png'),
+  ]
+  return candidates.find(p => existsSync(p)) ?? join(__dirname, '../../resources/icon.ico')
+}
+
 function createWindow(): void {
+  const appIcon = resolveAppIcon()
   mainWindow = new BrowserWindow({
     width: 1366,
     height: 768,
@@ -145,7 +156,7 @@ function createWindow(): void {
     minHeight: 700,
     show: false,
     autoHideMenuBar: true,
-    icon: join(__dirname, '../../resources/icon.ico'),
+    icon: appIcon,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#FFD600',
