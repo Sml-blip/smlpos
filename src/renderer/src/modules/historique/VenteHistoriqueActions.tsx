@@ -190,5 +190,9 @@ export function ConvertVenteDocModal({
 
 export async function printVenteTicketQuick(vente: Vente): Promise<void> {
   const lignes = await api.ventesGetLignes(vente.id) as LigneVente[]
-  await printFullHtmlDocument(buildTicketHtml(vente, lignes || []), { pageSize: '58mm', settingsKey: 'impression_printer_ticket' })
+  await printFullHtmlDocument(buildTicketHtml(vente, lignes || []), {
+    pageSize: '58mm',
+    settingsKey: 'impression_printer_ticket',
+    printKind: 'ticket',
+  })
 }

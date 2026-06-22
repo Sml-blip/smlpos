@@ -7,7 +7,7 @@ import {
   Copy, CheckCircle, AlertTriangle, Clock
 } from 'lucide-react'
 import InvoiceTemplateEditor from './InvoiceTemplateEditor'
-import { printTestPage } from '../../components/PrintDialog'
+import { printTestPage, printLabelTestPage } from '../../components/PrintDialog'
 import { loadData, runAction } from '../../lib/apiCall'
 import { isSupabaseEnabled } from '../../lib/supabase'
 import { getPendingCount, getFailedCount, getBootstrapStatus, processSyncQueue, resetFailedItems } from '../../lib/sync'
@@ -57,6 +57,12 @@ const DEFAULTS: Record<string, string> = {
   impression_auto_print: 'false',
   impression_printer_a4: '',
   impression_printer_ticket: '',
+  impression_printer_label: '',
+  impression_label_width: '40.0',
+  impression_label_height: '19.9',
+  impression_label_strip_left: '1.3',
+  impression_label_strip_right: '1.3',
+  impression_label_rotation: '180',
   // Sécurité
   caisse_interne_pin:    'sml2023',
   securite_require_shift:'true',
@@ -350,13 +356,13 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
       <Card>
         <Section title="Imprimantes">
           <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-800 mb-3">
-            Sélectionnez les imprimantes par défaut pour les factures A4 et les tickets thermiques.
+            Imprimantes séparées : documents A4 (facture, devis, BL), tickets caisse, étiquettes code-barres.
           </div>
           <div className="grid grid-cols-1 gap-4">
-            <Field label="Imprimante factures / BL (A4)">
+            <Field label="Imprimante factures / devis / BL (A4)">
               <select value={values['impression_printer_a4'] ?? ''} onChange={e => set('impression_printer_a4', e.target.value)}
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
-                <option value="">Imprimante par défaut Windows</option>
+                <option value="">— Choisir une imprimante —</option>
                 {printers.map(p => (
                   <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (défaut)' : ''}</option>
                 ))}
@@ -365,14 +371,23 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
             <Field label="Imprimante tickets (thermique)">
               <select value={values['impression_printer_ticket'] ?? ''} onChange={e => set('impression_printer_ticket', e.target.value)}
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
-                <option value="">Imprimante par défaut Windows</option>
+                <option value="">— Choisir une imprimante —</option>
+                {printers.map(p => (
+                  <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (défaut)' : ''}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Imprimante étiquettes (ex. Gainscha GS-2408D)">
+              <select value={values['impression_printer_label'] ?? ''} onChange={e => set('impression_printer_label', e.target.value)}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
+                <option value="">— Choisir une imprimante —</option>
                 {printers.map(p => (
                   <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (défaut)' : ''}</option>
                 ))}
               </select>
             </Field>
           </div>
-          <div className="flex gap-2 mt-3">
+          <div className="flex flex-wrap gap-2 mt-3">
             <button type="button" onClick={refreshPrinters} disabled={loadingPrinters}
               className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
               <RefreshCw size={12} className={loadingPrinters ? 'animate-spin' : ''} /> Actualiser liste
@@ -385,6 +400,43 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
               className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
               <Printer size={12} /> Test ticket
             </button>
+            <button type="button" onClick={() => printLabelTestPage()}
+              className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
+              <Printer size={12} /> Test étiquette
+            </button>
+          </div>
+        </Section>
+      </Card>
+      <Card>
+        <Section title="Étiquettes code-barres (défauts)">
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Largeur (mm)">
+              <input type="text" inputMode="decimal" value={values['impression_label_width'] ?? '40.0'}
+                onChange={e => set('impression_label_width', e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
+            </Field>
+            <Field label="Hauteur (mm)">
+              <input type="text" inputMode="decimal" value={values['impression_label_height'] ?? '19.9'}
+                onChange={e => set('impression_label_height', e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
+            </Field>
+            <Field label="Bande gauche (mm)">
+              <input type="text" inputMode="decimal" value={values['impression_label_strip_left'] ?? '1.3'}
+                onChange={e => set('impression_label_strip_left', e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
+            </Field>
+            <Field label="Bande droite (mm)">
+              <input type="text" inputMode="decimal" value={values['impression_label_strip_right'] ?? '1.3'}
+                onChange={e => set('impression_label_strip_right', e.target.value.replace(/[^0-9.,]/g, ''))}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
+            </Field>
+            <Field label="Orientation">
+              <select value={values['impression_label_rotation'] ?? '180'} onChange={e => set('impression_label_rotation', e.target.value)}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
+                <option value="180">Portrait 180°</option>
+                <option value="0">Portrait 0°</option>
+              </select>
+            </Field>
           </div>
         </Section>
       </Card>

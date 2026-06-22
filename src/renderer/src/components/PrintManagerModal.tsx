@@ -1,20 +1,8 @@
 /**
  * PrintManagerModal.tsx
  *
- * Full-featured in-app print manager for Electron + Supabase POS.
- * - Live iframe preview with zoom / page navigation
- * - Printer picker loaded from Electron via api.getPrinters()
- * - Page format, orientation, margins, copies, color, background, silent
- * - Saved profiles per settingsKey (facture A4, ticket 58mm, étiquette)
- * - Robust error surface in status bar
- *
- * Usage:
- *   <PrintManagerModal
- *     html={myHtml}
- *     defaultPageSize="A4"
- *     settingsKey="impression_printer_a4"
- *     onClose={() => setOpen(false)}
- *   />
+ * Context-specific in-app print manager for Electron POS.
+ * Modes: document (A4), label (Gainscha-style), ticket (thermal).
  */
 
 import React, {
@@ -24,6 +12,20 @@ import React, {
   useCallback,
   useMemo,
 } from 'react'
+import {
+  type PrintKind,
+  type PrintSettingsKey,
+  type LabelPrintConfig,
+  DEFAULT_LABEL_CONFIG,
+  inferPrintKind,
+  defaultSettingsKey,
+} from '../lib/printManager'
+import {
+  loadLabelPrintConfig,
+  saveLabelPrintConfig,
+  mergeLabelConfig,
+} from '../lib/labelSettings'
+import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
 
 const api = window.api
 
@@ -50,18 +52,13 @@ export interface PrintProfile {
 }
 
 export interface PrintManagerModalProps {
-  /** Full HTML document string (<!DOCTYPE …>) or inner HTML fragment */
   html: string
-  /** Preset page size shown on open */
+  printKind?: PrintKind
   defaultPageSize?: NativePageSize
-  /**
-   * Settings key used to persist / restore the last-used printer.
-   * e.g. 'impression_printer_a4' | 'impression_printer_ticket'
-   */
-  settingsKey?: string
-  /** Called when the user closes the modal */
+  settingsKey?: PrintSettingsKey
+  labelConfig?: Partial<LabelPrintConfig>
+  labelSource?: { code: string; nom: string; prix: number; productRef?: string }
   onClose: () => void
-  /** Optional extra profiles injected by the caller */
   extraProfiles?: PrintProfile[]
 }
 
@@ -77,47 +74,11 @@ const PAGE_DIMS_MM: Record<NativePageSize, { w: number; h: number }> = {
 
 const MM_TO_PX = 3.7795275591
 
-const DEFAULT_PROFILES: PrintProfile[] = [
-  {
-    label: 'Facture A4',
-    options: {
-      pageSize: 'A4',
-      orientation: 'portrait',
-      color: true,
-      printBackground: true,
-      silent: false,
-      copies: 1,
-      margins: { top: 8, bottom: 8, left: 8, right: 8 },
-      scale: 100,
-    },
-  },
-  {
-    label: 'Ticket 58 mm',
-    options: {
-      pageSize: '58mm',
-      orientation: 'portrait',
-      color: false,
-      printBackground: true,
-      silent: true,
-      copies: 1,
-      margins: { top: 2, bottom: 2, left: 2, right: 2 },
-      scale: 100,
-    },
-  },
-  {
-    label: 'Étiquette 40×20',
-    options: {
-      pageSize: '40x20mm',
-      orientation: 'landscape',
-      color: true,
-      printBackground: true,
-      silent: true,
-      copies: 1,
-      margins: { top: 1, bottom: 1, left: 1, right: 1 },
-      scale: 100,
-    },
-  },
-]
+const MODE_HEADERS: Record<PrintKind, string> = {
+  document: 'Impression document A4',
+  label: 'Impression étiquette',
+  ticket: 'Impression ticket',
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -125,11 +86,11 @@ function mmToPx(mm: number): number {
   return mm * MM_TO_PX
 }
 
+/** Wrap inner HTML fragments for document preview/print only. */
 function wrapFragment(html: string, margins: PrintOptions['margins'], pageSize: NativePageSize): string {
   if (html.trimStart().startsWith('<!DOCTYPE') || html.trimStart().startsWith('<html')) {
     return html
   }
-  const isSmall = pageSize !== 'A4' && pageSize !== 'A5'
   const { top, bottom, left, right } = margins
   return `<!DOCTYPE html>
 <html>
@@ -140,10 +101,10 @@ function wrapFragment(html: string, margins: PrintOptions['margins'], pageSize: 
   body {
     margin: ${top}mm ${right}mm ${bottom}mm ${left}mm;
     font-family: sans-serif;
-    font-size: ${isSmall ? '9px' : '12px'};
+    font-size: 12px;
   }
   @page {
-    size: ${pageSize === 'A4' || pageSize === 'A5' ? pageSize : pageSize + ' auto'};
+    size: ${pageSize};
     margin: ${top}mm ${right}mm ${bottom}mm ${left}mm;
   }
 </style>
@@ -195,7 +156,7 @@ interface IconBtnProps {
 
 function IconBtn({ onClick, title, children, style }: IconBtnProps) {
   return (
-    <button onClick={onClick} title={title} style={{ ...styles.iconBtn, ...style }}>
+    <button type="button" onClick={onClick} title={title} style={{ ...styles.iconBtn, ...style }}>
       {children}
     </button>
   )
@@ -205,11 +166,19 @@ function IconBtn({ onClick, title, children, style }: IconBtnProps) {
 
 export default function PrintManagerModal({
   html,
+  printKind: printKindProp,
   defaultPageSize = 'A4',
-  settingsKey,
+  settingsKey: settingsKeyProp,
+  labelConfig,
+  labelSource,
   onClose,
-  extraProfiles = [],
 }: PrintManagerModalProps) {
+  const kind = useMemo(
+    () => inferPrintKind({ printKind: printKindProp, defaultPageSize }),
+    [printKindProp, defaultPageSize],
+  )
+  const settingsKey = settingsKeyProp ?? defaultSettingsKey(kind)
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   const [tab, setTab] = useState<'general' | 'advanced'>('general')
@@ -218,25 +187,27 @@ export default function PrintManagerModal({
 
   const [opts, setOpts] = useState<PrintOptions>({
     printerName: '',
-    pageSize: defaultPageSize,
+    pageSize: kind === 'document' ? 'A4' : defaultPageSize,
     orientation: 'portrait',
-    color: true,
+    color: kind !== 'ticket',
     printBackground: true,
-    silent: false,
+    silent: true,
     copies: 1,
     margins: { top: 8, bottom: 8, left: 8, right: 8 },
     scale: 100,
   })
+
+  const [labelCfg, setLabelCfg] = useState<LabelPrintConfig>(() => mergeLabelConfig(labelConfig))
+  const [ticketWidthMm, setTicketWidthMm] = useState<58 | 80>(80)
 
   const [zoom, setZoom] = useState(75)
   const [printing, setPrinting] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Prêt')
   const [statusOk, setStatusOk] = useState(true)
   const [currentPage, setCurrentPage] = useState(1)
-  const [totalPages] = useState(1) // extend with multi-page support as needed
+  const [totalPages] = useState(1)
 
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const allProfiles = useMemo(() => [...DEFAULT_PROFILES, ...extraProfiles], [extraProfiles])
 
   // ── Load printers + saved settings on mount ────────────────────────────────
 
@@ -244,20 +215,18 @@ export default function PrintManagerModal({
     let cancelled = false
     async function load() {
       try {
-        const list = (await api.getPrinters()) as { name: string }[]
+        const list = ((await api.getPrinters?.()) ?? []) as { name: string }[]
         if (cancelled) return
         const names = list.map((p) => p.name).filter(Boolean)
         setPrinters(names)
 
-        // Restore last-used printer from settings
         let savedPrinter = ''
-        if (settingsKey) {
-          try {
-            const all = (await api.settingsGetAll()) as Record<string, string>
-            savedPrinter = all?.[settingsKey] ?? ''
-          } catch {
-            // settings unavailable — non-fatal
-          }
+        let allSettings: Record<string, string> = {}
+        try {
+          allSettings = (await api.settingsGetAll()) as Record<string, string>
+          savedPrinter = settingsKey ? (allSettings[settingsKey] ?? '') : ''
+        } catch {
+          // settings unavailable — non-fatal
         }
 
         const defaultPrinter = savedPrinter && names.includes(savedPrinter)
@@ -265,9 +234,22 @@ export default function PrintManagerModal({
           : names[0] ?? ''
 
         setOpts((prev) => ({ ...prev, printerName: defaultPrinter }))
+
+        if (kind === 'ticket') {
+          const w = parseInt(allSettings.impression_largeur ?? '80', 10)
+          setTicketWidthMm(w === 58 ? 58 : 80)
+        }
+
+        if (kind === 'label') {
+          const loaded = await loadLabelPrintConfig()
+          if (!cancelled) {
+            setLabelCfg(mergeLabelConfig({ ...loaded, ...labelConfig }))
+          }
+        }
+
         setStatusMsg(defaultPrinter ? 'Imprimante prête' : 'Aucune imprimante détectée')
         setStatusOk(!!defaultPrinter)
-      } catch (err) {
+      } catch {
         if (cancelled) return
         setStatusMsg('Impossible de charger les imprimantes')
         setStatusOk(false)
@@ -277,16 +259,23 @@ export default function PrintManagerModal({
     }
     load()
     return () => { cancelled = true }
-  }, [settingsKey])
+  }, [settingsKey, kind, labelConfig])
 
   // ── Derived page dimensions ────────────────────────────────────────────────
 
   const pageDims = useMemo(() => {
-    const base = PAGE_DIMS_MM[opts.pageSize] ?? PAGE_DIMS_MM.A4
+    if (kind === 'label') {
+      return { w: labelCfg.widthMm, h: labelCfg.heightMm }
+    }
+    if (kind === 'ticket') {
+      const base = PAGE_DIMS_MM[ticketWidthMm === 58 ? '58mm' : '80mm']
+      return base
+    }
+    const base = PAGE_DIMS_MM.A4
     return opts.orientation === 'landscape'
       ? { w: base.h, h: base.w }
       : base
-  }, [opts.pageSize, opts.orientation])
+  }, [kind, labelCfg.widthMm, labelCfg.heightMm, ticketWidthMm, opts.orientation])
 
   const previewW = Math.round(mmToPx(pageDims.w) * (zoom / 100))
   const previewH = Math.round(mmToPx(pageDims.h) * (zoom / 100))
@@ -296,10 +285,24 @@ export default function PrintManagerModal({
 
   // ── Iframe srcdoc ──────────────────────────────────────────────────────────
 
-  const srcdoc = useMemo(
-    () => wrapFragment(html, opts.margins, opts.pageSize),
-    [html, opts.margins, opts.pageSize],
-  )
+  const srcdoc = useMemo(() => {
+    if (kind === 'label') {
+      if (labelSource) {
+        return buildBarcodeLabelHtml(
+          labelSource.code,
+          labelSource.nom,
+          labelSource.prix,
+          labelSource.productRef,
+          labelCfg,
+        )
+      }
+      return html
+    }
+    if (kind === 'document') {
+      return wrapFragment(html, opts.margins, 'A4')
+    }
+    return html
+  }, [kind, labelSource, labelCfg, html, opts.margins])
 
   // ── Option helpers ─────────────────────────────────────────────────────────
 
@@ -321,13 +324,9 @@ export default function PrintManagerModal({
     }))
   }, [])
 
-  function loadProfile(idx: number) {
-    const p = allProfiles[idx]
-    if (!p) return
-    setOpts((prev) => ({ ...prev, ...p.options }))
-    setStatusMsg(`Profil "${p.label}" chargé`)
-    setStatusOk(true)
-  }
+  const setLabelField = useCallback(<K extends keyof LabelPrintConfig>(key: K, val: LabelPrintConfig[K]) => {
+    setLabelCfg((prev) => ({ ...prev, [key]: val }))
+  }, [])
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
 
@@ -336,7 +335,6 @@ export default function PrintManagerModal({
   }
 
   function fitZoom() {
-    // Fit page width into ~380px canvas
     const canvasW = 380
     const natural = mmToPx(pageDims.w)
     const fit = Math.floor((canvasW / natural) * 100)
@@ -357,7 +355,6 @@ export default function PrintManagerModal({
     setStatusOk(true)
 
     try {
-      // Persist chosen printer to settings
       if (settingsKey) {
         try {
           await api.settingsSet(settingsKey, opts.printerName)
@@ -366,19 +363,44 @@ export default function PrintManagerModal({
         }
       }
 
+      let printOptions: Record<string, unknown> = {
+        silent: true,
+        printBackground: opts.printBackground,
+        color: opts.color,
+        copies: opts.copies,
+      }
+
+      if (kind === 'label') {
+        await saveLabelPrintConfig(labelCfg)
+        printOptions = {
+          ...printOptions,
+          widthMm: labelCfg.widthMm,
+          heightMm: labelCfg.heightMm,
+        }
+      } else if (kind === 'document') {
+        printOptions = {
+          ...printOptions,
+          pageSize: 'A4',
+          margins: opts.margins,
+          scaleFactor: opts.scale,
+        }
+      } else {
+        printOptions = {
+          ...printOptions,
+          pageSize: ticketWidthMm === 58 ? '58mm' : '80mm',
+        }
+      }
+
+      if (!api.printContent) {
+        setStatusMsg('Impression indisponible')
+        setStatusOk(false)
+        return
+      }
+
       const result = (await api.printContent(
         srcdoc,
         opts.printerName,
-        {
-          silent: opts.silent,
-          printBackground: opts.printBackground,
-          color: opts.color,
-          copies: opts.copies,
-          pageSize: opts.pageSize,
-          // Pass margins for @page rule in HTML — printWindow.ts handles this
-          margins: opts.margins,
-          scaleFactor: opts.scale,
-        },
+        printOptions,
       )) as { success: boolean; error?: string }
 
       if (result.success) {
@@ -388,12 +410,274 @@ export default function PrintManagerModal({
         setStatusMsg(`Erreur : ${result.error ?? 'inconnue'}`)
         setStatusOk(false)
       }
-    } catch (err: any) {
-      setStatusMsg(`Erreur : ${err?.message ?? 'Failed to fetch'}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to fetch'
+      setStatusMsg(`Erreur : ${msg}`)
       setStatusOk(false)
     } finally {
       setPrinting(false)
     }
+  }
+
+  // ── Status bar chip ────────────────────────────────────────────────────────
+
+  const sizeChip = useMemo(() => {
+    if (kind === 'label') {
+      return `${labelCfg.widthMm}×${labelCfg.heightMm} mm`
+    }
+    if (kind === 'ticket') {
+      return `${ticketWidthMm} mm`
+    }
+    return `A4 · ${opts.orientation === 'portrait' ? '↕' : '↔'}`
+  }, [kind, labelCfg.widthMm, labelCfg.heightMm, ticketWidthMm, opts.orientation])
+
+  // ── Sidebar renderers ──────────────────────────────────────────────────────
+
+  function renderPrinterSelect() {
+    return (
+      <div style={styles.section}>
+        <div style={styles.sectionLabel}>Imprimante</div>
+        {printersLoading ? (
+          <div style={styles.loadingText}>Chargement…</div>
+        ) : (
+          <select
+            value={opts.printerName}
+            onChange={(e) => {
+              set('printerName', e.target.value)
+              setStatusMsg(e.target.value ? 'Imprimante prête' : 'Aucune imprimante')
+              setStatusOk(!!e.target.value)
+            }}
+            style={styles.select}
+          >
+            {printers.length === 0 && (
+              <option value="">Aucune imprimante détectée</option>
+            )}
+            {printers.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        )}
+      </div>
+    )
+  }
+
+  function renderCopiesControl() {
+    return (
+      <div style={{ ...styles.field, marginTop: 10 }}>
+        <label style={styles.fieldLabel}>Copies</label>
+        <div style={styles.copiesRow}>
+          <IconBtn onClick={() => adjustCopies(-1)}>−</IconBtn>
+          <input
+            type="number"
+            value={opts.copies}
+            min={1}
+            max={99}
+            onChange={(e) => set('copies', Math.min(99, Math.max(1, parseInt(e.target.value) || 1)))}
+            style={styles.copiesInput}
+          />
+          <IconBtn onClick={() => adjustCopies(1)}>+</IconBtn>
+        </div>
+      </div>
+    )
+  }
+
+  function renderDocumentSidebar() {
+    return (
+      <>
+        <div style={styles.tabRow}>
+          {(['general', 'advanced'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              style={{
+                ...styles.tab,
+                ...(tab === t ? styles.tabActive : {}),
+              }}
+            >
+              {t === 'general' ? 'Général' : 'Avancé'}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'general' && (
+          <>
+            {renderPrinterSelect()}
+
+            <div style={styles.section}>
+              <div style={styles.sectionLabel}>Page</div>
+              <div style={styles.field}>
+                <label style={styles.fieldLabel}>Format</label>
+                <div style={{ ...styles.select, background: 'var(--color-background-secondary, #f0f0f0)', color: 'var(--color-text-secondary, #666)' }}>
+                  A4 — 210 × 297 mm
+                </div>
+              </div>
+              <div style={styles.field}>
+                <label style={styles.fieldLabel}>Orientation</label>
+                <select
+                  value={opts.orientation}
+                  onChange={(e) => set('orientation', e.target.value as Orientation)}
+                  style={styles.select}
+                >
+                  <option value="portrait">Portrait</option>
+                  <option value="landscape">Paysage</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={styles.section}>
+              <div style={styles.sectionLabel}>Options</div>
+              <Toggle id="opt-color" label="Couleur" checked={opts.color} onChange={(v) => set('color', v)} />
+              <Toggle id="opt-bg" label="Arrière-plan" checked={opts.printBackground} onChange={(v) => set('printBackground', v)} />
+              {renderCopiesControl()}
+            </div>
+          </>
+        )}
+
+        {tab === 'advanced' && (
+          <>
+            <div style={styles.section}>
+              <div style={styles.sectionLabel}>Marges (mm)</div>
+              <div style={styles.marginGrid}>
+                {(['top', 'bottom', 'left', 'right'] as const).map((side) => (
+                  <div key={side} style={styles.miniField}>
+                    <label style={styles.miniLabel}>
+                      {{ top: 'Haut', bottom: 'Bas', left: 'Gauche', right: 'Droite' }[side]}
+                    </label>
+                    <input
+                      type="number"
+                      value={opts.margins[side]}
+                      min={0}
+                      onChange={(e) => setMargin(side, parseInt(e.target.value) || 0)}
+                      style={styles.miniInput}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.section}>
+              <div style={styles.sectionLabel}>Échelle (%)</div>
+              <input
+                type="number"
+                value={opts.scale}
+                min={10}
+                max={200}
+                onChange={(e) => set('scale', Math.min(200, Math.max(10, parseInt(e.target.value) || 100)))}
+                style={{ ...styles.select, width: 80 }}
+              />
+            </div>
+          </>
+        )}
+      </>
+    )
+  }
+
+  function renderLabelSidebar() {
+    return (
+      <>
+        <div style={styles.section}>
+          <div style={styles.sectionLabel}>Support</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
+            Étiquettes à découper
+          </div>
+        </div>
+
+        <div style={styles.section}>
+          <div style={styles.sectionLabel}>Taille</div>
+          <div style={styles.marginGrid}>
+            <div style={styles.miniField}>
+              <label style={styles.miniLabel}>Largeur (mm)</label>
+              <input
+                type="number"
+                value={labelCfg.widthMm}
+                min={1}
+                step={0.1}
+                onChange={(e) => setLabelField('widthMm', Math.max(1, parseFloat(e.target.value) || DEFAULT_LABEL_CONFIG.widthMm))}
+                style={styles.miniInput}
+              />
+            </div>
+            <div style={styles.miniField}>
+              <label style={styles.miniLabel}>Hauteur (mm)</label>
+              <input
+                type="number"
+                value={labelCfg.heightMm}
+                min={1}
+                step={0.1}
+                onChange={(e) => setLabelField('heightMm', Math.max(1, parseFloat(e.target.value) || DEFAULT_LABEL_CONFIG.heightMm))}
+                style={styles.miniInput}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.section}>
+          <div style={styles.sectionLabel}>Bandes exposées</div>
+          <div style={styles.marginGrid}>
+            <div style={styles.miniField}>
+              <label style={styles.miniLabel}>Gauche (mm)</label>
+              <input
+                type="number"
+                value={labelCfg.stripLeftMm}
+                min={0}
+                step={0.1}
+                onChange={(e) => setLabelField('stripLeftMm', Math.max(0, parseFloat(e.target.value) || 0))}
+                style={styles.miniInput}
+              />
+            </div>
+            <div style={styles.miniField}>
+              <label style={styles.miniLabel}>Droite (mm)</label>
+              <input
+                type="number"
+                value={labelCfg.stripRightMm}
+                min={0}
+                step={0.1}
+                onChange={(e) => setLabelField('stripRightMm', Math.max(0, parseFloat(e.target.value) || 0))}
+                style={styles.miniInput}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.section}>
+          <div style={styles.sectionLabel}>Orientation</div>
+          <select
+            value={String(labelCfg.rotationDeg)}
+            onChange={(e) => setLabelField('rotationDeg', parseInt(e.target.value, 10) === 0 ? 0 : 180)}
+            style={styles.select}
+          >
+            <option value="180">Portrait 180°</option>
+            <option value="0">Portrait 0°</option>
+          </select>
+        </div>
+
+        {renderPrinterSelect()}
+      </>
+    )
+  }
+
+  function renderTicketSidebar() {
+    return (
+      <>
+        {renderPrinterSelect()}
+
+        <div style={styles.section}>
+          <div style={styles.sectionLabel}>Ticket</div>
+          <div style={styles.field}>
+            <label style={styles.fieldLabel}>Largeur</label>
+            <select
+              value={String(ticketWidthMm)}
+              onChange={(e) => setTicketWidthMm(parseInt(e.target.value, 10) === 58 ? 58 : 80)}
+              style={styles.select}
+            >
+              <option value="58">58 mm</option>
+              <option value="80">80 mm</option>
+            </select>
+          </div>
+          {renderCopiesControl()}
+        </div>
+      </>
+    )
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -408,9 +692,9 @@ export default function PrintManagerModal({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ marginRight: 8, verticalAlign: -2 }}>
               <path d="M6 9V2h12v7"/><rect x="3" y="9" width="18" height="10" rx="1"/><path d="M6 14h12M6 18h8"/>
             </svg>
-            Impression
+            {MODE_HEADERS[kind]}
           </span>
-          <button onClick={onClose} style={styles.closeBtn} aria-label="Fermer">
+          <button type="button" onClick={onClose} style={styles.closeBtn} aria-label="Fermer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12"/>
             </svg>
@@ -421,158 +705,14 @@ export default function PrintManagerModal({
 
           {/* ── Sidebar ── */}
           <div style={styles.sidebar}>
-
-            {/* Tab row */}
-            <div style={styles.tabRow}>
-              {(['general', 'advanced'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  style={{
-                    ...styles.tab,
-                    ...(tab === t ? styles.tabActive : {}),
-                  }}
-                >
-                  {t === 'general' ? 'Général' : 'Avancé'}
-                </button>
-              ))}
-            </div>
-
-            {/* ── General tab ── */}
-            {tab === 'general' && (
-              <>
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Imprimante</div>
-                  {printersLoading ? (
-                    <div style={styles.loadingText}>Chargement…</div>
-                  ) : (
-                    <select
-                      value={opts.printerName}
-                      onChange={(e) => {
-                        set('printerName', e.target.value)
-                        setStatusMsg(e.target.value ? 'Imprimante prête' : 'Aucune imprimante')
-                        setStatusOk(!!e.target.value)
-                      }}
-                      style={styles.select}
-                    >
-                      {printers.length === 0 && (
-                        <option value="">Aucune imprimante détectée</option>
-                      )}
-                      {printers.map((p) => (
-                        <option key={p} value={p}>{p}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Page</div>
-                  <div style={styles.field}>
-                    <label style={styles.fieldLabel}>Format</label>
-                    <select
-                      value={opts.pageSize}
-                      onChange={(e) => set('pageSize', e.target.value as NativePageSize)}
-                      style={styles.select}
-                    >
-                      <option value="A4">A4 — 210 × 297 mm</option>
-                      <option value="A5">A5 — 148 × 210 mm</option>
-                      <option value="58mm">Ticket 58 mm</option>
-                      <option value="80mm">Ticket 80 mm</option>
-                      <option value="40x20mm">Étiquette 40 × 20 mm</option>
-                    </select>
-                  </div>
-                  <div style={styles.field}>
-                    <label style={styles.fieldLabel}>Orientation</label>
-                    <select
-                      value={opts.orientation}
-                      onChange={(e) => set('orientation', e.target.value as Orientation)}
-                      style={styles.select}
-                    >
-                      <option value="portrait">Portrait</option>
-                      <option value="landscape">Paysage</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Options</div>
-                  <Toggle id="opt-color" label="Couleur" checked={opts.color} onChange={(v) => set('color', v)} />
-                  <Toggle id="opt-bg" label="Arrière-plan" checked={opts.printBackground} onChange={(v) => set('printBackground', v)} />
-                  <Toggle id="opt-silent" label="Mode silencieux" checked={opts.silent} onChange={(v) => set('silent', v)} />
-                  <div style={{ ...styles.field, marginTop: 10 }}>
-                    <label style={styles.fieldLabel}>Copies</label>
-                    <div style={styles.copiesRow}>
-                      <IconBtn onClick={() => adjustCopies(-1)}>−</IconBtn>
-                      <input
-                        type="number"
-                        value={opts.copies}
-                        min={1}
-                        max={99}
-                        onChange={(e) => set('copies', Math.min(99, Math.max(1, parseInt(e.target.value) || 1)))}
-                        style={styles.copiesInput}
-                      />
-                      <IconBtn onClick={() => adjustCopies(1)}>+</IconBtn>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* ── Advanced tab ── */}
-            {tab === 'advanced' && (
-              <>
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Marges (mm)</div>
-                  <div style={styles.marginGrid}>
-                    {(['top', 'bottom', 'left', 'right'] as const).map((side) => (
-                      <div key={side} style={styles.miniField}>
-                        <label style={styles.miniLabel}>
-                          {{ top: 'Haut', bottom: 'Bas', left: 'Gauche', right: 'Droite' }[side]}
-                        </label>
-                        <input
-                          type="number"
-                          value={opts.margins[side]}
-                          min={0}
-                          onChange={(e) => setMargin(side, parseInt(e.target.value) || 0)}
-                          style={styles.miniInput}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Échelle (%)</div>
-                  <input
-                    type="number"
-                    value={opts.scale}
-                    min={10}
-                    max={200}
-                    onChange={(e) => set('scale', Math.min(200, Math.max(10, parseInt(e.target.value) || 100)))}
-                    style={{ ...styles.select, width: 80 }}
-                  />
-                </div>
-
-                <div style={styles.section}>
-                  <div style={styles.sectionLabel}>Profils enregistrés</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {allProfiles.map((p, i) => (
-                      <button
-                        key={p.label}
-                        onClick={() => loadProfile(i)}
-                        style={styles.profileBtn}
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
+            {kind === 'document' && renderDocumentSidebar()}
+            {kind === 'label' && renderLabelSidebar()}
+            {kind === 'ticket' && renderTicketSidebar()}
 
             {/* Print button */}
             <div style={styles.printBtnRow}>
               <button
+                type="button"
                 onClick={handlePrint}
                 disabled={printing || !opts.printerName}
                 style={{
@@ -665,9 +805,7 @@ export default function PrintManagerModal({
                     ? opts.printerName.split(' ').slice(0, 2).join(' ')
                     : '—'}
                 </span>
-                <span style={styles.chip}>
-                  {opts.pageSize} · {opts.orientation === 'portrait' ? '↕' : '↔'}
-                </span>
+                <span style={styles.chip}>{sizeChip}</span>
               </span>
             </div>
           </div>

@@ -1,9 +1,16 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { usePrintManager } from './PrintManagerProvider'
-import { openPrintManager } from '../lib/printManager'
+import { openPrintManager, type PrintKind } from '../lib/printManager'
 import { wrapPrintHtml } from '../lib/printHtml'
+import { buildSampleLabelHtml } from '../lib/barcodeLabel'
 import { showToast } from '../lib/toast'
 import type { NativePageSize } from './PrintManagerModal'
+
+function printKindForPageSize(pageSize: NativePageSize): PrintKind {
+  if (pageSize === '40x20mm') return 'label'
+  if (pageSize === '58mm' || pageSize === '80mm') return 'ticket'
+  return 'document'
+}
 
 export interface PrintDialogProps {
   title?: string
@@ -12,7 +19,7 @@ export interface PrintDialogProps {
   documentHtml?: string
   preview?: ReactNode
   pageSize?: NativePageSize
-  settingsKey?: 'impression_printer_a4' | 'impression_printer_ticket'
+  settingsKey?: 'impression_printer_a4' | 'impression_printer_ticket' | 'impression_printer_label'
   copies?: number
   onClose: () => void
   onPrinted?: () => void
@@ -49,7 +56,12 @@ export default function PrintDialog({
       if (cancelled || openedRef.current) return
       openedRef.current = true
       if (html.trim()) {
-        openPrint({ html, defaultPageSize: pageSize, settingsKey })
+        openPrint({
+          html,
+          defaultPageSize: pageSize,
+          settingsKey,
+          printKind: printKindForPageSize(pageSize),
+        })
         onPrintedRef.current?.()
       } else {
         showToast('error', 'Rien à imprimer (contenu vide)')
@@ -98,7 +110,21 @@ export function printTestPage(_printerName: string, pageSize: 'A4' | '58mm' = 'A
   const ok = openPrintManager({
     html,
     defaultPageSize: pageSize,
+    printKind: pageSize === 'A4' ? 'document' : 'ticket',
     settingsKey: pageSize === 'A4' ? 'impression_printer_a4' : 'impression_printer_ticket',
+  })
+  if (!ok) showToast('error', 'Impression indisponible')
+  return ok
+}
+
+/** Test label for Settings → Impression */
+export function printLabelTestPage(): boolean {
+  const ok = openPrintManager({
+    html: buildSampleLabelHtml(),
+    printKind: 'label',
+    settingsKey: 'impression_printer_label',
+    defaultPageSize: '40x20mm',
+    labelSource: { code: '1234567890123', nom: 'Produit test', prix: 12.5, productRef: 'REF-TEST' },
   })
   if (!ok) showToast('error', 'Impression indisponible')
   return ok

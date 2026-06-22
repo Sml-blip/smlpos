@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { openPrintManager } from '../lib/printManager'
 import { buildBarcodeLabelHtml, parseLabelPrice } from '../lib/barcodeLabel'
+import { loadLabelPrintConfig } from '../lib/labelSettings'
 import { showToast } from '../lib/toast'
 
 interface Props {
   code: string
   nom: string
   prix: number
-  /** Product reference — must NOT be named `ref` (React reserved prop). */
   productRef?: string
   onClose: () => void
 }
 
-/** Opens PrintManagerModal for a 40×20 mm barcode label. */
+/** Opens PrintManagerModal for a barcode label (Gainscha-style settings). */
 export default function BarcodeLabelPrintDialog({
   code,
   nom,
@@ -22,28 +22,40 @@ export default function BarcodeLabelPrintDialog({
 }: Props) {
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const openedRef = useRef(false)
 
   const labelPrix = parseLabelPrice(prix)
-  const documentHtml = useMemo(
-    () => buildBarcodeLabelHtml(
-      code.trim(),
-      nom.trim() || productRef || 'Produit',
-      labelPrix,
-      productRef,
-    ),
-    [code, nom, labelPrix, productRef],
-  )
 
   useEffect(() => {
-    const ok = openPrintManager({
-      html: documentHtml,
-      defaultPageSize: '40x20mm',
-      settingsKey: 'impression_printer_ticket',
-    })
-    if (!ok) showToast('error', 'Impression indisponible')
-    const t = window.setTimeout(() => onCloseRef.current(), 0)
-    return () => window.clearTimeout(t)
-  }, [documentHtml])
+    if (openedRef.current) return
+    openedRef.current = true
+
+    void (async () => {
+      const cfg = await loadLabelPrintConfig()
+      const html = buildBarcodeLabelHtml(
+        code.trim(),
+        nom.trim() || productRef || 'Produit',
+        labelPrix,
+        productRef,
+        cfg,
+      )
+      const ok = openPrintManager({
+        html,
+        printKind: 'label',
+        settingsKey: 'impression_printer_label',
+        defaultPageSize: '40x20mm',
+        labelConfig: cfg,
+        labelSource: {
+          code: code.trim(),
+          nom: nom.trim() || productRef || 'Produit',
+          prix: labelPrix,
+          productRef,
+        },
+      })
+      if (!ok) showToast('error', 'Impression indisponible')
+      window.setTimeout(() => onCloseRef.current(), 0)
+    })()
+  }, [code, nom, labelPrix, productRef])
 
   return null
 }

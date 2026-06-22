@@ -24,8 +24,11 @@ export function PrintManagerProvider({ children }: { children: ReactNode }) {
       {job && (
         <PrintManagerModal
           html={job.html}
+          printKind={job.printKind}
           defaultPageSize={job.defaultPageSize ?? 'A4'}
-          settingsKey={job.settingsKey ?? 'impression_printer_a4'}
+          settingsKey={job.settingsKey}
+          labelConfig={job.labelConfig}
+          labelSource={job.labelSource}
           extraProfiles={job.extraProfiles}
           onClose={() => setJob(null)}
         />

@@ -1984,13 +1984,20 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('print:printContent', async (_event, html: string, printerName: string, options: Record<string, unknown> = {}) => {
+    let pageSize: Parameters<typeof resolveElectronPageSize>[0] = (options.pageSize as string) || 'A4'
+    if (options.widthMm != null && options.heightMm != null) {
+      pageSize = {
+        widthMm: Number(options.widthMm),
+        heightMm: Number(options.heightMm),
+      }
+    }
     return printHtmlInHiddenWindow(html, {
       printerName: printerName || undefined,
-      silent: options.silent === true,
+      silent: options.silent !== false && !!printerName,
       printBackground: options.printBackground !== false,
       color: options.color !== false,
       copies: typeof options.copies === 'number' ? options.copies : 1,
-      pageSize: resolveElectronPageSize((options.pageSize as string) || 'A4'),
+      pageSize: resolveElectronPageSize(pageSize),
       scaleFactor: typeof options.scaleFactor === 'number' ? options.scaleFactor : undefined,
     })
   })
