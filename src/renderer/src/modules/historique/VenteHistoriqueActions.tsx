@@ -76,13 +76,23 @@ export function ConvertVenteDocModal({
 }: { vente: Vente; onClose: () => void; onCreated: () => void }) {
   const [type, setType] = useState<'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'>('FACTURE_VENTE')
   const [loading, setLoading] = useState(false)
+  const [lignes, setLignes] = useState<LigneVente[]>([])
   const [createdDoc, setCreatedDoc] = useState<DocType | null>(null)
 
+  useEffect(() => {
+    loadData('Lignes vente', () => api.ventesGetLignes(vente.id) as Promise<LigneVente[]>, { silent: true })
+      .then(r => { if (r) setLignes(r) })
+  }, [vente.id])
+
+  const fLignes = lignes.filter(l => l.type_produit === 'F')
+  const nfLignes = lignes.filter(l => l.type_produit !== 'F')
+  const canCreate = fLignes.length > 0
+
   const handleCreate = async () => {
+    if (!canCreate) return
     await runAction('Création document', async () => {
-      const lignes = await api.ventesGetLignes(vente.id) as LigneVente[]
-      const filtered = type === 'FACTURE_VENTE' ? lignes.filter(l => l.type_produit === 'F') : lignes
-      if (!filtered.length) throw new Error('Aucune ligne éligible')
+      const filtered = fLignes
+      if (!filtered.length) throw new Error('Aucun produit facturé (F) — conversion impossible')
       const totalHT = filtered.reduce((s, l) => s + l.total_ligne, 0)
       const year = new Date().getFullYear()
       const yy = String(year).slice(-2)
@@ -124,7 +134,7 @@ export function ConvertVenteDocModal({
         total_ht: l.total_ligne,
         total_tva: 0,
         total_ttc: l.total_ligne,
-        type_produit: l.type_produit,
+        type_produit: 'F' as const,
       }))
       await api.documentsCreate(doc, docLignes)
       setCreatedDoc(doc as DocType)
@@ -154,9 +164,22 @@ export function ConvertVenteDocModal({
             </button>
           ))}
         </div>
+        {!canCreate ? (
+          <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mb-4">
+            Cette vente ne contient aucun produit facturé (F). Les produits NF ne peuvent pas être convertis en document.
+          </p>
+        ) : nfLignes.length > 0 ? (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-4">
+            {nfLignes.length} ligne{nfLignes.length > 1 ? 's' : ''} NF exclue{nfLignes.length > 1 ? 's' : ''} — seuls les produits F seront sur le document ({fLignes.length} ligne{fLignes.length > 1 ? 's' : ''}).
+          </p>
+        ) : (
+          <p className="text-xs text-text-secondary mb-4">
+            {fLignes.length} produit{fLignes.length > 1 ? 's' : ''} facturé{fLignes.length > 1 ? 's' : ''} (F) seront inclus.
+          </p>
+        )}
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 bg-muted rounded-xl text-sm font-semibold">Annuler</button>
-          <button onClick={() => void handleCreate()} disabled={loading} className="flex-1 py-2.5 bg-accent-500 rounded-xl text-sm font-bold disabled:opacity-50">
+          <button onClick={() => void handleCreate()} disabled={loading || !canCreate} className="flex-1 py-2.5 bg-accent-500 rounded-xl text-sm font-bold disabled:opacity-50">
             {loading ? 'Création…' : 'Créer'}
           </button>
         </div>

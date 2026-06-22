@@ -1722,16 +1722,23 @@ function setupIpcHandlers() {
       updated_at: now, created_at: now,
       ...doc,
     }
+    let docLignes = lignes
+    if (normalizedDoc.vente_id) {
+      docLignes = lignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
+      if (docLignes.length === 0) {
+        return { success: false, error: 'Aucun produit facturé (F) — conversion impossible' }
+      }
+    }
     db.transaction(() => {
       db.prepare(`INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at) VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)`).run(normalizedDoc)
-      for (const l of lignes) {
+      for (const l of docLignes) {
         const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
         db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)`).run(nl)
       }
     })()
     addActivityLog({ shift_id: doc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: doc.type_document, numero: doc.numero, client: doc.client_nom }, montant: doc.total_ttc as number })
     enqueueSync('documents', 'INSERT', normalizedDoc)
-    for (const l of lignes) {
+    for (const l of docLignes) {
       const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
       enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
     }
