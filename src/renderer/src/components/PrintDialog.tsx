@@ -31,31 +31,51 @@ export default function PrintDialog({
   const openPrint = usePrintManager()
   const hiddenRef = useRef<HTMLDivElement>(null)
   const openedRef = useRef(false)
+  const onCloseRef = useRef(onClose)
+  const onPrintedRef = useRef(onPrinted)
+  const getPrintHtmlRef = useRef(getPrintHtml)
+
+  onCloseRef.current = onClose
+  onPrintedRef.current = onPrinted
+  getPrintHtmlRef.current = getPrintHtml
 
   useEffect(() => {
     if (openedRef.current) return
 
+    let cancelled = false
     let attempts = 0
-    const tryOpen = () => {
-      if (openedRef.current) return
-      const html = documentHtml ?? getPrintHtml?.() ?? hiddenRef.current?.innerHTML ?? ''
-      if (!html.trim() && preview && attempts < 8) {
-        attempts += 1
-        requestAnimationFrame(tryOpen)
-        return
-      }
+
+    const finish = (html: string) => {
+      if (cancelled || openedRef.current) return
       openedRef.current = true
       if (html.trim()) {
         openPrint({ html, defaultPageSize: pageSize, settingsKey })
-        onPrinted?.()
+        onPrintedRef.current?.()
       } else {
         showToast('error', 'Rien à imprimer (contenu vide)')
       }
-      onClose()
+      window.setTimeout(() => onCloseRef.current(), 0)
     }
 
-    requestAnimationFrame(tryOpen)
-  }, [documentHtml, getPrintHtml, preview, pageSize, settingsKey, openPrint, onClose, onPrinted])
+    const tryOpen = () => {
+      if (cancelled || openedRef.current) return
+      const html = documentHtml ?? getPrintHtmlRef.current?.() ?? hiddenRef.current?.innerHTML ?? ''
+      if (!html.trim() && preview && attempts < 12) {
+        attempts += 1
+        window.requestAnimationFrame(tryOpen)
+        return
+      }
+      finish(html)
+    }
+
+    if (documentHtml?.trim()) {
+      finish(documentHtml)
+      return () => { cancelled = true }
+    }
+
+    window.requestAnimationFrame(tryOpen)
+    return () => { cancelled = true }
+  }, [documentHtml, pageSize, settingsKey, openPrint, preview])
 
   if (documentHtml) return null
 

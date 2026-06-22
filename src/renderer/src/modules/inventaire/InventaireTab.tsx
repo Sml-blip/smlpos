@@ -1351,7 +1351,7 @@ export default function InventaireTab() {
           code={barcodePrint.code}
           nom={barcodePrint.nom}
           prix={barcodePrint.prix}
-          ref={barcodePrint.ref}
+          productRef={barcodePrint.ref}
           onClose={() => setBarcodePrint(null)}
         />
       )}

@@ -1,32 +1,49 @@
-import { useMemo } from 'react'
-import PrintDialog from './PrintDialog'
+import { useEffect, useMemo, useRef } from 'react'
+import { openPrintManager } from '../lib/printManager'
 import { buildBarcodeLabelHtml, parseLabelPrice } from '../lib/barcodeLabel'
-import { formatPrice } from '../lib/utils'
+import { showToast } from '../lib/toast'
 
 interface Props {
   code: string
   nom: string
   prix: number
-  ref?: string
+  /** Product reference — must NOT be named `ref` (React reserved prop). */
+  productRef?: string
   onClose: () => void
 }
 
-/** Preview + print dialog for 40×20 mm barcode labels (ticket printer). */
-export default function BarcodeLabelPrintDialog({ code, nom, prix, ref = '', onClose }: Props) {
+/** Opens PrintManagerModal for a 40×20 mm barcode label. */
+export default function BarcodeLabelPrintDialog({
+  code,
+  nom,
+  prix,
+  productRef = '',
+  onClose,
+}: Props) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   const labelPrix = parseLabelPrice(prix)
   const documentHtml = useMemo(
-    () => buildBarcodeLabelHtml(code.trim(), nom.trim() || ref || 'Produit', labelPrix, ref),
-    [code, nom, labelPrix, ref],
+    () => buildBarcodeLabelHtml(
+      code.trim(),
+      nom.trim() || productRef || 'Produit',
+      labelPrix,
+      productRef,
+    ),
+    [code, nom, labelPrix, productRef],
   )
 
-  return (
-    <PrintDialog
-      title="Étiquette code-barres"
-      subtitle={`${nom || ref} · ${formatPrice(labelPrix)}`}
-      documentHtml={documentHtml}
-      pageSize="40x20mm"
-      settingsKey="impression_printer_ticket"
-      onClose={onClose}
-    />
-  )
+  useEffect(() => {
+    const ok = openPrintManager({
+      html: documentHtml,
+      defaultPageSize: '40x20mm',
+      settingsKey: 'impression_printer_ticket',
+    })
+    if (!ok) showToast('error', 'Impression indisponible')
+    const t = window.setTimeout(() => onCloseRef.current(), 0)
+    return () => window.clearTimeout(t)
+  }, [documentHtml])
+
+  return null
 }
