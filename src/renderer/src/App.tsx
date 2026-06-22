@@ -25,6 +25,7 @@ import {
 import { cn } from './lib/utils'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
 import ToastProvider from './components/ToastProvider'
+import { PrintManagerProvider } from './components/PrintManagerProvider'
 import UpdateModal from './components/UpdateModal'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
@@ -133,6 +134,7 @@ export default function App() {
   }, [currentOperateur?.id])
 
   return (
+    <PrintManagerProvider>
     <div className="h-screen flex flex-col bg-surface overflow-hidden">
       {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
       {locked && currentPin && (
@@ -201,5 +203,6 @@ export default function App() {
 
       <ToastProvider />
     </div>
+    </PrintManagerProvider>
   )
 }

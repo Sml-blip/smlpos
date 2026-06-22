@@ -1983,6 +1983,7 @@ function setupIpcHandlers() {
       color: options.color !== false,
       copies: typeof options.copies === 'number' ? options.copies : 1,
       pageSize: resolveElectronPageSize((options.pageSize as string) || 'A4'),
+      scaleFactor: typeof options.scaleFactor === 'number' ? options.scaleFactor : undefined,
     })
   })
 

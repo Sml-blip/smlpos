@@ -11,6 +11,7 @@ export interface PrintWindowOptions {
   printBackground?: boolean
   color?: boolean
   copies?: number
+  scaleFactor?: number
 }
 
 /** Load HTML from a temp file (reliable for large invoices) and invoke OS print dialog. */
@@ -48,14 +49,18 @@ export function printHtmlInHiddenWindow(
     })
 
     win.webContents.once('did-finish-load', () => {
-      win.webContents.print({
+      const printOpts: Electron.WebContentsPrintOptions = {
         deviceName: options.printerName || undefined,
         silent: options.silent === true,
         printBackground: options.printBackground !== false,
         color: options.color !== false,
         copies: typeof options.copies === 'number' ? options.copies : 1,
         pageSize: resolveElectronPageSize(options.pageSize),
-      }, (success, failureReason) => {
+      }
+      if (typeof options.scaleFactor === 'number') {
+        printOpts.scaleFactor = options.scaleFactor
+      }
+      win.webContents.print(printOpts, (success, failureReason) => {
         cleanup()
         resolve({ success, error: success ? undefined : failureReason })
       })

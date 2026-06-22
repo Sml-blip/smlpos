@@ -1,8 +1,7 @@
 import { wrapPrintHtml } from './printHtml'
-import { runAction } from './apiCall'
+import { openPrintManager } from './printManager'
 import { showToast } from './toast'
-
-const api = window.api
+import type { NativePageSize } from '../components/PrintManagerModal'
 
 export type NativePrintPageSize = 'A4' | '58mm' | '80mm' | '40x20mm' | 'label'
 export type NativePrintSettingsKey = 'impression_printer_a4' | 'impression_printer_ticket'
@@ -14,64 +13,45 @@ export interface NativePrintOptions {
   silent?: boolean
 }
 
-async function resolvePrinter(settingsKey: NativePrintSettingsKey): Promise<string> {
-  try {
-    const settings = (await api.settingsGetAll()) as Record<string, string>
-    return settings[settingsKey] ?? ''
-  } catch {
-    return ''
-  }
+function toNativePageSize(pageSize: NativePrintPageSize): NativePageSize {
+  if (pageSize === 'label') return '40x20mm'
+  return pageSize
 }
 
-/** Print inner HTML (wrapped for A4/thermal) via native Electron IPC. */
+function defaultSettingsKey(pageSize: NativePageSize): NativePrintSettingsKey {
+  return pageSize === 'A4' ? 'impression_printer_a4' : 'impression_printer_ticket'
+}
+
+/** Open print manager with inner HTML (wrapped for A4/thermal). */
 export async function printHtmlNow(innerHtml: string, options: NativePrintOptions = {}): Promise<boolean> {
-  if (!api.printContent) {
-    showToast('error', 'Impression native indisponible')
-    return false
-  }
   const trimmed = innerHtml.trim()
   if (!trimmed) {
     showToast('error', 'Rien à imprimer (contenu vide)')
     return false
   }
-  const pageSize = options.pageSize ?? 'A4'
-  const settingsKey = options.settingsKey ?? (pageSize === 'A4' ? 'impression_printer_a4' : 'impression_printer_ticket')
-  const printerName = await resolvePrinter(settingsKey)
+  const pageSize = toNativePageSize(options.pageSize ?? 'A4')
+  const settingsKey = options.settingsKey ?? defaultSettingsKey(pageSize)
   const html = wrapPrintHtml(trimmed, pageSize)
-  return runAction('Impression', async () => {
-    const res = await api.printContent(html, printerName, {
-      silent: options.silent ?? false,
-      pageSize: pageSize === 'A4' ? 'A4' : pageSize,
-      color: true,
-      printBackground: true,
-      copies: options.copies ?? 1,
-    }) as { success?: boolean; error?: string }
-    if (res && res.success === false) throw new Error(res.error ?? 'Impression échouée')
-    if (printerName) await api.settingsSet(settingsKey, printerName)
-  }, { successMessage: 'Document envoyé à l\'imprimante' }).then(Boolean)
+  const ok = openPrintManager({ html, defaultPageSize: pageSize, settingsKey })
+  if (!ok) showToast('error', 'Impression indisponible')
+  return ok
 }
 
-/** Print a complete HTML document string (already has DOCTYPE). */
+/** Open print manager with a complete HTML document string. */
 export async function printFullHtmlDocument(html: string, options: NativePrintOptions = {}): Promise<boolean> {
-  if (!api.printContent) {
-    showToast('error', 'Impression native indisponible')
+  const trimmed = html.trim()
+  if (!trimmed) {
+    showToast('error', 'Rien à imprimer (contenu vide)')
     return false
   }
-  const settingsKey = options.settingsKey ?? 'impression_printer_a4'
-  const printerName = await resolvePrinter(settingsKey)
-  return runAction('Impression', async () => {
-    const res = await api.printContent(html, printerName, {
-      silent: options.silent ?? false,
-      pageSize: options.pageSize ?? 'A4',
-      color: true,
-      printBackground: true,
-      copies: options.copies ?? 1,
-    }) as { success?: boolean; error?: string }
-    if (res && res.success === false) throw new Error(res.error ?? 'Impression échouée')
-  }, { successMessage: 'Document envoyé à l\'imprimante' }).then(Boolean)
+  const pageSize = toNativePageSize(options.pageSize ?? 'A4')
+  const settingsKey = options.settingsKey ?? defaultSettingsKey(pageSize)
+  const ok = openPrintManager({ html: trimmed, defaultPageSize: pageSize, settingsKey })
+  if (!ok) showToast('error', 'Impression indisponible')
+  return ok
 }
 
-/** Legacy alias — replaces api.printLabel(html). */
+/** Legacy alias — opens print manager instead of direct IPC. */
 export async function printLabelHtml(html: string, pageSize: NativePrintPageSize = 'A4'): Promise<boolean> {
   if (html.includes('<!DOCTYPE') || html.includes('<html')) {
     return printFullHtmlDocument(html, { pageSize })

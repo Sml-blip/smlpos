@@ -163,6 +163,15 @@ interface Window {
     syncQueuePendingCount: () => Promise<number>
     syncBootstrapTableData: (tableName: string, onlyActive?: boolean) => Promise<unknown[]>
 
+    // Print
+    printLabel?: (html: string) => Promise<boolean>
+    getPrinters?: () => Promise<{ name: string; isDefault?: boolean; displayName?: string }[]>
+    printContent?: (
+      html: string,
+      printerName: string,
+      options?: Record<string, unknown>,
+    ) => Promise<{ success: boolean; error?: string }>
+
     // Window
     windowMinimize: () => Promise<void>
     windowMaximize: () => Promise<void>
