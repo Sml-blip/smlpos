@@ -8,6 +8,7 @@ import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh } from './factoryReset'
 import { printHtmlInHiddenWindow } from './printWindow'
+import { resolveElectronPageSize } from './printPageSize'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
 
