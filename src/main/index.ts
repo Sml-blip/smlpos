@@ -626,6 +626,36 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
+  ipcMain.handle('reparations:applyDegatPrices', (_e, repId: string, updates: { id: string; prix_achat: number }[]) => {
+    if (!updates?.length) return { success: true }
+    const now = new Date().toISOString()
+    const updatePiece = db.prepare(
+      `UPDATE pieces_reparation SET prix_achat = ? WHERE id = ? AND reparation_id = ? AND destock_stock = 1`,
+    )
+    const transaction = db.transaction(() => {
+      for (const u of updates) {
+        updatePiece.run(u.prix_achat, u.id, repId)
+      }
+      const sumRow = db.prepare(
+        `SELECT SUM(COALESCE(quantite,1) * COALESCE(prix_achat,0)) as total FROM pieces_reparation WHERE reparation_id = ?`,
+      ).get(repId) as { total?: number }
+      const repRow = db.prepare(`SELECT total_final FROM reparations WHERE id = ?`).get(repId) as { total_final?: number }
+      const mainOeuvre = sumRow?.total ?? 0
+      const benefice = (repRow?.total_final ?? 0) - mainOeuvre
+      db.prepare(`UPDATE reparations SET main_oeuvre = ?, benefice = ?, updated_at = ? WHERE id = ?`).run(
+        mainOeuvre, benefice, now, repId,
+      )
+    })
+    transaction()
+    const rep = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(repId) as Record<string, unknown>
+    enqueueSync('reparations', 'UPDATE', rep)
+    for (const u of updates) {
+      const piece = db.prepare(`SELECT * FROM pieces_reparation WHERE id = ?`).get(u.id) as Record<string, unknown>
+      if (piece) enqueueSync('pieces_reparation', 'UPDATE', piece)
+    }
+    return { success: true }
+  })
+
   ipcMain.handle('reparations:getBeneficeStats', (_e, mois?: string) => {
     const targetMois = mois || new Date().toISOString().slice(0, 7)
     const overall = db.prepare(`
@@ -1947,7 +1977,7 @@ function setupIpcHandlers() {
       printBackground: options.printBackground !== false,
       color: options.color !== false,
       copies: typeof options.copies === 'number' ? options.copies : 1,
-      pageSize: (options.pageSize as string) || 'A4',
+      pageSize: resolveElectronPageSize((options.pageSize as string) || 'A4'),
     })
   })
 

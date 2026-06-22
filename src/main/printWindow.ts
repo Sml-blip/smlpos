@@ -2,11 +2,12 @@ import { BrowserWindow } from 'electron'
 import { writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { resolveElectronPageSize, type ElectronPageSize } from './printPageSize'
 
 export interface PrintWindowOptions {
   printerName?: string
   silent?: boolean
-  pageSize?: string
+  pageSize?: string | ElectronPageSize
   printBackground?: boolean
   color?: boolean
   copies?: number
@@ -53,7 +54,7 @@ export function printHtmlInHiddenWindow(
         printBackground: options.printBackground !== false,
         color: options.color !== false,
         copies: typeof options.copies === 'number' ? options.copies : 1,
-        pageSize: (options.pageSize as string) || 'A4',
+        pageSize: resolveElectronPageSize(options.pageSize),
       }, (success, failureReason) => {
         cleanup()
         resolve({ success, error: success ? undefined : failureReason })

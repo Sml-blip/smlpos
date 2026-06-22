@@ -6,11 +6,15 @@ import { cn, formatPrice } from '../../lib/utils'
 import { usePrint } from '../../lib/usePrint'
 import { printLabelHtml } from '../../lib/nativePrint'
 import { loadData, runAction } from '../../lib/apiCall'
+import DocumentPrintModal from '../historique/DocumentPrintModal'
+import type { Document } from '../../lib/types'
 import {
   FileText, Search, Download, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
   Ban, PackageCheck
 } from 'lucide-react'
+
+const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F'])
 
 const api = window.api
 
@@ -222,6 +226,7 @@ export default function DocumentsTab() {
   const [dateTo, setDateTo] = useState('')
   const [excelModal, setExcelModal] = useState<{ rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<DocRow | null>(null)
+  const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
   const [revoquerDoc, setRevoquerDoc] = useState<DocRow | null>(null)
 
   const load = useCallback(async () => {
@@ -299,6 +304,10 @@ export default function DocumentsTab() {
   }
 
   const printDoc = (d: DocRow) => {
+    if (d._source !== 'ff' && INVOICE_PRINT_TYPES.has(d.type_document)) {
+      setPrintInvoiceDoc(d as unknown as Document)
+      return
+    }
     const tierName = tiers(d)
     const dateStr = d.created_at ? format(new Date(d.created_at), 'dd/MM/yyyy') : '—'
     const html = `<!DOCTYPE html><html><head><title>${d.numero}</title>
@@ -558,6 +567,10 @@ export default function DocumentsTab() {
           onClose={() => setRevoquerDoc(null)}
           onConfirmed={() => { setRevoquerDoc(null); load() }}
         />
+      )}
+
+      {printInvoiceDoc && (
+        <DocumentPrintModal doc={printInvoiceDoc} onClose={() => setPrintInvoiceDoc(null)} />
       )}
     </div>
   )

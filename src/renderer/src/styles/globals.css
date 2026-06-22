@@ -214,3 +214,35 @@ input, textarea, select {
   background-color: var(--bg-muted) !important;
   color: var(--text-muted) !important;
 }
+
+/* High-contrast — black accent buttons need white label text */
+[data-agent-theme="high-contrast"] .bg-accent-500,
+[data-agent-theme="high-contrast"] .bg-accent-600,
+[data-agent-theme="high-contrast"] .hover\:bg-accent-600:hover {
+  color: #FFFFFF !important;
+}
+
+[data-agent-theme="high-contrast"] .bg-white,
+[data-agent-theme="high-contrast"] .bg-gray-50,
+[data-agent-theme="high-contrast"] .bg-muted {
+  background-color: var(--card-bg) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-agent-theme="high-contrast"] .text-text-primary,
+[data-agent-theme="high-contrast"] .text-text-secondary,
+[data-agent-theme="high-contrast"] .text-text-muted {
+  color: var(--text-primary) !important;
+}
+
+[data-agent-theme="high-contrast"] input,
+[data-agent-theme="high-contrast"] select,
+[data-agent-theme="high-contrast"] textarea {
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+[data-agent-theme="high-contrast"] .border-border {
+  border-color: var(--border) !important;
+}

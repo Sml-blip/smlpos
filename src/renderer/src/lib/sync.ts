@@ -11,6 +11,8 @@ let _running = false
 let _intervalId: ReturnType<typeof setInterval> | null = null
 let _processing = false
 
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
 /** Parent tables sync before children (FK safety) */
 const TABLE_PRIORITY: Record<string, number> = {
   operateurs: 10, categories: 10, fournisseurs: 10, organisations: 10, clients: 10,
@@ -48,6 +50,79 @@ function sortRowsByPriority<T extends { table_name: string }>(rows: T[]): T[] {
   })
 }
 
+function isTransientSyncError(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('network request failed') ||
+    m.includes('fetch failed') ||
+    m.includes('timeout') ||
+    m.includes('econnreset') ||
+    m.includes('econnrefused') ||
+    m.includes('socket hang up') ||
+    m.includes('aborterror')
+  )
+}
+
+function isDeferSyncError(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    isTransientSyncError(msg) ||
+    m.includes('foreign key') ||
+    m.includes('violates foreign key') ||
+    m.includes('23503') ||
+    m.includes('23505') && m.includes('duplicate') === false
+  )
+}
+
+async function performRemoteSync(
+  table_name: string,
+  operation: string,
+  payload: Record<string, unknown>,
+): Promise<string | null> {
+  const pk = table_name === 'app_settings' ? 'key' : 'id'
+  const pkValue = payload[pk]
+
+  if (operation === 'DELETE') {
+    const { error } = await supabase!.from(table_name).delete().eq(pk, pkValue)
+    return error?.message ?? null
+  }
+
+  const NOT_NULL_TEXT: Record<string, string[]> = {
+    shifts: ['operateur_nom'],
+    ventes: ['numero', 'total_ttc'],
+    reparations: ['numero'],
+    documents: ['numero', 'type_document'],
+    produits: ['reference', 'nom'],
+    clients: ['nom'],
+    personnels: ['nom'],
+    fournisseurs: ['nom'],
+    lignes_vente: ['vente_id'],
+  }
+  const nullableOverrides = NOT_NULL_TEXT[table_name] ?? []
+  const clean = Object.fromEntries(
+    Object.entries(payload)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [k, (v === null && nullableOverrides.includes(k)) ? '' : v])
+  )
+
+  if (table_name === 'shifts' && clean.fond_de_caisse == null && payload.id) {
+    try {
+      const fond = await api.syncShiftsGetFondDeCaisse(String(payload.id)) as number | null
+      if (fond != null) clean.fond_de_caisse = fond
+      else if (operation === 'INSERT') clean.fond_de_caisse = 0
+    } catch { /* ignore */ }
+  }
+
+  if (operation === 'UPDATE') {
+    const { error } = await supabase!.from(table_name).update(clean).eq(pk, pkValue)
+    return error?.message ?? null
+  }
+  const { error } = await supabase!.from(table_name).upsert(clean, { onConflict: pk })
+  return error?.message ?? null
+}
+
 async function syncOneRow(row: {
   id: string; table_name: string; operation: string; payload: string
 }): Promise<boolean> {
@@ -55,59 +130,43 @@ async function syncOneRow(row: {
   try { payload = JSON.parse(row.payload) } catch { payload = {} }
 
   let errorMsg: string | null = null
-  try {
-    const pk = row.table_name === 'app_settings' ? 'key' : 'id'
-    const pkValue = payload[pk]
+  const MAX_TRIES = 3
 
-    if (row.operation === 'DELETE') {
-      const { error } = await supabase!.from(row.table_name).delete().eq(pk, pkValue)
-      errorMsg = error?.message ?? null
-    } else {
-      const NOT_NULL_TEXT: Record<string, string[]> = {
-        shifts: ['operateur_nom'],
-        ventes: ['numero', 'total_ttc'],
-        reparations: ['numero'],
-        documents: ['numero', 'type_document'],
-        produits: ['reference', 'nom'],
-        clients: ['nom'],
-        personnels: ['nom'],
-        fournisseurs: ['nom'],
-      }
-      const nullableOverrides = NOT_NULL_TEXT[row.table_name] ?? []
-      const clean = Object.fromEntries(
-        Object.entries(payload)
-          .filter(([, v]) => v !== undefined)
-          .map(([k, v]) => [k, (v === null && nullableOverrides.includes(k)) ? '' : v])
-      )
-
-      if (row.table_name === 'shifts' && clean.fond_de_caisse == null && payload.id) {
-        try {
-          const fond = await api.syncShiftsGetFondDeCaisse(String(payload.id)) as number | null
-          if (fond != null) clean.fond_de_caisse = fond
-          else if (row.operation === 'INSERT') clean.fond_de_caisse = 0
-        } catch { /* ignore */ }
-      }
-
-      if (row.operation === 'UPDATE') {
-        const { error } = await supabase!.from(row.table_name).update(clean).eq(pk, pkValue)
-        errorMsg = error?.message ?? null
-      } else {
-        const { error } = await supabase!.from(row.table_name).upsert(clean, { onConflict: pk })
-        errorMsg = error?.message ?? null
-      }
+  for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+    if (attempt > 0) await sleep(800 * attempt)
+    try {
+      errorMsg = await performRemoteSync(row.table_name, row.operation, payload)
+    } catch (e) {
+      errorMsg = String(e)
     }
-  } catch (e) {
-    errorMsg = String(e)
+    if (!errorMsg) {
+      await api.syncQueueMarkSynced(row.id)
+      return true
+    }
+    if (!isTransientSyncError(errorMsg) || attempt === MAX_TRIES - 1) break
   }
 
   const pk = row.table_name === 'app_settings' ? 'key' : 'id'
   const pkValue = payload[pk]
+
   if (!errorMsg) {
     await api.syncQueueMarkSynced(row.id)
     return true
   }
+
+  const errLower = errorMsg!.toLowerCase()
+  if (errLower.includes('duplicate key') || errLower.includes('23505')) {
+    await api.syncQueueMarkSynced(row.id)
+    return true
+  }
+
+  if (isDeferSyncError(errorMsg!)) {
+    console.warn(`[sync] Deferred ${row.table_name}#${pkValue}:`, errorMsg)
+    return false
+  }
+
   console.warn(`[sync] Failed ${row.table_name}#${pkValue}:`, errorMsg)
-  await api.syncQueueMarkFailed(row.id, errorMsg)
+  await api.syncQueueMarkFailed(row.id, errorMsg!)
   return false
 }
 
@@ -208,10 +267,16 @@ export async function bootstrapSync(): Promise<void> {
       const BATCH = 200
       const pk = table === 'app_settings' ? 'key' : 'id'
       for (let i = 0; i < rows.length; i += BATCH) {
-        const { error } = await supabase!.from(table).upsert(rows.slice(i, i + BATCH), { onConflict: pk })
-        if (error) {
-          errors.push(`${table}: ${error.message}`)
-          console.warn(`[sync] Bootstrap ${table} batch error:`, error.message)
+        let batchError: string | null = null
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt > 0) await sleep(1000 * attempt)
+          const { error } = await supabase!.from(table).upsert(rows.slice(i, i + BATCH), { onConflict: pk })
+          batchError = error?.message ?? null
+          if (!batchError || !isTransientSyncError(batchError)) break
+        }
+        if (batchError) {
+          errors.push(`${table}: ${batchError}`)
+          console.warn(`[sync] Bootstrap ${table} batch error:`, batchError)
         } else {
           console.info(`[sync] Bootstrap ${table} ${i + 1}–${Math.min(i + BATCH, rows.length)}`)
         }

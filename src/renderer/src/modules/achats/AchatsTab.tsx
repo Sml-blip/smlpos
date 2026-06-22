@@ -1243,7 +1243,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
     const labelNom = nom.trim() || ref.trim() || 'Produit'
     const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
     void printFullHtmlDocument(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref), {
-      pageSize: '58mm',
+      pageSize: '40x20mm',
       settingsKey: 'impression_printer_ticket',
     })
   }

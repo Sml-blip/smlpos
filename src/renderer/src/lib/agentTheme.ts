@@ -29,7 +29,7 @@ const THEME_VARS: Record<AgentThemeId, Record<string, string>> = {
     '--bg-muted': '#2A2A2A',
     '--card-bg': '#252525',
     '--input-bg': '#2E2E2E',
-    '--accent-soft': '#3D3500',
+    '--accent-soft': '#2A2A2A',
     '--accent-500': '#FFD600',
     '--accent-600': '#F9A825',
     '--text-primary': '#F0F0F0',

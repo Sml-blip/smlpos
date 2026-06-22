@@ -9,6 +9,27 @@ const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 const enabled = import.meta.env.VITE_SUPABASE_ENABLED !== 'false'
 
+const FETCH_TIMEOUT_MS = 25_000
+const FETCH_RETRIES = 2
+
+async function fetchWithRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= FETCH_RETRIES; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 600 * attempt))
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    try {
+      const res = await fetch(input, { ...init, signal: controller.signal })
+      clearTimeout(timer)
+      return res
+    } catch (e) {
+      clearTimeout(timer)
+      lastError = e
+    }
+  }
+  throw lastError
+}
+
 let _supabase: SupabaseClient | null = null
 
 if (enabled && url && key && !url.includes('your-project')) {
@@ -16,6 +37,9 @@ if (enabled && url && key && !url.includes('your-project')) {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
+    },
+    global: {
+      fetch: fetchWithRetry,
     },
     realtime: {
       params: { eventsPerSecond: 5 },

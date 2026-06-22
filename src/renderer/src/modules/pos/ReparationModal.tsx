@@ -11,12 +11,12 @@ const api = window.api
 function printFicheReparation(data: {
   numero: string; clientNom: string; clientTel: string
   typeAppareil: string; marque: string; modele: string
-  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; destock: boolean }[]
+  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; prix_unitaire: number; destock: boolean }[]
   piecesAchat: number; totalFinal: number; acompte: number; benefice: number
 }) {
   const dateStr = new Date().toLocaleDateString('fr-TN')
   const lignesPieces = data.pieces.map(p =>
-    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
+    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_unitaire.toFixed(3)}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
   ).join('')
   const html = `<!DOCTYPE html><html><head><title>Fiche Réparation ${data.numero}</title>
   <style>@page{size:A4;margin:15mm} body{font-family:Arial,sans-serif;font-size:12px}
@@ -26,15 +26,15 @@ function printFicheReparation(data: {
   <p>Date: ${dateStr} · Client: ${data.clientNom} · Tél: ${data.clientTel}</p>
   <p>Appareil: ${data.typeAppareil} ${data.marque} ${data.modele}</p>
   <p><b>Panne:</b> ${data.panne}</p>
-  <table><thead><tr><th>Pièce</th><th>Qté</th><th>PU achat</th><th>Total achat</th></tr></thead><tbody>
+  <table><thead><tr><th>Pièce</th><th>Qté</th><th>Prix client</th><th>PU achat</th><th>Total achat</th></tr></thead><tbody>
   ${lignesPieces}
-  <tr class="total"><td colspan="3">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
-  <tr class="total"><td colspan="3">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
-  ${data.acompte > 0 ? `<tr><td colspan="3">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
-  ${data.acompte > 0 ? `<tr class="total"><td colspan="3">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
-  <tr class="total"><td colspan="3">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
+  <tr class="total"><td colspan="4">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
+  <tr class="total"><td colspan="4">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
+  ${data.acompte > 0 ? `<tr><td colspan="4">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
+  ${data.acompte > 0 ? `<tr class="total"><td colspan="4">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
+  <tr class="total"><td colspan="4">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
   </tbody></table></body></html>`
-  void printLabelHtml(html)
+  void printLabelHtml(html, 'A4')
 }
 
 const APPAREILS: { id: TypeAppareil; label: string; icon: React.ReactNode }[] = [
@@ -45,6 +45,7 @@ const APPAREILS: { id: TypeAppareil; label: string; icon: React.ReactNode }[] = 
 ]
 
 interface PieceInput {
+  id: string
   produit_id?: string
   designation: string
   quantite: number
@@ -55,7 +56,80 @@ interface PieceInput {
   stock_actuel?: number
 }
 
-const parseMoney = (s: string) => parseFloat(s.replace(',', '.')) || 0
+interface DegatPromptPiece {
+  id: string
+  designation: string
+  quantite: number
+  prix_achat: string
+}
+
+const parseMoney = (s: string) => parseFloat(String(s).replace(',', '.')) || 0
+
+function DegatPriceModal({
+  pieces,
+  onConfirm,
+  onSkip,
+}: {
+  pieces: DegatPromptPiece[]
+  onConfirm: (updates: { id: string; prix_achat: number }[]) => void
+  onSkip: () => void
+}) {
+  const [rows, setRows] = useState(pieces)
+  const [loading, setLoading] = useState(false)
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-slide-in">
+        <div className="px-5 py-4 border-b border-border">
+          <h3 className="font-bold flex items-center gap-2 text-orange-800">
+            <AlertTriangle size={16} /> Prix des pièces dégât / incident
+          </h3>
+          <p className="text-xs text-text-muted mt-1">Saisissez le coût d&apos;achat ou valeur du dégât pour chaque pièce.</p>
+        </div>
+        <div className="p-5 space-y-3 max-h-[50vh] overflow-y-auto">
+          {rows.map((p, i) => (
+            <div key={p.id} className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{p.designation}</div>
+                <div className="text-[10px] text-text-muted">Qté {p.quantite}</div>
+              </div>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={p.prix_achat}
+                onChange={e => {
+                  const u = [...rows]
+                  u[i] = { ...u[i], prix_achat: e.target.value.replace(/[^0-9.,]/g, '') }
+                  setRows(u)
+                }}
+                className="w-28 border border-border rounded-lg px-2 py-1.5 text-sm font-price text-right"
+                placeholder="0.000"
+                autoFocus={i === 0}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2 px-5 py-4 border-t border-border">
+          <button type="button" onClick={onSkip} className="flex-1 py-2.5 rounded-xl bg-muted hover:bg-border text-sm font-semibold">
+            Plus tard
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              void runAction('Enregistrement dégâts', async () => {
+                onConfirm(rows.map(r => ({ id: r.id, prix_achat: parseMoney(r.prix_achat) })))
+              }, { setLoading, successMessage: 'Prix dégât enregistrés' })
+            }}
+            className="flex-1 py-2.5 rounded-xl bg-accent-500 hover:bg-accent-600 font-bold text-sm disabled:bg-gray-200"
+          >
+            {loading ? '…' : 'Valider'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const { currentShift } = useAppStore()
@@ -71,8 +145,9 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [pieceSearch, setPieceSearch] = useState('')
   const [pieceResults, setPieceResults] = useState<Produit[]>([])
   const [loading, setLoading] = useState(false)
+  const [degatPrompt, setDegatPrompt] = useState<{ repId: string; pieces: DegatPromptPiece[] } | null>(null)
 
-  const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
+  const piecesAchat = pieces.reduce((s, p) => s + p.quantite * (p.destock_stock ? 0 : p.prix_achat), 0)
   const totalFinalNum = parseMoney(totalFinal)
   const acompteNum = parseMoney(acompte)
   const benefice = totalFinalNum - piecesAchat
@@ -86,23 +161,37 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const addPiece = (p?: Produit) => {
     if (p) {
       setPieces(prev => [...prev, {
+        id: generateId(),
         produit_id: p.id,
         designation: p.nom,
         quantite: 1,
         prix_achat: p.prix_achat ?? 0,
-        prix_unitaire: p.prix_vente,
+        prix_unitaire: p.prix_vente ?? 0,
         destock_stock: false,
         type: p.type,
         stock_actuel: p.stock_actuel,
       }])
     } else {
-      setPieces(prev => [...prev, { designation: '', quantite: 1, prix_achat: 0, prix_unitaire: 0, destock_stock: false, type: 'NF' }])
+      setPieces(prev => [...prev, {
+        id: generateId(),
+        designation: '',
+        quantite: 1,
+        prix_achat: 0,
+        prix_unitaire: 0,
+        destock_stock: false,
+        type: 'NF',
+      }])
     }
     setPieceSearch('')
     setPieceResults([])
   }
 
   const canSave = panne.trim() && pieces.length > 0 && totalFinalNum > 0
+
+  const finishClose = () => {
+    setDegatPrompt(null)
+    onClose()
+  }
 
   const handleSave = async () => {
     if (!canSave) return
@@ -112,6 +201,12 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       const numero = generateReparationNumber(lastNum)
       const repId = generateId()
       const now = new Date().toISOString()
+
+      const piecesForSave = pieces.map(p => ({
+        ...p,
+        prix_achat: p.destock_stock ? 0 : p.prix_achat,
+      }))
+      const mainOeuvre = piecesForSave.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
 
       const rep = {
         id: repId,
@@ -124,18 +219,18 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         marque: marque || null,
         modele: modele || null,
         description_panne: panne,
-        main_oeuvre: piecesAchat,
+        main_oeuvre: mainOeuvre,
         acompte: acompteNum,
         total_estime: totalFinalNum,
         total_final: totalFinalNum,
-        benefice,
+        benefice: totalFinalNum - mainOeuvre,
         statut: 'EN_ATTENTE',
         created_at: now,
         updated_at: now,
       }
 
-      const piecesData = pieces.map(p => ({
-        id: generateId(),
+      const piecesData = piecesForSave.map(p => ({
+        id: p.id,
         reparation_id: repId,
         produit_id: p.produit_id || null,
         designation: p.designation,
@@ -147,8 +242,35 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       }))
 
       await api.reparationsCreate(rep, piecesData)
-      onClose()
+
+      const degatPieces = pieces.filter(p => p.destock_stock)
+      if (degatPieces.length > 0) {
+        setDegatPrompt({
+          repId,
+          pieces: degatPieces.map(p => ({
+            id: p.id,
+            designation: p.designation,
+            quantite: p.quantite,
+            prix_achat: '',
+          })),
+        })
+      } else {
+        onClose()
+      }
     }, { setLoading, successMessage: 'Réparation créée' })
+  }
+
+  if (degatPrompt) {
+    return (
+      <DegatPriceModal
+        pieces={degatPrompt.pieces}
+        onSkip={finishClose}
+        onConfirm={async updates => {
+          await api.reparationsApplyDegatPrices?.(degatPrompt.repId, updates)
+          finishClose()
+        }}
+      />
+    )
   }
 
   return (
@@ -202,7 +324,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
               <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-2 bg-muted">
                 <Search size={13} className="text-text-muted" />
                 <input value={pieceSearch} onChange={e => { setPieceSearch(e.target.value); void searchPieces(e.target.value) }}
-                  className="flex-1 bg-transparent text-sm outline-none" placeholder="Rechercher stock (cat. Réparation, écrans, pièces…)…" />
+                  className="flex-1 bg-transparent text-sm outline-none" placeholder="Rechercher stock ou saisir une ligne libre…" />
               </div>
               {pieceResults.length > 0 && (
                 <div className="absolute top-full left-0 right-0 z-10 bg-white border border-border rounded-lg shadow-lg mt-1">
@@ -218,16 +340,21 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {pieces.map((p, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2 mb-2 p-2 border border-border rounded-lg bg-muted/30">
+              <div key={p.id} className="flex flex-wrap items-center gap-2 mb-2 p-2 border border-border rounded-lg bg-muted/30">
                 <input value={p.designation} onChange={e => { const u = [...pieces]; u[i].designation = e.target.value; setPieces(u) }}
-                  className="flex-1 min-w-[120px] border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation" />
+                  className="flex-1 min-w-[100px] border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation" />
                 <input type="text" inputMode="numeric" value={p.quantite} onChange={e => { const u = [...pieces]; u[i].quantite = parseInt(e.target.value.replace(/\D/g, '')) || 1; setPieces(u) }}
-                  className="w-12 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
-                <input type="text" inputMode="decimal" value={p.prix_achat} onChange={e => { const u = [...pieces]; u[i].prix_achat = parseMoney(e.target.value); setPieces(u) }}
-                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix achat TND" />
+                  className="w-11 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
+                <input type="text" inputMode="decimal" value={p.prix_unitaire || ''} onChange={e => { const u = [...pieces]; u[i].prix_unitaire = parseMoney(e.target.value); setPieces(u) }}
+                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix pièce client (TND)" placeholder="Prix client" />
+                <input type="text" inputMode="decimal" value={p.destock_stock ? '' : (p.prix_achat || '')}
+                  disabled={p.destock_stock}
+                  onChange={e => { const u = [...pieces]; u[i].prix_achat = parseMoney(e.target.value); setPieces(u) }}
+                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price disabled:bg-gray-100 disabled:text-text-muted"
+                  title={p.destock_stock ? 'Prix dégât saisi après enregistrement' : 'Prix achat TND'} placeholder={p.destock_stock ? 'Après submit' : 'Prix achat'} />
                 <label className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 cursor-pointer whitespace-nowrap">
-                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; setPieces(u) }} />
-                  <AlertTriangle size={11} /> Dégât / déstock
+                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; if (e.target.checked) u[i].prix_achat = 0; setPieces(u) }} />
+                  <AlertTriangle size={11} /> Dégât
                 </label>
                 {p.produit_id && p.destock_stock && (
                   <span className="text-[10px] text-text-muted">Stock: {p.stock_actuel ?? '?'}</span>
@@ -265,7 +392,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Annuler</button>
           <button type="button" onClick={() => printFicheReparation({
             numero: 'BROUILLON', clientNom, clientTel, typeAppareil, marque, modele, panne,
-            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, destock: p.destock_stock })),
+            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, prix_unitaire: p.prix_unitaire, destock: p.destock_stock })),
             piecesAchat, totalFinal: totalFinalNum, acompte: acompteNum, benefice,
           })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">
             <PrinterIcon size={14} /> Aperçu

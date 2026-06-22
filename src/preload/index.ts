@@ -72,6 +72,8 @@ const api = {
 
   // Réparations
   reparationsCreate: (rep: unknown, pieces: unknown[]) => ipcRenderer.invoke('reparations:create', rep, pieces),
+  reparationsApplyDegatPrices: (repId: string, updates: { id: string; prix_achat: number }[]) =>
+    ipcRenderer.invoke('reparations:applyDegatPrices', repId, updates),
   reparationsList: (filters?: unknown) => ipcRenderer.invoke('reparations:list', filters),
   reparationsUpdateStatut: (id: string, statut: string) => ipcRenderer.invoke('reparations:updateStatut', id, statut),
   reparationsGetPieces: (repId: string) => ipcRenderer.invoke('reparations:getPieces', repId),

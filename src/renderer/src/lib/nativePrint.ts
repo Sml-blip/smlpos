@@ -4,7 +4,7 @@ import { showToast } from './toast'
 
 const api = window.api
 
-export type NativePrintPageSize = 'A4' | '58mm' | '80mm'
+export type NativePrintPageSize = 'A4' | '58mm' | '80mm' | '40x20mm' | 'label'
 export type NativePrintSettingsKey = 'impression_printer_a4' | 'impression_printer_ticket'
 
 export interface NativePrintOptions {
