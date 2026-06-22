@@ -4,8 +4,8 @@ import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
-import { printFullHtmlDocument } from '../../lib/nativePrint'
-import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
+import { printLabelHtml } from '../../lib/nativePrint'
+import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
@@ -1176,6 +1176,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
   const [quickCreate, setQuickCreate] = useState({ nom: '', prixAchat: '', prixVente: '' })
   const [savingQC, setSavingQC] = useState(false)
   const [lastCreatedBarcode, setLastCreatedBarcode] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
+  const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
 
   const fuseIndex = useMemo(() => new Fuse(produits, {
     keys: ['nom', 'reference', 'code_barre'],
@@ -1240,11 +1241,11 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
 
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
     if (!code?.trim()) return
-    const labelNom = nom.trim() || ref.trim() || 'Produit'
-    const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
-    void printFullHtmlDocument(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref), {
-      pageSize: '40x20mm',
-      settingsKey: 'impression_printer_ticket',
+    setBarcodePrint({
+      code: code.trim(),
+      nom: nom.trim() || ref.trim() || 'Produit',
+      prix: Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0,
+      ref,
     })
   }
 
@@ -1678,6 +1679,16 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
             })
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
+        />
+      )}
+
+      {barcodePrint && (
+        <BarcodeLabelPrintDialog
+          code={barcodePrint.code}
+          nom={barcodePrint.nom}
+          prix={barcodePrint.prix}
+          ref={barcodePrint.ref}
+          onClose={() => setBarcodePrint(null)}
         />
       )}
     </div>

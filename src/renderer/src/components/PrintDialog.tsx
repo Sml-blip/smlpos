@@ -11,10 +11,12 @@ export interface PrintDialogProps {
   title: string
   subtitle?: string
   /** Inner HTML to print (from preview ref) */
-  getPrintHtml: () => string
-  /** Optional live preview */
+  getPrintHtml?: () => string
+  /** Complete HTML document (barcode labels) — bypasses wrapPrintHtml */
+  documentHtml?: string
+  /** Optional live preview (A4/invoice) */
   preview?: ReactNode
-  pageSize?: 'A4' | '58mm' | '80mm'
+  pageSize?: 'A4' | '58mm' | '80mm' | '40x20mm'
   settingsKey?: 'impression_printer_a4' | 'impression_printer_ticket'
   copies?: number
   onClose: () => void
@@ -25,6 +27,7 @@ export default function PrintDialog({
   title,
   subtitle,
   getPrintHtml,
+  documentHtml,
   preview,
   pageSize = 'A4',
   settingsKey = 'impression_printer_a4',
@@ -64,17 +67,34 @@ export default function PrintDialog({
 
   useEffect(() => {
     const el = previewWrapRef.current
-    if (!el) return
+    if (!el || documentHtml) return
     const ro = new ResizeObserver(() => {
       const h = el.scrollHeight
       if (h > 0) setPreviewScale(Math.min(1, 700 / h))
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [preview])
+  }, [preview, documentHtml])
 
   const handlePrint = async () => {
-    const inner = (printSourceRef.current?.innerHTML || getPrintHtml()).trim()
+    if (documentHtml) {
+      const ok = await runAction('Impression', async () => {
+        const res = await api.printContent(documentHtml, printerName, {
+          silent: false,
+          pageSize: pageSize ?? '40x20mm',
+          color: true,
+          printBackground: true,
+          copies,
+        }) as { success?: boolean; error?: string }
+        if (res && res.success === false) throw new Error(res.error ?? 'Impression échouée')
+        if (printerName) await api.settingsSet(settingsKey, printerName)
+        onPrinted?.()
+      }, { setLoading: setPrinting, successMessage: 'Étiquette envoyée à l\'imprimante' })
+      if (ok) onClose()
+      return
+    }
+
+    const inner = (printSourceRef.current?.innerHTML || getPrintHtml?.() || '').trim()
     if (!inner) {
       showToast('error', 'Contenu d\'impression vide — réessayez')
       return
@@ -111,8 +131,29 @@ export default function PrintDialog({
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto p-4 bg-gray-50 min-h-0">
-          {preview && (
+        <div className="flex-1 overflow-auto p-4 bg-gray-50 min-h-0 flex flex-col items-center justify-start">
+          {documentHtml && (
+            <div className="py-6 flex flex-col items-center gap-3">
+              <p className="text-xs text-text-muted">Aperçu étiquette 40 × 20 mm</p>
+              <div
+                className="rounded-lg border-2 border-dashed border-border bg-white p-3 shadow-sm"
+                style={{ width: 220, height: 130 }}
+              >
+                <iframe
+                  title="Aperçu étiquette"
+                  srcDoc={documentHtml}
+                  className="border-0 bg-white"
+                  style={{
+                    width: 151,
+                    height: 76,
+                    transform: 'scale(1.35)',
+                    transformOrigin: 'top left',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {preview && !documentHtml && (
             <div
               ref={previewWrapRef}
               className="mx-auto origin-top"

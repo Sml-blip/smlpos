@@ -8,8 +8,7 @@ import Fuse from 'fuse.js'
 import type { Produit, Categorie, SerialNumber } from '../../lib/types'
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
-import { printFullHtmlDocument } from '../../lib/nativePrint'
-import { buildBarcodeLabelHtml } from '../../lib/barcodeLabel'
+import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import {
   computeProductPricing,
   pricingFromPrixAchatTtc,
@@ -100,6 +99,7 @@ export default function InventaireTab() {
   const [adjustDelta, setAdjustDelta] = useState('')
   const [adjustNote, setAdjustNote] = useState('')
   const [notification, setNotification] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+  const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
   // Per-unit serial numbers (one entry per stock unit)
   const [serialNums, setSerialNums] = useState<string[]>([])
@@ -462,14 +462,13 @@ export default function InventaireTab() {
     if (unique) f('code_barre', code)
   }
 
-  // Print barcode label — uses Electron IPC print (58mm thermal)
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
     if (!code?.trim()) return
-    const labelNom = nom.trim() || ref.trim() || 'Produit'
-    const labelPrix = Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0
-    void printFullHtmlDocument(buildBarcodeLabelHtml(code.trim(), labelNom, labelPrix, ref), {
-      pageSize: '40x20mm',
-      settingsKey: 'impression_printer_ticket',
+    setBarcodePrint({
+      code: code.trim(),
+      nom: nom.trim() || ref.trim() || 'Produit',
+      prix: Number.isFinite(prix) ? prix : parseFloat(String(prix)) || 0,
+      ref,
     })
   }
 
@@ -1345,6 +1344,16 @@ export default function InventaireTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {barcodePrint && (
+        <BarcodeLabelPrintDialog
+          code={barcodePrint.code}
+          nom={barcodePrint.nom}
+          prix={barcodePrint.prix}
+          ref={barcodePrint.ref}
+          onClose={() => setBarcodePrint(null)}
+        />
       )}
     </div>
   )
