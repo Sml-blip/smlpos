@@ -10,6 +10,12 @@ const api = window.api
 let _running = false
 let _intervalId: ReturnType<typeof setInterval> | null = null
 let _processing = false
+let _circuitOpenUntil = 0
+let _lastReachCheck = 0
+let _lastReachResult = false
+
+const CIRCUIT_PAUSE_MS = 20_000
+const REACH_CHECK_TTL_MS = 8_000
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
@@ -123,6 +129,30 @@ async function performRemoteSync(
   return error?.message ?? null
 }
 
+/** Ping Supabase before draining queue — avoids flooding retries when network/CSP blocks fetch. */
+async function checkSupabaseReachable(): Promise<boolean> {
+  if (!supabase) return false
+  const now = Date.now()
+  if (now - _lastReachCheck < REACH_CHECK_TTL_MS) return _lastReachResult
+  _lastReachCheck = now
+  try {
+    const { error } = await supabase.from('produits').select('id').limit(1).maybeSingle()
+    if (error && isTransientSyncError(error.message)) {
+      _lastReachResult = false
+    } else {
+      // Reachable (including RLS/auth errors — server responded)
+      _lastReachResult = true
+    }
+  } catch {
+    _lastReachResult = false
+  }
+  if (!_lastReachResult) {
+    _circuitOpenUntil = now + CIRCUIT_PAUSE_MS
+    console.warn(`[sync] Supabase unreachable — pausing queue ${CIRCUIT_PAUSE_MS / 1000}s`)
+  }
+  return _lastReachResult
+}
+
 async function syncOneRow(row: {
   id: string; table_name: string; operation: string; payload: string
 }): Promise<boolean> {
@@ -149,11 +179,6 @@ async function syncOneRow(row: {
   const pk = row.table_name === 'app_settings' ? 'key' : 'id'
   const pkValue = payload[pk]
 
-  if (!errorMsg) {
-    await api.syncQueueMarkSynced(row.id)
-    return true
-  }
-
   const errLower = errorMsg!.toLowerCase()
   if (errLower.includes('duplicate key') || errLower.includes('23505')) {
     await api.syncQueueMarkSynced(row.id)
@@ -173,7 +198,9 @@ async function syncOneRow(row: {
 export async function processSyncQueue(): Promise<number> {
   if (!isSupabaseEnabled || !supabase) return 0
   if (!navigator.onLine) return 0
+  if (Date.now() < _circuitOpenUntil) return 0
   if (_processing) return 0
+  if (!(await checkSupabaseReachable())) return 0
   _processing = true
   let synced = 0
   try {
@@ -245,6 +272,7 @@ async function isRemoteTableEmpty(table: string): Promise<boolean> {
 export async function bootstrapSync(): Promise<void> {
   if (!isSupabaseEnabled || !supabase) return
   if (!navigator.onLine) return
+  if (!(await checkSupabaseReachable())) return
 
   try {
     const settings = await api.settingsGetAll() as Record<string, string>
@@ -309,6 +337,8 @@ export function startSyncPolling(intervalMs = 10_000) {
   _intervalId = setInterval(() => { processSyncQueue() }, intervalMs)
 
   window.addEventListener('online', () => {
+    _circuitOpenUntil = 0
+    _lastReachCheck = 0
     processSyncQueue().then(n => { if (n > 0) console.info(`[sync] Flushed ${n} on reconnect`) })
   })
 

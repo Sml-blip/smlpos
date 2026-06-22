@@ -8,6 +8,8 @@ import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh } from './factoryReset'
 import { printHtmlInHiddenWindow } from './printWindow'
+import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
+import { setupSessionCsp } from './sessionCsp'
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
 const MAX_LOCAL_BACKUPS = 20
@@ -185,12 +187,15 @@ function createWindow(): void {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadURL(getAppIndexUrl())
   }
 }
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.smlpos.desktop')
+
+  setupSessionCsp(is.dev)
+  registerAppProtocol(join(__dirname, '../renderer'))
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
