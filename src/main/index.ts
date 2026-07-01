@@ -88,6 +88,11 @@ function startAutoBackup() {
 }
 
 let mainWindow: BrowserWindow | null = null
+let cachedAppIcon: NativeImage | undefined
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.smlpos.desktop')
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -147,6 +152,7 @@ function resolveAppIcon(): NativeImage | undefined {
     join(process.resourcesPath, 'resources/icon.ico'),
     join(process.resourcesPath, 'resources/icon.png'),
     join(process.resourcesPath, 'icon.ico'),
+    join(process.resourcesPath, 'icon.png'),
     join(__dirname, '../../resources/icon.ico'),
     join(__dirname, '../../resources/icon.png'),
   ]
@@ -158,8 +164,14 @@ function resolveAppIcon(): NativeImage | undefined {
   return undefined
 }
 
+function getAppIcon(): NativeImage | undefined {
+  if (cachedAppIcon && !cachedAppIcon.isEmpty()) return cachedAppIcon
+  cachedAppIcon = resolveAppIcon()
+  return cachedAppIcon
+}
+
 function createWindow(): void {
-  const appIcon = resolveAppIcon()
+  const appIcon = getAppIcon()
   mainWindow = new BrowserWindow({
     width: 1366,
     height: 768,
@@ -201,13 +213,20 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.smlpos.desktop')
+  if (process.platform !== 'win32') {
+    electronApp.setAppUserModelId('com.smlpos.desktop')
+  }
+
+  const appIcon = getAppIcon()
+  if (appIcon) app.dock?.setIcon?.(appIcon)
 
   setupSessionCsp(is.dev)
   registerAppProtocol(join(__dirname, '../renderer'))
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+    const icon = getAppIcon()
+    if (icon) window.setIcon(icon)
   })
 
   // Initialize database (after pending factory wipe)
