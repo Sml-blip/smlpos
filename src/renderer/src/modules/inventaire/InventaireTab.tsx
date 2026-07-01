@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ChangeEvent } from 'react'
 
-// ── Module-level cache (survives tab switches, auto-invalidates after 60s) ───
-let _cache: { data: unknown[]; ts: number } = { data: [], ts: 0 }
-const CACHE_TTL = 60_000
 const PAGE_SIZE = 80 // rows rendered per scroll page
 import Fuse from 'fuse.js'
 import type { Produit, Categorie, SerialNumber } from '../../lib/types'
+import {
+  getProduitsCache,
+  setProduitsCache,
+  isProduitsCacheFresh,
+} from '../../lib/produitsCache'
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
@@ -76,10 +78,10 @@ const emptyForm = (): ProductFormData => ({
 })
 
 export default function InventaireTab() {
-  // Start with cached data — instant render on tab switch
-  const [produits, setProduits] = useState<Produit[]>(() => _cache.data as Produit[])
+  const initialCache = getProduitsCache()
+  const [produits, setProduits] = useState<Produit[]>(() => initialCache.data)
   const [formCategories, setFormCategories] = useState<string[]>(DEFAULT_CATEGORIES)
-  const [loading, setLoading] = useState(_cache.data.length === 0)
+  const [loading, setLoading] = useState(initialCache.data.length === 0)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
@@ -124,13 +126,13 @@ export default function InventaireTab() {
 
   const loadProduits = useCallback(async (force = false) => {
     const now = Date.now()
-    const cacheHit = !force && _cache.data.length > 0 && (now - _cache.ts) < CACHE_TTL
+    const cacheHit = !force && isProduitsCacheFresh(now)
     const rows = await loadData(
       'Chargement inventaire',
       async () => {
         const result = await api.produitsList({}) as Produit[]
-        _cache = { data: result || [], ts: Date.now() }
-        return _cache.data as Produit[]
+        setProduitsCache(result || [])
+        return getProduitsCache().data
       },
       { setLoading: cacheHit ? undefined : setLoading }
     )
@@ -139,9 +141,8 @@ export default function InventaireTab() {
 
   // On mount: if cache is fresh, skip loading state; always refresh in bg
   useEffect(() => {
-    const now = Date.now()
-    const fresh = _cache.data.length > 0 && (now - _cache.ts) < CACHE_TTL
-    loadProduits(!fresh) // force=true only if cache is stale/empty
+    const fresh = isProduitsCacheFresh()
+    loadProduits(!fresh)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -9,6 +9,13 @@ export function getUserDataDir(): string {
   return app.getPath('userData')
 }
 
+/** SQLite file used by the running app (packaged vs dev). */
+export function getActiveDbPath(): string {
+  return app.isPackaged
+    ? join(getUserDataDir(), 'smlpos.db')
+    : join(process.cwd(), 'smlpos-dev.db')
+}
+
 export function getPackagedDbPath(): string {
   return join(getUserDataDir(), 'smlpos.db')
 }
@@ -40,7 +47,7 @@ export function applyPendingWipeBeforeDbOpen(): boolean {
 
 export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; errors: string[] } {
   const errors: string[] = []
-  const dbPath = join(userDataDir, 'smlpos.db')
+  const dbPath = getActiveDbPath()
 
   for (const suffix of ['', '-wal', '-shm']) {
     const p = suffix ? `${dbPath}${suffix}` : dbPath
@@ -58,6 +65,24 @@ export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; err
       rmSync(backupDir, { recursive: true, force: true })
     } catch (e) {
       errors.push(`${backupDir}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  // Drop Electron renderer storage (localStorage / IndexedDB) so UI cannot show stale data
+  const partitionsDir = join(userDataDir, 'Partitions')
+  if (existsSync(partitionsDir)) {
+    try {
+      rmSync(partitionsDir, { recursive: true, force: true })
+    } catch (e) {
+      errors.push(`${partitionsDir}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  const localStorageDir = join(userDataDir, 'Local Storage')
+  if (existsSync(localStorageDir)) {
+    try {
+      rmSync(localStorageDir, { recursive: true, force: true })
+    } catch (e) {
+      errors.push(`${localStorageDir}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import InvoiceTemplateEditor from './InvoiceTemplateEditor'
 import { printTestPage, printLabelTestPage } from '../../components/PrintDialog'
+import { invalidateProduitsCache } from '../../lib/produitsCache'
 import { loadData, runAction } from '../../lib/apiCall'
 import { isSupabaseEnabled } from '../../lib/supabase'
 import { getPendingCount, getFailedCount, getBootstrapStatus, processSyncQueue, resetFailedItems } from '../../lib/sync'
@@ -564,6 +565,7 @@ function FactoryResetCard() {
     setResetting(true)
     try {
       Object.keys(localStorage).filter(k => k.startsWith('smlpos_')).forEach(k => localStorage.removeItem(k))
+      invalidateProduitsCache()
       const res = await api.factoryReset?.() as { success?: boolean; error?: string; deferred?: boolean } | undefined
       if (res && res.success === false) {
         showToast('error', res.error ?? 'Échec de la réinitialisation')

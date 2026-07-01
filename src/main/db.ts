@@ -3,15 +3,11 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { seedProductsIfEmpty } from './seedProducts'
-import { applyPendingWipeBeforeDbOpen } from './userDataWipe'
+import { applyPendingWipeBeforeDbOpen, getActiveDbPath } from './userDataWipe'
 
-if (app.isPackaged) {
-  applyPendingWipeBeforeDbOpen()
-}
+applyPendingWipeBeforeDbOpen()
 
-export const dbFilePath = app.isPackaged
-  ? join(app.getPath('userData'), 'smlpos.db')
-  : join(process.cwd(), 'smlpos-dev.db')
+export const dbFilePath = getActiveDbPath()
 const dbPath = dbFilePath
 
 const dbDir = join(dbPath, '..')
