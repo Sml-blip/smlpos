@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { seedProductsIfEmpty } from './seedProducts'
-import { applyPendingWipeBeforeDbOpen, getActiveDbPath } from './userDataWipe'
+import { applyPendingWipeBeforeDbOpen, getActiveDbPath, recoverLegacyDatabaseIfNeeded } from './userDataWipe'
 
 let dbInstance: Database.Database | null = null
 export let dbFilePath = ''
@@ -11,6 +11,10 @@ export let dbFilePath = ''
 export function connectDatabase(): Database.Database {
   if (dbInstance) return dbInstance
   applyPendingWipeBeforeDbOpen()
+  const recovery = recoverLegacyDatabaseIfNeeded()
+  if (recovery.recovered) {
+    console.log(`[db] Auto-recovered ${recovery.productCount} products from ${recovery.from}`)
+  }
   dbFilePath = getActiveDbPath()
   const dbDir = join(dbFilePath, '..')
   if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true })

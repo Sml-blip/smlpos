@@ -216,6 +216,7 @@ const api = {
   backupOpenFolder: () => ipcRenderer.invoke('backup:openFolder'),
   backupChooseExternalFolder: () => ipcRenderer.invoke('backup:chooseExternalFolder'),
   backupRestore: (backupPath: string) => ipcRenderer.invoke('backup:restore', backupPath),
+  backupDiscover: () => ipcRenderer.invoke('backup:discover'),
 }
 
 if (process.contextIsolated) {

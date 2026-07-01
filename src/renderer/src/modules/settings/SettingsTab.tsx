@@ -707,6 +707,11 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   const [lastMsg, setLastMsg] = useState('')
   const [copiedSql, setCopiedSql] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
+  const [recovery, setRecovery] = useState<{
+    activeCount: number
+    candidates: { path: string; productCount: number; size: number; mtime: number; source: string }[]
+  } | null>(null)
+  const [scanningRecovery, setScanningRecovery] = useState(false)
   const [syncPending, setSyncPending] = useState(0)
   const [syncFailed, setSyncFailed] = useState(0)
   const [bootstrapDone, setBootstrapDone] = useState(false)
@@ -739,6 +744,25 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   }, [api])
 
   useEffect(() => { loadStats() }, [loadStats])
+
+  const scanRecovery = useCallback(async () => {
+    if (!api.backupDiscover) return
+    setScanningRecovery(true)
+    const r = await loadData('Recherche sauvegardes', () => api.backupDiscover!(), { silent: true }) as {
+      success?: boolean
+      activeCount?: number
+      candidates?: { path: string; productCount: number; size: number; mtime: number; source: string }[]
+    } | null
+    if (r?.success) {
+      setRecovery({
+        activeCount: r.activeCount ?? 0,
+        candidates: r.candidates ?? [],
+      })
+    }
+    setScanningRecovery(false)
+  }, [api])
+
+  useEffect(() => { void scanRecovery() }, [scanRecovery])
 
   const handleCreateBackup = async () => {
     setCreating(true)
@@ -819,6 +843,48 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
           )}
         </Section>
       </Card>
+
+      {/* Emergency recovery */}
+      {(recovery && (recovery.activeCount === 0 || recovery.candidates.some(c => c.productCount > recovery.activeCount))) && (
+        <Card>
+          <Section title="Récupération inventaire (urgence)">
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex gap-2 text-xs text-red-900 mb-3">
+              <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold mb-1">Inventaire perdu ou vide ?</p>
+                <p>Base active : <strong>{recovery?.activeCount ?? '—'} produit(s)</strong>. Ci-dessous : copies trouvées sur ce PC (sauvegardes locales, anciens dossiers, dossier externe).</p>
+              </div>
+            </div>
+            <div className="flex gap-2 mb-3">
+              <button type="button" onClick={() => void scanRecovery()} disabled={scanningRecovery}
+                className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
+                <RefreshCw size={12} className={scanningRecovery ? 'animate-spin' : ''} /> Rechercher à nouveau
+              </button>
+            </div>
+            {(recovery?.candidates?.length ?? 0) === 0 ? (
+              <p className="text-xs text-text-muted">Aucune copie avec produits trouvée. Vérifiez le dossier externe (Google Drive / USB) ou contactez le support.</p>
+            ) : (
+              <div className="space-y-1 max-h-56 overflow-y-auto">
+                {recovery!.candidates.map(c => (
+                  <div key={c.path} className="flex items-center gap-2 text-xs bg-muted rounded-lg px-3 py-2">
+                    <Database size={11} className="text-text-muted flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold truncate">{c.productCount} produits · {c.source}</p>
+                      <p className="font-mono text-[10px] text-text-muted truncate">{c.path}</p>
+                    </div>
+                    <span className="text-text-muted flex-shrink-0 hidden sm:inline">{fmtTime(c.mtime)}</span>
+                    <button type="button" onClick={() => handleRestore(c.path, `${c.productCount} produits`)}
+                      disabled={restoring === c.path}
+                      className="flex items-center gap-1 px-2 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded font-semibold flex-shrink-0">
+                      <RotateCcw size={9} /> Restaurer
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        </Card>
+      )}
 
       {/* Status banner */}
       <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-start gap-3">

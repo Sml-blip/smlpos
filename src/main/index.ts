@@ -8,6 +8,7 @@ import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from '.
 import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh, getResetDiagnostics, requestWipeFlags } from './factoryReset'
+import { discoverRecoverableDatabases } from './userDataWipe'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -237,9 +238,17 @@ app.whenReady().then(() => {
     })
   })
 
-  // Initialize database (after pending factory wipe)
+  // Initialize database (after pending factory wipe + legacy recovery)
   try {
     connectDatabase()
+    try {
+      if (existsSync(dbFilePath)) {
+        const r = createLocalBackup()
+        if (r) console.log('[backup] Pre-migration safety backup:', r.filename)
+      }
+    } catch (e) {
+      console.warn('[backup] Pre-migration backup skipped:', e)
+    }
     initDatabase()
   } catch (err) {
     console.error('DB init error:', err)
@@ -2465,6 +2474,18 @@ function setupIpcHandlers() {
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('backup:discover', () => {
+    try {
+      const row = db.prepare(`SELECT value FROM app_settings WHERE key='backup_folder_path'`).get() as { value?: string } | undefined
+      const externalFolder = row?.value?.trim() || null
+      const activeCount = (db.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }).cnt
+      const candidates = discoverRecoverableDatabases(externalFolder)
+      return { success: true, activeCount, activeDbPath: dbFilePath, candidates }
+    } catch (e) {
+      return { success: false, error: String(e), candidates: [] as unknown[] }
     }
   })
 }

@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs'
+import Database from 'better-sqlite3'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync, copyFileSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
@@ -116,6 +117,130 @@ function readResetStateFromDir(dir: string): ResetState | null {
   }
 }
 
+/** Count products in a SQLite file without opening the main app connection. */
+export function countProductsInDbFile(dbPath: string): number | null {
+  if (!existsSync(dbPath)) return null
+  try {
+    const probe = new Database(dbPath, { readonly: true, fileMustExist: true })
+    try {
+      const row = probe.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }
+      return row?.cnt ?? 0
+    } finally {
+      probe.close()
+    }
+  } catch {
+    return null
+  }
+}
+
+/** If the active DB is missing/empty, copy the best legacy backup or sibling DB we can find. */
+export function recoverLegacyDatabaseIfNeeded(): { recovered: boolean; from?: string; productCount?: number } {
+  const activePath = getActiveDbPath()
+  const activeCount = countProductsInDbFile(activePath)
+  if (activeCount !== null && activeCount > 0) return { recovered: false }
+
+  const scanPaths = new Set<string>()
+  for (const p of getAllDbCandidatePaths()) scanPaths.add(p)
+
+  for (const dir of getUserDataDirCandidates()) {
+    const backupDir = join(dir, 'backups')
+    if (!existsSync(backupDir)) continue
+    try {
+      for (const f of readdirSync(backupDir)) {
+        if (f.startsWith('smlpos_') && f.endsWith('.db')) scanPaths.add(join(backupDir, f))
+      }
+    } catch { /* ignore */ }
+  }
+
+  let best: { path: string; count: number; mtime: number } | null = null
+  for (const candidate of scanPaths) {
+    if (candidate.toLowerCase() === activePath.toLowerCase()) continue
+    const cnt = countProductsInDbFile(candidate)
+    if (cnt === null || cnt <= 0) continue
+    let mtime = 0
+    try { mtime = statSync(candidate).mtimeMs } catch { /* ignore */ }
+    if (!best || cnt > best.count || (cnt === best.count && mtime > best.mtime)) {
+      best = { path: candidate, count: cnt, mtime }
+    }
+  }
+
+  if (!best) return { recovered: false }
+
+  try {
+    ensureDir(join(activePath, '..'))
+    copyFileSync(best.path, activePath)
+    for (const suffix of ['-wal', '-shm']) {
+      const leg = `${best.path}${suffix}`
+      if (existsSync(leg)) {
+        try { copyFileSync(leg, `${activePath}${suffix}`) } catch { /* ignore */ }
+      }
+    }
+    console.log(`[db-recover] Restored ${best.count} products from ${best.path}`)
+    return { recovered: true, from: best.path, productCount: best.count }
+  } catch (e) {
+    console.error('[db-recover] Failed to copy legacy database:', e)
+    return { recovered: false }
+  }
+}
+
+/** Scan disk for recoverable SQLite databases (local backups, legacy paths, external folder). */
+export function discoverRecoverableDatabases(externalFolder?: string | null): Array<{
+  path: string
+  productCount: number
+  size: number
+  mtime: number
+  source: 'active' | 'legacy' | 'backup' | 'external'
+}> {
+  const results: Array<{
+    path: string
+    productCount: number
+    size: number
+    mtime: number
+    source: 'active' | 'legacy' | 'backup' | 'external'
+  }> = []
+  const seen = new Set<string>()
+
+  const add = (dbPath: string, source: 'active' | 'legacy' | 'backup' | 'external') => {
+    const key = dbPath.toLowerCase()
+    if (seen.has(key) || !existsSync(dbPath)) return
+    seen.add(key)
+    const productCount = countProductsInDbFile(dbPath)
+    if (productCount === null || productCount <= 0) return
+    let size = 0
+    let mtime = 0
+    try {
+      const st = statSync(dbPath)
+      size = st.size
+      mtime = st.mtimeMs
+    } catch { /* ignore */ }
+    results.push({ path: dbPath, productCount, size, mtime, source })
+  }
+
+  add(getActiveDbPath(), 'active')
+  for (const p of getAllDbCandidatePaths()) add(p, 'legacy')
+
+  for (const dir of getUserDataDirCandidates()) {
+    const backupDir = join(dir, 'backups')
+    if (!existsSync(backupDir)) continue
+    try {
+      for (const f of readdirSync(backupDir)) {
+        if (f.startsWith('smlpos_') && f.endsWith('.db')) add(join(backupDir, f), 'backup')
+      }
+    } catch { /* ignore */ }
+  }
+
+  const ext = externalFolder?.trim()
+  if (ext && existsSync(ext)) {
+    try {
+      for (const f of readdirSync(ext)) {
+        if (f.startsWith('smlpos') && f.endsWith('.db')) add(join(ext, f), 'external')
+      }
+    } catch { /* ignore */ }
+  }
+
+  return results.sort((a, b) => b.mtime - a.mtime)
+}
+
 /** Run before SQLite opens — deletes DB even if previous wipe could not close the handle. */
 export function applyPendingWipeBeforeDbOpen(): boolean {
   let shouldWipe = false
@@ -185,14 +310,7 @@ export function deleteAllLocalDataFiles(userDataDir?: string): { ok: boolean; er
 
   const dirsToClean = userDataDir ? [userDataDir] : getUserDataDirCandidates()
   for (const dir of dirsToClean) {
-    const backupDir = join(dir, 'backups')
-    if (existsSync(backupDir)) {
-      try {
-        rmSync(backupDir, { recursive: true, force: true })
-      } catch (e) {
-        errors.push(`${backupDir}: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    }
+    // Never delete backups/ — they are the last line of recovery after a bad reset or update.
     deleteRendererStorage(dir, errors)
   }
 

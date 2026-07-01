@@ -167,6 +167,20 @@ interface Window {
     settingsSet: (key: string, value: string) => Promise<unknown>
     settingsSetMany: (data: Record<string, string>) => Promise<unknown>
 
+    backupDiscover?: () => Promise<{
+      success?: boolean
+      activeCount?: number
+      activeDbPath?: string
+      candidates?: { path: string; productCount: number; size: number; mtime: number; source: string }[]
+      error?: string
+    }>
+    backupRestore?: (backupPath: string) => Promise<{ success?: boolean; error?: string }>
+    backupList?: () => Promise<{ name: string; size: number; time: number; path: string }[]>
+    backupGetStats?: () => Promise<{ count: number; lastTime: number | null; totalSize: number; dbSize: number; dbPath: string; backupDir: string }>
+    backupCreate?: () => Promise<{ success: boolean; filename?: string; external?: boolean }>
+    backupOpenFolder?: () => Promise<void>
+    backupChooseExternalFolder?: () => Promise<{ canceled?: boolean; path?: string }>
+
     // Sync Queue
     syncQueueGetPending: () => Promise<unknown[]>
     syncQueueMarkSynced: (id: string) => Promise<unknown>
