@@ -48,6 +48,10 @@ interface Window {
     produitsDelete: (id: string) => Promise<unknown>
     produitsAdjustStock: (id: string, delta: number) => Promise<unknown>
     produitsBulkInsert: (produits: unknown[]) => Promise<unknown>
+    produitsBulkImport: (payload: {
+      produits: unknown[]
+      options?: { onDuplicate?: 'update' | 'skip'; matchBy?: 'reference' | 'code_barre' }
+    }) => Promise<{ success?: boolean; inserted?: number; updated?: number; skipped?: number }>
 
     // Serial Numbers
     serialNumbersGetByProduit: (produitId: string) => Promise<unknown[]>

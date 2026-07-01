@@ -685,6 +685,99 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
+  ipcMain.handle('produits:bulkImport', (_e, payload: {
+    produits: Record<string, unknown>[]
+    options?: { onDuplicate?: 'update' | 'skip'; matchBy?: 'reference' | 'code_barre' }
+  }) => {
+    const { produits, options } = payload
+    const onDuplicate = options?.onDuplicate ?? 'update'
+    const matchBy = options?.matchBy ?? 'reference'
+    const now = new Date().toISOString()
+
+    const findByRef = db.prepare('SELECT id, created_at FROM produits WHERE reference = ?')
+    const findByBarcode = db.prepare(`
+      SELECT id, created_at FROM produits
+      WHERE code_barre = ? AND code_barre IS NOT NULL AND TRIM(code_barre) != ''
+    `)
+
+    const insert = db.prepare(`
+      INSERT INTO produits (id, code_barre, reference, nom, description, categorie, type,
+        prix_achat, prix_vente, tva_taux, stock_actuel, stock_minimum, fournisseur, actif, created_at, updated_at)
+      VALUES (@id, @code_barre, @reference, @nom, @description, @categorie, @type,
+        @prix_achat, @prix_vente, @tva_taux, @stock_actuel, @stock_minimum, @fournisseur, 1, @created_at, @updated_at)
+    `)
+
+    const update = db.prepare(`
+      UPDATE produits SET
+        code_barre = @code_barre,
+        reference = @reference,
+        nom = @nom,
+        description = @description,
+        categorie = @categorie,
+        type = @type,
+        prix_achat = @prix_achat,
+        prix_vente = @prix_vente,
+        tva_taux = @tva_taux,
+        stock_actuel = @stock_actuel,
+        stock_minimum = @stock_minimum,
+        fournisseur = @fournisseur,
+        updated_at = @updated_at
+      WHERE id = @id
+    `)
+
+    let inserted = 0
+    let updated = 0
+    let skipped = 0
+
+    const resolveExisting = (item: Record<string, unknown>) => {
+      if (matchBy === 'code_barre' && item.code_barre) {
+        return findByBarcode.get(item.code_barre) as { id: string; created_at: string } | undefined
+      }
+      if (item.reference) {
+        return findByRef.get(item.reference) as { id: string; created_at: string } | undefined
+      }
+      if (item.code_barre) {
+        return findByBarcode.get(item.code_barre) as { id: string; created_at: string } | undefined
+      }
+      return undefined
+    }
+
+    const transaction = db.transaction((items: Record<string, unknown>[]) => {
+      for (const item of items) {
+        const existing = resolveExisting(item)
+        if (existing) {
+          if (onDuplicate === 'skip') {
+            skipped++
+            continue
+          }
+          const row = {
+            ...item,
+            id: existing.id,
+            created_at: existing.created_at,
+            updated_at: now,
+          }
+          update.run(row)
+          enqueueSync('produits', 'UPDATE', row)
+          updated++
+          continue
+        }
+
+        const row = {
+          ...item,
+          created_at: item.created_at ?? now,
+          updated_at: now,
+        }
+        insert.run(row)
+        enqueueSync('produits', 'INSERT', row)
+        inserted++
+      }
+    })
+
+    transaction(produits)
+    addActivityLog({ action: 'PRODUCTS_IMPORTED', details: { inserted, updated, skipped } })
+    return { success: true, inserted, updated, skipped }
+  })
+
   // ─── Ventes ──────────────────────────────────────────────────────────────────
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
     const insertVente = db.prepare(`

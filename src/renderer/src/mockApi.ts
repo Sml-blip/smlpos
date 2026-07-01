@@ -223,7 +223,13 @@ const mockApi = {
   produitsUpdate: async (id: string, p: unknown) => { const idx = PRODUITS.findIndex(x => x.id === id); if (idx >= 0) Object.assign(PRODUITS[idx], p); return PRODUITS[idx]; },
   produitsDelete: async () => ({ success: true }),
   produitsAdjustStock: async (id: string, delta: number) => { const p = PRODUITS.find(x => x.id === id); if (p) p.stock_actuel = Math.max(0, p.stock_actuel + delta); return p; },
-  produitsBulkInsert: async (ps: unknown[]) => ({ inserted: ps.length, errors: 0 }),
+  produitsBulkInsert: async (ps: unknown[]) => ({ inserted: (ps as unknown[]).length, errors: 0 }),
+  produitsBulkImport: async (payload: { produits: unknown[] }) => ({
+    success: true,
+    inserted: (payload.produits as unknown[]).length,
+    updated: 0,
+    skipped: 0,
+  }),
 
   // Serial Numbers
   serialNumbersGetByProduit: async () => [],

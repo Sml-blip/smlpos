@@ -11,6 +11,7 @@ import {
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
+import ProductImportModal from '../../components/ProductImportModal'
 import {
   computeProductPricing,
   pricingFromPrixAchatTtc,
@@ -103,6 +104,7 @@ export default function InventaireTab() {
   const [notification, setNotification] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
   const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
+  const [importFile, setImportFile] = useState<{ name: string; buffer: ArrayBuffer } | null>(null)
   // Per-unit serial numbers (one entry per stock unit)
   const [serialNums, setSerialNums] = useState<string[]>([])
   const [existingSerials, setExistingSerials] = useState<SerialNumber[]>([])
@@ -366,35 +368,12 @@ export default function InventaireTab() {
   const handleImport = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    await runAction('Import inventaire', async () => {
+    try {
       const buffer = await file.arrayBuffer()
-      const wb = XLSX.read(buffer)
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(ws) as Record<string, unknown>[]
-      const now = new Date().toISOString()
-      const produits = rows.map(row => ({
-        id: generateId(),
-        code_barre: String(row['code_barre'] || row['Code Barre'] || '').trim() || null,
-        reference: String(row['reference'] || row['Référence'] || generateReference()).trim(),
-        nom: String(row['nom'] || row['Nom'] || '').trim(),
-        description: String(row['description'] || row['Description'] || '').trim() || null,
-        categorie: String(row['categorie'] || row['Catégorie'] || 'Général').trim(),
-        type: String(row['type'] || row['Type'] || 'F').trim() === 'NF' ? 'NF' : 'F',
-        prix_achat: parseFloat(String(row['prix_achat'] || row['Prix Achat'] || '0')) || null,
-        prix_vente: parseFloat(String(row['prix_vente'] || row['Prix Vente'] || '0')) || 0,
-        tva_taux: parseFloat(String(row['tva_taux'] || row['TVA'] || '0')) || 0,
-        stock_actuel: parseInt(String(row['stock_actuel'] || row['Stock'] || '0')) || 0,
-        stock_minimum: parseInt(String(row['stock_minimum'] || row['Stock Min'] || '5')) || 5,
-        fournisseur: String(row['fournisseur'] || row['Fournisseur'] || '').trim() || null,
-        actif: 1,
-        created_at: now,
-        updated_at: now,
-      })).filter(p => p.nom)
-
-      if (produits.length === 0) throw new Error('Aucun produit trouvé dans le fichier')
-      await api.produitsBulkInsert(produits)
-      await loadProduits(true)
-    }, { successMessage: 'Import terminé' })
+      setImportFile({ name: file.name, buffer })
+    } catch {
+      showNotif('Impossible de lire le fichier', 'error')
+    }
     if (importRef.current) importRef.current.value = ''
   }
 
@@ -1354,6 +1333,15 @@ export default function InventaireTab() {
           prix={barcodePrint.prix}
           productRef={barcodePrint.ref}
           onClose={() => setBarcodePrint(null)}
+        />
+      )}
+
+      {importFile && (
+        <ProductImportModal
+          fileName={importFile.name}
+          buffer={importFile.buffer}
+          onClose={() => setImportFile(null)}
+          onDone={() => loadProduits(true)}
         />
       )}
     </div>

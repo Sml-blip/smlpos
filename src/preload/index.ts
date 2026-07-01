@@ -52,6 +52,7 @@ const api = {
   produitsDelete: (id: string) => ipcRenderer.invoke('produits:delete', id),
   produitsAdjustStock: (id: string, delta: number) => ipcRenderer.invoke('produits:adjustStock', id, delta),
   produitsBulkInsert: (produits: unknown[]) => ipcRenderer.invoke('produits:bulkInsert', produits),
+  produitsBulkImport: (payload: unknown) => ipcRenderer.invoke('produits:bulkImport', payload),
 
   // Catégories
   categoriesList: () => ipcRenderer.invoke('categories:list'),
