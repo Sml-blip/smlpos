@@ -1256,8 +1256,13 @@ function FactureFournisseurModal({
   const [quickCreateLineId, setQuickCreateLineId] = useState<string | null>(null)
   const [quickCreate, setQuickCreate] = useState({ nom: '', prixAchat: '', prixVente: '' })
   const [savingQC, setSavingQC] = useState(false)
-  const [lastCreatedBarcode, setLastCreatedBarcode] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
+  const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
+
+  const hasDraftContent = useMemo(
+    () => lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || !!fournisseurId || !!numeroFacture,
+    [lignes, fournisseurId, numeroFacture],
+  )
 
   const fuseIndex = useMemo(() => new Fuse(produits, {
     keys: ['nom', 'reference', 'code_barre'],
@@ -1412,16 +1417,18 @@ function FactureFournisseurModal({
   }
 
   const handleClose = () => {
-    const hasContent = lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || fournisseurId || numeroFacture
-    if (!hasContent) {
+    if (!hasDraftContent) {
       if (draftId) void api.facturesFournisseursDeleteDraft?.(draftId)
       onClose()
       return
     }
-    const choice = window.confirm('Fermer la facture ?\n\nOK = sauvegarder le brouillon\nAnnuler = rester sur le formulaire')
-    if (choice) {
-      void persistDraft().finally(onClose)
-    }
+    setShowCloseDialog(true)
+  }
+
+  const discardDraftAndClose = () => {
+    if (draftId) void api.facturesFournisseursDeleteDraft?.(draftId)
+    setShowCloseDialog(false)
+    onClose()
   }
 
   const handleCreateFournisseur = async () => {
@@ -1455,10 +1462,26 @@ function FactureFournisseurModal({
 
   const onLineSearch = (lineId: string, q: string) => {
     setLineSearches(prev => ({ ...prev, [lineId]: q }))
+    const trimmed = q.trim()
+    if (trimmed) {
+      const exactCache = produits.find(p => p.code_barre === trimmed)
+      if (exactCache) {
+        setLineResults(prev => ({ ...prev, [lineId]: [exactCache] }))
+        return
+      }
+      if (/^\d{6,}$/.test(trimmed) && api.produitsFindByBarcode) {
+        void api.produitsFindByBarcode(trimmed).then((p) => {
+          const hit = p as Produit | null
+          if (hit?.code_barre === trimmed) {
+            setLineResults(prev => ({ ...prev, [lineId]: [hit] }))
+          }
+        }).catch(() => {})
+      }
+    }
     if (q.length >= 2) {
       const results = fuseIndex.search(q, { limit: 6 }).map(r => r.item)
       setLineResults(prev => ({ ...prev, [lineId]: results }))
-    } else {
+    } else if (!trimmed || !produits.some(p => p.code_barre === trimmed)) {
       setLineResults(prev => ({ ...prev, [lineId]: [] }))
     }
   }
@@ -1588,13 +1611,13 @@ function FactureFournisseurModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[130] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
-          <h2 className="font-bold text-base flex items-center gap-2">
+          <h2 className="font-bold text-base flex items-center gap-2 flex-wrap">
             <FileText size={15} /> {isBL ? 'Nouveau Bon de Livraison' : 'Nouvelle Facture Fournisseur'}
-            {(draftId || savingDraft) && (
+            {(draftId || savingDraft || hasDraftContent) && (
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
-                {savingDraft ? 'Sauvegarde…' : draftSavedAt ? `Brouillon · ${new Date(draftSavedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : 'Brouillon'}
+                {savingDraft ? 'Sauvegarde…' : draftSavedAt ? `Brouillon · ${new Date(draftSavedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : hasDraftContent ? 'Brouillon en cours' : 'Brouillon'}
               </span>
             )}
           </h2>
@@ -1619,6 +1642,10 @@ function FactureFournisseurModal({
             <PackageCheck size={13} /> Le stock ne sera <strong>pas mis à jour</strong> avant de marquer comme reçu.
           </div>
         )}
+        <div className="px-6 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 flex items-center gap-2">
+          <Tag size={13} className="flex-shrink-0" />
+          <span>Les nouveaux produits restent en <strong>brouillon</strong> jusqu&apos;à l&apos;enregistrement — le stock n&apos;est mis à jour qu&apos;à la validation finale. Auto-sauvegarde toutes les 2 s.</span>
+        </div>
         <div className="p-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
@@ -1699,70 +1726,94 @@ function FactureFournisseurModal({
                 <Plus size={12} /> Ajouter ligne
               </button>
             </div>
+            <div className="hidden sm:grid grid-cols-[2rem_1fr_3.5rem_5.5rem_5.5rem_4.5rem] gap-2 px-3 pb-1 text-[10px] font-semibold text-text-muted uppercase tracking-wide">
+              <span>#</span>
+              <span>Produit / désignation</span>
+              <span className="text-center">Qté</span>
+              <span>P. achat</span>
+              <span className="text-right">Total HT</span>
+              <span className="text-right">Actions</span>
+            </div>
             <div className="space-y-2">
-              {lignes.map((l, i) => (
-                <div key={l.id} className="bg-muted rounded-xl p-3 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-text-muted font-bold w-5 text-center flex-shrink-0">{i + 1}</span>
-                    {/* Smart product search + Browse button */}
-                    <div className="flex-1 relative">
-                      <div className="flex items-center gap-1.5 border border-border rounded-lg px-2 py-1.5 bg-white">
-                        <Search size={11} className="text-text-muted flex-shrink-0" />
-                        <input
-                          value={lineSearches[l.id] ?? ''}
-                          onChange={e => onLineSearch(l.id, e.target.value)}
-                          className="flex-1 bg-transparent text-xs outline-none"
-                          placeholder={l.produit_id ? (produits.find(p => p.id === l.produit_id)?.nom ?? 'Chercher produit...') : 'Chercher produit...'}
-                        />
-                        <button type="button" onClick={() => { setPopupLineId(l.id); setShowProductPopup(true) }} title="Parcourir produits" className="text-accent-600 hover:text-accent-800 flex-shrink-0">
-                          <Package size={12} />
-                        </button>
-                        {l.pendingProduct && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 flex-shrink-0">Nouveau</span>
-                        )}
-                        {l.produit_id && (
-                          <button type="button" onClick={() => updateLigne(l.id, 'produit_id', '')} className="text-text-muted hover:text-danger"><X size={10} /></button>
-                        )}
-                      </div>
-                      {((lineResults[l.id] ?? []).length > 0 || ((lineSearches[l.id]?.length ?? 0) >= 2 && (lineResults[l.id] ?? []).length === 0)) && (
-                        <div className="absolute top-full left-0 right-0 z-10 bg-white border border-border rounded-lg shadow-lg mt-0.5">
-                          {(lineResults[l.id] ?? []).map(p => (
-                            <button key={p.id} onClick={() => selectProduct(l.id, p)}
-                              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left text-xs border-b border-border last:border-0">
-                              <span className={p.type === 'F' ? 'badge-F text-[9px]' : 'badge-NF text-[9px]'}>{p.type}</span>
-                              <span className="flex-1 truncate font-medium">{p.nom}</span>
-                              <span className="font-price text-text-muted">{formatPrice(p.prix_achat ?? p.prix_vente)}</span>
-                            </button>
-                          ))}
-                          {(lineSearches[l.id]?.length ?? 0) >= 2 && (
-                            <button
-                              onClick={() => { setQuickCreateLineId(l.id); setQuickCreate({ nom: lineSearches[l.id] ?? '', prixAchat: '', prixVente: '' }); setLineResults(prev => ({ ...prev, [l.id]: [] })); setLineSearches(prev => ({ ...prev, [l.id]: '' })) }}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs bg-accent-50 text-accent-700 font-semibold hover:bg-accent-100 rounded-b-lg"
-                            >
-                              <Plus size={11} /> Créer &ldquo;{lineSearches[l.id]}&rdquo;
-                            </button>
+              {lignes.map((l, i) => {
+                const bc = ligneBarcodeInfo(l, produits)
+                return (
+                <div key={l.id} className="bg-muted rounded-xl p-3 space-y-2 border border-border/60">
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs text-text-muted font-bold w-8 text-center flex-shrink-0 pt-2">{i + 1}</span>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="relative">
+                        <div className="flex items-center gap-1.5 border border-border rounded-lg px-2 py-1.5 bg-white">
+                          <Search size={11} className="text-text-muted flex-shrink-0" />
+                          <input
+                            value={lineSearches[l.id] ?? ''}
+                            onChange={e => onLineSearch(l.id, e.target.value)}
+                            className="flex-1 min-w-0 bg-transparent text-xs outline-none"
+                            placeholder={l.produit_id ? (produits.find(p => p.id === l.produit_id)?.nom ?? 'Chercher produit ou scanner code-barres…') : 'Chercher produit ou scanner code-barres…'}
+                          />
+                          <button type="button" onClick={() => { setPopupLineId(l.id); setShowProductPopup(true) }} title="Parcourir produits" className="text-accent-600 hover:text-accent-800 flex-shrink-0 p-1 rounded hover:bg-accent-50">
+                            <Package size={12} />
+                          </button>
+                          {l.pendingProduct && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 flex-shrink-0 whitespace-nowrap">Nouveau (brouillon)</span>
+                          )}
+                          {l.produit_id && (
+                            <button type="button" onClick={() => updateLigne(l.id, 'produit_id', '')} className="text-text-muted hover:text-danger flex-shrink-0" title="Retirer le produit lié"><X size={10} /></button>
                           )}
                         </div>
-                      )}
+                        {((lineResults[l.id] ?? []).length > 0 || ((lineSearches[l.id]?.length ?? 0) >= 2 && (lineResults[l.id] ?? []).length === 0)) && (
+                          <div className="absolute top-full left-0 right-0 z-20 bg-white border border-border rounded-lg shadow-lg mt-0.5 max-h-48 overflow-y-auto">
+                            {(lineResults[l.id] ?? []).map(p => (
+                              <button key={p.id} onClick={() => selectProduct(l.id, p)}
+                                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left text-xs border-b border-border last:border-0">
+                                <span className={p.type === 'F' ? 'badge-F text-[9px]' : 'badge-NF text-[9px]'}>{p.type}</span>
+                                <span className="flex-1 truncate font-medium">{p.nom}</span>
+                                {p.code_barre && <span className="font-mono text-[10px] text-text-muted">{p.code_barre}</span>}
+                                <span className="font-price text-text-muted">{formatPrice(p.prix_achat ?? p.prix_vente)}</span>
+                              </button>
+                            ))}
+                            {(lineSearches[l.id]?.length ?? 0) >= 2 && (
+                              <button
+                                onClick={() => { setQuickCreateLineId(l.id); setQuickCreate({ nom: lineSearches[l.id] ?? '', prixAchat: '', prixVente: '' }); setLineResults(prev => ({ ...prev, [l.id]: [] })); setLineSearches(prev => ({ ...prev, [l.id]: '' })) }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs bg-accent-50 text-accent-700 font-semibold hover:bg-accent-100 rounded-b-lg"
+                              >
+                                <Plus size={11} /> Créer &ldquo;{lineSearches[l.id]}&rdquo; (brouillon)
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-[1fr_3.5rem_5.5rem_5.5rem] gap-2 items-center">
+                        <input value={l.designation} onChange={e => updateLigne(l.id, 'designation', e.target.value)} className="w-full border border-border rounded-lg px-2 py-1.5 text-xs bg-white min-w-0" placeholder="Désignation *" />
+                        <input type="text" inputMode="numeric" value={l.quantite} onChange={e => updateLigne(l.id, 'quantite', parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1)} className="w-full border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white text-center" title="Quantité" />
+                        <input type="text" inputMode="decimal" value={l.nouveau_prix_achat} onChange={e => updateLigne(l.id, 'nouveau_prix_achat', parseFloat(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0)} className="w-full border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white" placeholder="P. achat" />
+                        <span className="text-xs font-price text-text-secondary text-right pr-1">{formatPrice(l.quantite * l.nouveau_prix_achat)}</span>
+                      </div>
                     </div>
-                    <input value={l.designation} onChange={e => updateLigne(l.id, 'designation', e.target.value)} className="flex-1 border border-border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Désignation *" />
-                    <input type="text" inputMode="numeric" value={l.quantite} onChange={e => updateLigne(l.id, 'quantite', parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1)} className="w-14 border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white text-center" />
-                    <input type="text" inputMode="decimal" value={l.nouveau_prix_achat} onChange={e => updateLigne(l.id, 'nouveau_prix_achat', parseFloat(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0)} className="w-24 border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white" placeholder="P.Achat" />
-                    <span className="text-xs font-price text-text-secondary w-20 text-right flex-shrink-0">{formatPrice(l.quantite * l.nouveau_prix_achat)}</span>
-                    {(() => {
-                      const bc = ligneBarcodeInfo(l, produits)
-                      return bc ? (
+                    <div className="flex flex-col gap-1 flex-shrink-0 pt-1">
+                      {bc ? (
                         <button
                           type="button"
-                          title="Imprimer code-barres"
+                          title={`Imprimer étiquette — ${bc.code}`}
                           onClick={() => printBarcodeLabel(bc.code, bc.nom, bc.prix, bc.ref)}
-                          className="text-accent-600 hover:text-accent-800 flex-shrink-0 p-1"
+                          className="p-2 rounded-lg border border-border bg-white text-accent-700 hover:bg-accent-50 hover:border-accent-300 transition-colors"
                         >
-                          <Barcode size={14} />
+                          <Printer size={14} />
                         </button>
-                      ) : null
-                    })()}
-                    <button type="button" onClick={() => removeLigne(l.id)} className="text-danger hover:text-red-700 flex-shrink-0" title="Supprimer la ligne"><X size={13} /></button>
+                      ) : (
+                        <div className="p-2 rounded-lg border border-dashed border-border/80 bg-white/50 opacity-40" title="Étiquette disponible après sélection ou création produit">
+                          <Printer size={14} className="text-text-muted" />
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeLigne(l.id)}
+                        className="p-2 rounded-lg border border-red-200 bg-red-50 text-danger hover:bg-red-100 transition-colors"
+                        title="Supprimer la ligne"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Quick-create product inline form */}
@@ -1819,27 +1870,10 @@ function FactureFournisseurModal({
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
-
-          {/* Last created product barcode — print prompt */}
-          {lastCreatedBarcode && (
-            <div className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-xl px-4 py-2.5">
-              <Package size={14} className="text-orange-600 flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-orange-800">Produit créé : {lastCreatedBarcode.nom}</p>
-                <p className="text-[11px] font-mono text-orange-600">{lastCreatedBarcode.code}</p>
-              </div>
-              <button
-                onClick={() => printBarcodeLabel(lastCreatedBarcode.code, lastCreatedBarcode.nom, lastCreatedBarcode.prix, lastCreatedBarcode.ref)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold transition-colors flex-shrink-0"
-              >
-                <Printer size={12} /> Imprimer étiquette
-              </button>
-              <button onClick={() => setLastCreatedBarcode(null)} className="text-orange-400 hover:text-orange-700"><X size={13} /></button>
-            </div>
-          )}
 
           {/* Fiscal fields — v1.8 */}
           <div className="grid grid-cols-3 gap-3">
@@ -1950,6 +1984,38 @@ function FactureFournisseurModal({
           productRef={barcodePrint.ref}
           onClose={() => setBarcodePrint(null)}
         />
+      )}
+
+      {showCloseDialog && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 animate-slide-in">
+            <h3 className="font-bold text-base">Fermer la facture ?</h3>
+            <p className="text-sm text-text-secondary">Vous avez des modifications non enregistrées. Que souhaitez-vous faire ?</p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => { void persistDraft().finally(() => { setShowCloseDialog(false); onClose() }) }}
+                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm"
+              >
+                Sauvegarder le brouillon
+              </button>
+              <button
+                type="button"
+                onClick={discardDraftAndClose}
+                className="w-full py-2.5 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-800 font-semibold text-sm"
+              >
+                Supprimer le brouillon
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCloseDialog(false)}
+                className="w-full py-2.5 rounded-xl bg-muted hover:bg-border font-semibold text-sm"
+              >
+                Continuer l&apos;édition
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
