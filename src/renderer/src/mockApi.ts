@@ -323,6 +323,14 @@ const mockApi = {
     return out
   },
   facturesFournisseursGetLastNumber: async () => nextFacFourn,
+  facturesFournisseursListDrafts: async () => [],
+  facturesFournisseursGetDraft: async () => null,
+  facturesFournisseursSaveDraft: async (payload: { draftId?: string }) => ({
+    success: true,
+    draftId: payload.draftId ?? `draft-${Date.now()}`,
+    updated_at: new Date().toISOString(),
+  }),
+  facturesFournisseursDeleteDraft: async () => ({ success: true }),
 
   // Paiements fournisseurs
   paiementsFournisseursCreate: async (paiement: unknown) => {

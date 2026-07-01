@@ -703,6 +703,9 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
 
+  try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN updated_at TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
+
   db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES ('cat-reparation', 'Réparation', '🔧')`).run()
 
   // Default settings — keys must match SettingsTab DEFAULTS

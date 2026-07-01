@@ -92,6 +92,10 @@ interface Window {
     facturesFournisseursList: (filters?: unknown) => Promise<unknown[]>
     facturesFournisseursCreate: (facture: unknown, lignes: unknown[]) => Promise<unknown>
     facturesFournisseursGetLastNumber: (fournisseurId: string) => Promise<number>
+    facturesFournisseursListDrafts: () => Promise<unknown[]>
+    facturesFournisseursGetDraft: (draftId: string) => Promise<unknown>
+    facturesFournisseursSaveDraft: (payload: unknown) => Promise<{ success?: boolean; draftId?: string; updated_at?: string }>
+    facturesFournisseursDeleteDraft: (draftId: string) => Promise<{ success?: boolean }>
     facturesFournisseursMarquerRecu: (factureId: string) => Promise<unknown>
     paiementsFournisseursCreate: (p: unknown) => Promise<unknown>
 

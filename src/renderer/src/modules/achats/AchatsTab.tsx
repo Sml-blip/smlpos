@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Fuse from 'fuse.js'
 import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
@@ -6,6 +6,13 @@ import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
 import { printLabelHtml } from '../../lib/nativePrint'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
+import {
+  emptyFactureLigne,
+  ligneBarcodeInfo,
+  pendingFromQuickCreate,
+  type FactureLigneState,
+  type PendingProduct,
+} from './factureAchatTypes'
 import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
@@ -39,6 +46,8 @@ export default function AchatsTab() {
   const [search, setSearch] = useState('')
   const [showFournisseurModal, setShowFournisseurModal] = useState(false)
   const [showFactureModal, setShowFactureModal] = useState(false)
+  const [resumeDraftId, setResumeDraftId] = useState<string | null>(null)
+  const [draftCount, setDraftCount] = useState(0)
   const [editingFournisseur, setEditingFournisseur] = useState<Fournisseur | null>(null)
   const [showPaiementModal, setShowPaiementModal] = useState<FactureFournisseur | null>(null)
   const [factureFilter, setFactureFilter] = useState<'tous' | 'arrivees' | 'en_attente'>('tous')
@@ -58,6 +67,14 @@ export default function AchatsTab() {
   }, [search])
 
   useEffect(() => { loadFournisseurs() }, [loadFournisseurs])
+
+  const loadDraftCount = useCallback(async () => {
+    if (!api.facturesFournisseursListDrafts) return
+    const drafts = await api.facturesFournisseursListDrafts() as unknown[]
+    setDraftCount(drafts?.length ?? 0)
+  }, [])
+
+  useEffect(() => { void loadDraftCount() }, [loadDraftCount])
 
   const totalDu = fournisseurs.reduce((s, f) => s + (f.solde_du || 0), 0)
   const facturesEnRetard = factures.filter(f => {
@@ -86,8 +103,21 @@ export default function AchatsTab() {
           >
             <Plus size={14} /> Fournisseur
           </button>
+          {draftCount > 0 && (
+            <button
+              onClick={async () => {
+                const drafts = await api.facturesFournisseursListDrafts?.() as { id: string }[] | undefined
+                const first = drafts?.[0]
+                setResumeDraftId(first?.id ?? null)
+                setShowFactureModal(true)
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm font-semibold text-blue-800 transition-colors"
+            >
+              <FileText size={14} /> Reprendre brouillon ({draftCount})
+            </button>
+          )}
           <button
-            onClick={() => setShowFactureModal(true)}
+            onClick={() => { setResumeDraftId(null); setShowFactureModal(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent-500 hover:bg-accent-600 rounded-lg text-sm font-bold text-text-primary transition-colors"
           >
             <Plus size={14} /> Nouvelle Facture
@@ -242,8 +272,9 @@ export default function AchatsTab() {
       {showFactureModal && (
         <FactureFournisseurModal
           fournisseurs={fournisseurs}
-          onClose={() => setShowFactureModal(false)}
-          onSaved={loadFournisseurs}
+          initialDraftId={resumeDraftId}
+          onClose={() => { setShowFactureModal(false); setResumeDraftId(null); void loadDraftCount() }}
+          onSaved={() => { loadFournisseurs(); void loadDraftCount() }}
         />
       )}
       {showPaiementModal && (
@@ -579,9 +610,10 @@ const emptyFullForm = (): FullProductFormData => ({
   numero_serie: '',
 })
 
-function NewProductModal({ onClose, onCreated }: {
+function NewProductModal({ onClose, onCreated, deferCreate = false }: {
   onClose: () => void
-  onCreated: (p: Produit) => Promise<void>
+  onCreated: (p: Produit | PendingProduct) => Promise<void>
+  deferCreate?: boolean
 }) {
   const [formData, setFormData] = useState<FullProductFormData>(emptyFullForm())
   const [formErrors, setFormErrors] = useState<Partial<FullProductFormData>>({})
@@ -717,7 +749,7 @@ function NewProductModal({ onClose, onCreated }: {
         nom: formData.nom.trim(),
         description: formData.description.trim() || null,
         categorie: formData.categorie,
-        type: formData.type,
+        type: formData.type as 'F' | 'NF',
         prix_achat: prixAchatHT || null,
         cout_supplementaire: coutSupp,
         tva_achat_pct: tvaAchatPct,
@@ -737,8 +769,33 @@ function NewProductModal({ onClose, onCreated }: {
         created_at: now,
         updated_at: now,
       }
-      await api.produitsCreate(p)
-      await onCreated(p as Produit)
+      if (deferCreate) {
+        const pending: PendingProduct = {
+          nom: p.nom,
+          reference: p.reference,
+          code_barre: p.code_barre,
+          prix_achat: p.prix_achat,
+          prix_vente: p.prix_vente,
+          categorie: p.categorie,
+          type: p.type,
+          tva_taux: p.tva_taux,
+          description: p.description,
+          cout_supplementaire: p.cout_supplementaire,
+          tva_achat_pct: p.tva_achat_pct,
+          marge_pct: p.marge_pct,
+          coef_av: p.coef_av,
+          cout_de_revient: p.cout_de_revient,
+          prix_vente_ht: p.prix_vente_ht,
+          prix_achat_ttc: p.prix_achat_ttc,
+          stock_minimum: p.stock_minimum,
+          fournisseur: p.fournisseur,
+          numero_serie: p.numero_serie,
+        }
+        await onCreated(pending)
+      } else {
+        await api.produitsCreate(p)
+        await onCreated(p as Produit)
+      }
     }, { setSaving, successMessage: 'Produit créé' })
     if (ok) onClose()
   }
@@ -1026,8 +1083,8 @@ function NewProductModal({ onClose, onCreated }: {
 // ── Product Search Popup (full-screen, multi-add) ────────────────────────────
 function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
   produits: Produit[]
-  onAddProduct: (p: Produit) => void   // stays open — adds new ligne each call
-  onNewProduct: (p: Produit) => Promise<void>
+  onAddProduct: (p: Produit) => void
+  onNewProduct: (p: PendingProduct) => void
   onClose: () => void
 }) {
   const [q, setQ] = useState('')
@@ -1041,6 +1098,15 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
   }), [produits])
 
   const list = useMemo(() => {
+    const qTrim = q.trim()
+    if (qTrim) {
+      const exact = produits.find(p => p.code_barre === qTrim)
+      if (exact) {
+        const okType = filterType === 'all' || exact.type === filterType
+        const okStock = filterType !== 'rupture' || exact.stock_actuel <= exact.stock_minimum
+        if (okType && (filterType !== 'rupture' || okStock)) return [exact]
+      }
+    }
     const base = q.length >= 2 ? fuseIndex.search(q, { limit: 100 }).map(r => r.item) : [...produits]
     return base.filter(p => {
       if (filterType === 'F') return p.type === 'F'
@@ -1131,10 +1197,11 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
 
       {showNewModal && (
         <NewProductModal
+          deferCreate
           onClose={() => setShowNewModal(false)}
           onCreated={async (p) => {
-            await onNewProduct(p)
-            setAddedIds(prev => [...prev, p.id])
+            onNewProduct(p as PendingProduct)
+            setAddedIds(prev => [...prev, generateId()])
           }}
         />
       )}
@@ -1143,7 +1210,21 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
 }
 
 // ── Facture Fournisseur Modal ──────────────────────────────────────────────────
-function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, onSaved }: { fournisseurs: Fournisseur[]; onClose: () => void; onSaved: () => void }) {
+function FactureFournisseurModal({
+  fournisseurs: initialFournisseurs,
+  initialDraftId,
+  onClose,
+  onSaved,
+}: {
+  fournisseurs: Fournisseur[]
+  initialDraftId?: string | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null)
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
+  const [savingDraft, setSavingDraft] = useState(false)
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [fournisseurId, setFournisseurId] = useState('')
   const [fournisseurs, setFournisseurs] = useState(initialFournisseurs)
   const [numeroFacture, setNumeroFacture] = useState('')
@@ -1151,7 +1232,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
   const [dateEcheance, setDateEcheance] = useState('')
   const [notes, setNotes] = useState('')
   const [isBL, setIsBL] = useState(false)
-  const [lignes, setLignes] = useState([{ id: generateId(), designation: '', quantite: 1, nouveau_prix_achat: 0, tva_taux: 0, produit_id: '' }])
+  const [lignes, setLignes] = useState<FactureLigneState[]>([emptyFactureLigne()])
   const [produits, setProduits] = useState<Produit[]>([])
   const [loading, setLoading] = useState(false)
   const [margePct] = useState(30) // default margin
@@ -1191,6 +1272,157 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
       setProduits(p)
     })
   }, [])
+
+  useEffect(() => {
+    if (!initialDraftId || !api.facturesFournisseursGetDraft) return
+    void loadData('Chargement brouillon', async () => {
+      const data = await api.facturesFournisseursGetDraft(initialDraftId) as {
+        facture: Record<string, unknown>
+        lignes: Record<string, unknown>[]
+      } | null
+      if (!data?.facture) return
+      const f = data.facture
+      setDraftId(initialDraftId)
+      setDraftSavedAt(String(f.updated_at ?? f.created_at ?? ''))
+      setFournisseurId(String(f.fournisseur_id ?? ''))
+      setNumeroFacture(String(f.numero_facture ?? ''))
+      setDateFacture(String(f.date_facture ?? '').slice(0, 10))
+      setDateEcheance(f.date_echeance ? String(f.date_echeance).slice(0, 10) : '')
+      setNotes(String(f.notes ?? ''))
+      setIsBL(f.type === 'FACTURE_ACHAT_BL')
+      setExoFlag(!!f.exo)
+      setExoText(String(f.exo ?? ''))
+      setTimbre(String(f.timbre ?? '1'))
+      setRemiseGlobale(String(f.total_remise ?? '0'))
+      const loaded = (data.lignes ?? []).map((l) => ({
+        id: String(l.id),
+        designation: String(l.designation ?? ''),
+        quantite: Number(l.quantite) || 1,
+        nouveau_prix_achat: Number(l.nouveau_prix_achat) || 0,
+        tva_taux: Number(l.tva_taux) || 0,
+        produit_id: String(l.produit_id ?? ''),
+        pendingProduct: l.pending_product_json
+          ? JSON.parse(String(l.pending_product_json)) as PendingProduct
+          : undefined,
+      }))
+      setLignes(loaded.length > 0 ? loaded : [emptyFactureLigne()])
+    }, { silent: true })
+  }, [initialDraftId])
+
+  const buildDraftPayload = useCallback(() => {
+    const mHT = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+    const remise = parseFloat(remiseGlobale) || 0
+    const timbreVal = parseFloat(timbre) || 0
+    const ht7 = lignes.filter(l => l.tva_taux === 7).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+    const ht19 = lignes.filter(l => l.tva_taux === 19).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+    return {
+      draftId: draftId ?? undefined,
+      facture: {
+        id: draftId ?? undefined,
+        fournisseur_id: fournisseurId || null,
+        numero_facture: numeroFacture,
+        date_facture: dateFacture,
+        date_echeance: dateEcheance || null,
+        notes: notes || null,
+        type: isBL ? 'FACTURE_ACHAT_BL' : 'FACTURE_ACHAT',
+        exo: exoFlag ? (exoText || 'EXO') : null,
+        timbre: timbreVal,
+        total_remise: remise > 0 ? remise : null,
+        ht_7: ht7 > 0 ? ht7 : null,
+        tva_7: ht7 > 0 ? ht7 * 0.07 : null,
+        ht_19: ht19 > 0 ? ht19 : null,
+        tva_19: ht19 > 0 ? ht19 * 0.19 : null,
+      },
+      lignes: lignes
+        .filter(l => l.designation.trim() || l.produit_id || l.pendingProduct)
+        .map(l => ({
+          id: l.id,
+          produit_id: l.produit_id || null,
+          designation: l.designation,
+          quantite: l.quantite,
+          nouveau_prix_achat: l.nouveau_prix_achat,
+          tva_taux: l.tva_taux,
+          pending_product_json: l.pendingProduct ? JSON.stringify(l.pendingProduct) : null,
+        })),
+    }
+  }, [draftId, fournisseurId, numeroFacture, dateFacture, dateEcheance, notes, isBL, lignes, exoFlag, exoText, timbre, remiseGlobale])
+
+  const persistDraft = useCallback(async () => {
+    if (!api.facturesFournisseursSaveDraft) return
+    const payload = buildDraftPayload()
+    if (payload.lignes.length === 0 && !fournisseurId && !numeroFacture) return
+    setSavingDraft(true)
+    try {
+      const res = await api.facturesFournisseursSaveDraft(payload) as { draftId?: string; updated_at?: string }
+      if (res.draftId) setDraftId(res.draftId)
+      if (res.updated_at) setDraftSavedAt(res.updated_at)
+    } finally {
+      setSavingDraft(false)
+    }
+  }, [buildDraftPayload, fournisseurId, numeroFacture])
+
+  useEffect(() => {
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    autosaveTimer.current = setTimeout(() => { void persistDraft() }, 2000)
+    return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current) }
+  }, [persistDraft])
+
+  const attachPendingToLine = (lineId: string, pending: PendingProduct) => {
+    setLignes(prev => prev.map(l => l.id === lineId ? {
+      ...l,
+      designation: pending.nom,
+      nouveau_prix_achat: pending.prix_achat ?? pending.prix_vente,
+      tva_taux: pending.tva_taux ?? 0,
+      produit_id: '',
+      pendingProduct: pending,
+    } : l))
+  }
+
+  const createProductFromPending = async (pending: PendingProduct): Promise<Produit> => {
+    const now = new Date().toISOString()
+    const p = {
+      id: generateId(),
+      code_barre: pending.code_barre,
+      reference: pending.reference,
+      nom: pending.nom,
+      description: pending.description ?? null,
+      categorie: pending.categorie,
+      type: pending.type,
+      prix_achat: pending.prix_achat,
+      cout_supplementaire: pending.cout_supplementaire ?? 0,
+      tva_achat_pct: pending.tva_achat_pct ?? 0,
+      marge_pct: pending.marge_pct ?? null,
+      coef_av: pending.coef_av ?? null,
+      cout_de_revient: pending.cout_de_revient ?? null,
+      prix_vente_ht: pending.prix_vente_ht ?? null,
+      prix_vente: pending.prix_vente,
+      tva_taux: pending.tva_taux ?? 0,
+      prix_achat_ttc: pending.prix_achat_ttc ?? null,
+      stock_actuel: 0,
+      stock_minimum: pending.stock_minimum ?? 5,
+      fournisseur: pending.fournisseur ?? null,
+      numero_serie: pending.numero_serie ?? null,
+      has_serial_number: 0,
+      actif: 1,
+      created_at: now,
+      updated_at: now,
+    }
+    await api.produitsCreate(p)
+    return p as Produit
+  }
+
+  const handleClose = () => {
+    const hasContent = lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || fournisseurId || numeroFacture
+    if (!hasContent) {
+      if (draftId) void api.facturesFournisseursDeleteDraft?.(draftId)
+      onClose()
+      return
+    }
+    const choice = window.confirm('Fermer la facture ?\n\nOK = sauvegarder le brouillon\nAnnuler = rester sur le formulaire')
+    if (choice) {
+      void persistDraft().finally(onClose)
+    }
+  }
 
   const handleCreateFournisseur = async () => {
     if (!newFourn.nom.trim()) return
@@ -1232,9 +1464,13 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
   }
 
   const selectProduct = (lineId: string, p: Produit) => {
-    updateLigne(lineId, 'produit_id', p.id)
-    updateLigne(lineId, 'designation', p.nom)
-    updateLigne(lineId, 'nouveau_prix_achat', p.prix_achat ?? p.prix_vente)
+    setLignes(prev => prev.map(l => l.id === lineId ? {
+      ...l,
+      produit_id: p.id,
+      designation: p.nom,
+      nouveau_prix_achat: p.prix_achat ?? p.prix_vente,
+      pendingProduct: undefined,
+    } : l))
     setLineSearches(prev => ({ ...prev, [lineId]: '' }))
     setLineResults(prev => ({ ...prev, [lineId]: [] }))
   }
@@ -1249,35 +1485,19 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
     })
   }
 
-  const handleQuickCreateProduct = async (lineId: string) => {
+  const handleQuickCreateProduct = (lineId: string) => {
     if (!quickCreate.nom.trim() || !quickCreate.prixVente) return
-    await runAction('Création produit rapide', async () => {
-      const id = generateId()
-      const now = new Date().toISOString()
-      const date = now.slice(0, 10).replace(/-/g, '')
-      const rand = String(Math.floor(Math.random() * 99999)).padStart(5, '0')
-      const code_barre = `SML-${date}-${rand}`
-      const ref = generateReference()
-      const prix_achat = parseFloat(quickCreate.prixAchat) || null
-      const prix_vente = parseFloat(quickCreate.prixVente) || 0
-      const p = {
-        id, nom: quickCreate.nom.trim(), reference: ref, code_barre,
-        prix_achat, prix_vente, type: 'F', categorie: 'Général',
-        stock_actuel: 0, stock_minimum: 5, tva_taux: 0, actif: 1,
-        created_at: now, updated_at: now,
-      }
-      await api.produitsCreate(p)
-      const updated = await api.produitsList({}) as Produit[]
-      setProduits(updated)
-      selectProduct(lineId, p as Produit)
-      setLastCreatedBarcode({ code: code_barre, nom: p.nom, prix: prix_vente, ref })
-      setQuickCreateLineId(null)
-      setQuickCreate({ nom: '', prixAchat: '', prixVente: '' })
-    }, { setSaving: setSavingQC, successMessage: 'Produit créé' })
+    const pending = pendingFromQuickCreate(quickCreate.nom, quickCreate.prixAchat, quickCreate.prixVente)
+    attachPendingToLine(lineId, pending)
+    setQuickCreateLineId(null)
+    setQuickCreate({ nom: '', prixAchat: '', prixVente: '' })
   }
 
-  const addLigne = () => setLignes(prev => [...prev, { id: generateId(), designation: '', quantite: 1, nouveau_prix_achat: 0, tva_taux: 0, produit_id: '' }])
-  const removeLigne = (id: string) => setLignes(prev => prev.filter(l => l.id !== id))
+  const addLigne = () => setLignes(prev => [...prev, emptyFactureLigne()])
+  const removeLigne = (id: string) => setLignes(prev => {
+    const next = prev.filter(l => l.id !== id)
+    return next.length > 0 ? next : [emptyFactureLigne()]
+  })
   const updateLigne = (id: string, field: string, value: unknown) => {
     setLignes(prev => prev.map(l => {
       if (l.id !== id) return l
@@ -1287,7 +1507,11 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
         if (p) {
           updated.designation = p.nom
           updated.nouveau_prix_achat = p.prix_achat ?? p.prix_vente
+          updated.pendingProduct = undefined
         }
+      }
+      if (field === 'produit_id' && !value) {
+        updated.pendingProduct = undefined
       }
       return updated
     }))
@@ -1301,18 +1525,31 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
     const filledLignes = lignes.filter(l => l.designation.trim())
     if (filledLignes.length === 0) return
     const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
+      const resolvedLignes: FactureLigneState[] = []
+      let produitsSnapshot = [...produits]
+      for (const l of filledLignes) {
+        if (l.pendingProduct && !l.produit_id) {
+          const created = await createProductFromPending(l.pendingProduct)
+          produitsSnapshot = [...produitsSnapshot.filter(p => p.id !== created.id), created]
+          resolvedLignes.push({ ...l, produit_id: created.id, pendingProduct: undefined })
+        } else {
+          resolvedLignes.push(l)
+        }
+      }
+      setProduits(produitsSnapshot)
+
       const factureId = generateId()
       const now = new Date().toISOString()
-      const mHT = filledLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
-      const mTTC = filledLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
+      const mHT = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+      const mTTC = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
       const remise = parseFloat(remiseGlobale) || 0
       const timbreVal = parseFloat(timbre) || 0
       const tvaAmount = exoFlag ? 0 : mTTC - mHT
       const totalGeneral = (exoFlag ? mHT : mTTC) - remise + timbreVal
       // TVA split by rate
-      const ht7 = filledLignes.filter(l => l.tva_taux === 7).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+      const ht7 = resolvedLignes.filter(l => l.tva_taux === 7).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
       const tva7 = ht7 * 0.07
-      const ht19 = filledLignes.filter(l => l.tva_taux === 19).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
+      const ht19 = resolvedLignes.filter(l => l.tva_taux === 19).reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
       const tva19 = ht19 * 0.19
       const facture = {
         id: factureId, numero_facture: numeroFacture, fournisseur_id: fournisseurId,
@@ -1326,8 +1563,8 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
         ht_7: ht7 > 0 ? ht7 : null, tva_7: tva7 > 0 ? tva7 : null,
         ht_19: ht19 > 0 ? ht19 : null, tva_19: tva19 > 0 ? tva19 : null,
       }
-      const lignesData = filledLignes.map(l => {
-        const p = produits.find(p => p.id === l.produit_id)
+      const lignesData = resolvedLignes.map(l => {
+        const p = produitsSnapshot.find(p => p.id === l.produit_id)
         return {
           id: generateId(), facture_id: factureId, produit_id: l.produit_id || null,
           designation: l.designation, quantite: l.quantite,
@@ -1338,6 +1575,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
         }
       })
       await api.facturesFournisseursCreate(facture, lignesData)
+      if (draftId) await api.facturesFournisseursDeleteDraft?.(draftId)
     }, {
       setLoading,
       successMessage: isBL ? 'Bon de livraison enregistré' : 'Facture fournisseur enregistrée',
@@ -1354,6 +1592,11 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
           <h2 className="font-bold text-base flex items-center gap-2">
             <FileText size={15} /> {isBL ? 'Nouveau Bon de Livraison' : 'Nouvelle Facture Fournisseur'}
+            {(draftId || savingDraft) && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                {savingDraft ? 'Sauvegarde…' : draftSavedAt ? `Brouillon · ${new Date(draftSavedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : 'Brouillon'}
+              </span>
+            )}
           </h2>
           <div className="flex items-center gap-3">
             {/* BL Toggle */}
@@ -1368,7 +1611,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
                 Bon de livraison (BL)
               </span>
             </label>
-            <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
+            <button type="button" onClick={handleClose}><X size={18} className="text-text-muted" /></button>
           </div>
         </div>
         {isBL && (
@@ -1474,8 +1717,11 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
                         <button type="button" onClick={() => { setPopupLineId(l.id); setShowProductPopup(true) }} title="Parcourir produits" className="text-accent-600 hover:text-accent-800 flex-shrink-0">
                           <Package size={12} />
                         </button>
+                        {l.pendingProduct && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 flex-shrink-0">Nouveau</span>
+                        )}
                         {l.produit_id && (
-                          <button onClick={() => updateLigne(l.id, 'produit_id', '')} className="text-text-muted hover:text-danger"><X size={10} /></button>
+                          <button type="button" onClick={() => updateLigne(l.id, 'produit_id', '')} className="text-text-muted hover:text-danger"><X size={10} /></button>
                         )}
                       </div>
                       {((lineResults[l.id] ?? []).length > 0 || ((lineSearches[l.id]?.length ?? 0) >= 2 && (lineResults[l.id] ?? []).length === 0)) && (
@@ -1503,9 +1749,20 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
                     <input type="text" inputMode="numeric" value={l.quantite} onChange={e => updateLigne(l.id, 'quantite', parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1)} className="w-14 border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white text-center" />
                     <input type="text" inputMode="decimal" value={l.nouveau_prix_achat} onChange={e => updateLigne(l.id, 'nouveau_prix_achat', parseFloat(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0)} className="w-24 border border-border rounded-lg px-2 py-1.5 text-xs font-price bg-white" placeholder="P.Achat" />
                     <span className="text-xs font-price text-text-secondary w-20 text-right flex-shrink-0">{formatPrice(l.quantite * l.nouveau_prix_achat)}</span>
-                    {lignes.length > 1 && (
-                      <button onClick={() => removeLigne(l.id)} className="text-danger hover:text-red-700 flex-shrink-0"><X size={13} /></button>
-                    )}
+                    {(() => {
+                      const bc = ligneBarcodeInfo(l, produits)
+                      return bc ? (
+                        <button
+                          type="button"
+                          title="Imprimer code-barres"
+                          onClick={() => printBarcodeLabel(bc.code, bc.nom, bc.prix, bc.ref)}
+                          className="text-accent-600 hover:text-accent-800 flex-shrink-0 p-1"
+                        >
+                          <Barcode size={14} />
+                        </button>
+                      ) : null
+                    })()}
+                    <button type="button" onClick={() => removeLigne(l.id)} className="text-danger hover:text-red-700 flex-shrink-0" title="Supprimer la ligne"><X size={13} /></button>
                   </div>
 
                   {/* Quick-create product inline form */}
@@ -1553,10 +1810,10 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
                         <button onClick={() => setQuickCreateLineId(null)} className="px-3 py-1 text-xs font-semibold bg-white hover:bg-muted border border-border rounded-lg transition-colors">Annuler</button>
                         <button
                           onClick={() => handleQuickCreateProduct(l.id)}
-                          disabled={savingQC || !quickCreate.nom.trim() || !quickCreate.prixVente}
+                          disabled={!quickCreate.nom.trim() || !quickCreate.prixVente}
                           className="px-3 py-1 text-xs font-bold bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 rounded-lg transition-colors"
                         >
-                          {savingQC ? '...' : 'Créer & Sélectionner'}
+                          Ajouter au brouillon
                         </button>
                       </div>
                     </div>
@@ -1622,7 +1879,7 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
         </div>
 
         <div className="flex gap-3 px-6 py-4 border-t border-border sticky bottom-0 bg-white">
-          <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl text-sm transition-colors">Annuler</button>
+          <button type="button" onClick={handleClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl text-sm transition-colors">Annuler</button>
           <button
             type="button"
             onClick={() => {
@@ -1668,15 +1925,18 @@ function FactureFournisseurModal({ fournisseurs: initialFournisseurs, onClose, o
             setLignes(prev => [...prev, { id: newId, designation: p.nom, quantite: 1, nouveau_prix_achat: p.prix_achat ?? p.prix_vente, tva_taux: p.tva_taux ?? 0, produit_id: p.id }])
             setPopupLineId(newId)
           }}
-          onNewProduct={async (p) => {
-            await runAction('Ajout produit', async () => {
-              await api.produitsCreate(p)
-              const updated = await api.produitsList({}) as Produit[]
-              setProduits(updated)
-              const newId = generateId()
-              setLignes(prev => [...prev, { id: newId, designation: p.nom, quantite: 1, nouveau_prix_achat: p.prix_achat ?? p.prix_vente, tva_taux: 0, produit_id: p.id }])
-              setLastCreatedBarcode({ code: p.code_barre ?? '', nom: p.nom, prix: p.prix_vente, ref: p.reference })
-            })
+          onNewProduct={(pending) => {
+            const newId = generateId()
+            setLignes(prev => [...prev, {
+              id: newId,
+              designation: pending.nom,
+              quantite: 1,
+              nouveau_prix_achat: pending.prix_achat ?? pending.prix_vente,
+              tva_taux: pending.tva_taux ?? 0,
+              produit_id: '',
+              pendingProduct: pending,
+            }])
+            setPopupLineId(newId)
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
         />

@@ -227,6 +227,14 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
     const icon = getAppIcon()
     if (icon) window.setIcon(icon)
+    window.webContents.on('context-menu', (_event, params) => {
+      Menu.buildFromTemplate([
+        { role: 'copy', enabled: params.editFlags.canCopy },
+        { role: 'cut', enabled: params.editFlags.canCut },
+        { role: 'paste', enabled: params.editFlags.canPaste },
+        { role: 'selectAll', enabled: params.editFlags.canSelectAll },
+      ]).popup()
+    })
   })
 
   // Initialize database (after pending factory wipe)
@@ -1294,7 +1302,7 @@ function setupIpcHandlers() {
   })
 
   // ─── Factures Fournisseurs ───────────────────────────────────────────────────
-  ipcMain.handle('facturesFournisseurs:list', (_e, filters: { fournisseurId?: string; statut?: string } = {}) => {
+  ipcMain.handle('facturesFournisseurs:list', (_e, filters: { fournisseurId?: string; statut?: string; includeDrafts?: boolean } = {}) => {
     let sql = `
       SELECT ff.*, f.nom as fournisseur_nom
       FROM factures_fournisseurs ff
@@ -1302,6 +1310,9 @@ function setupIpcHandlers() {
       WHERE 1=1
     `
     const params: unknown[] = []
+    if (!filters.includeDrafts && filters.statut !== 'BROUILLON') {
+      sql += ` AND ff.statut_paiement != 'BROUILLON'`
+    }
     if (filters.fournisseurId) { sql += ' AND ff.fournisseur_id = ?'; params.push(filters.fournisseurId) }
     if (filters.statut) { sql += ' AND ff.statut_paiement = ?'; params.push(filters.statut) }
     sql += ' ORDER BY ff.date_facture DESC'
@@ -1391,8 +1402,133 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('facturesFournisseurs:getLastNumber', (_e, fournisseurId: string) => {
-    const row = db.prepare(`SELECT COUNT(*) as cnt FROM factures_fournisseurs WHERE fournisseur_id=?`).get(fournisseurId) as { cnt: number }
+    const row = db.prepare(`SELECT COUNT(*) as cnt FROM factures_fournisseurs WHERE fournisseur_id=? AND statut_paiement != 'BROUILLON'`).get(fournisseurId) as { cnt: number }
     return (row?.cnt ?? 0) + 1
+  })
+
+  ipcMain.handle('facturesFournisseurs:listDrafts', () => {
+    return db.prepare(`
+      SELECT ff.*, f.nom as fournisseur_nom,
+        (SELECT COUNT(*) FROM lignes_facture_fournisseur l WHERE l.facture_id = ff.id) as ligne_count
+      FROM factures_fournisseurs ff
+      LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
+      WHERE ff.statut_paiement = 'BROUILLON'
+      ORDER BY COALESCE(ff.updated_at, ff.created_at) DESC
+    `).all()
+  })
+
+  ipcMain.handle('facturesFournisseurs:getDraft', (_e, draftId: string) => {
+    const facture = db.prepare(`
+      SELECT ff.*, f.nom as fournisseur_nom
+      FROM factures_fournisseurs ff
+      LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
+      WHERE ff.id = ? AND ff.statut_paiement = 'BROUILLON'
+    `).get(draftId)
+    if (!facture) return null
+    const lignes = db.prepare(`
+      SELECT id, facture_id, produit_id, designation, quantite, nouveau_prix_achat, tva_taux, pending_product_json
+      FROM lignes_facture_fournisseur WHERE facture_id = ?
+    `).all(draftId)
+    return { facture, lignes }
+  })
+
+  ipcMain.handle('facturesFournisseurs:saveDraft', (_e, payload: {
+    draftId?: string
+    facture: Record<string, unknown>
+    lignes: Record<string, unknown>[]
+  }) => {
+    const now = new Date().toISOString()
+    const f = payload.facture
+    const draftId = (payload.draftId as string) || (f.id as string) || randomUUID()
+    const isBL = f.type === 'FACTURE_ACHAT_BL'
+
+    const upsertFacture = db.prepare(`
+      INSERT INTO factures_fournisseurs (
+        id, numero_facture, fournisseur_id, date_facture, date_echeance,
+        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes,
+        type, statut_reception, exo, timbre, ht_7, tva_7, ht_19, tva_19, total_remise, created_at, updated_at
+      ) VALUES (
+        @id, @numero_facture, @fournisseur_id, @date_facture, @date_echeance,
+        'BROUILLON', 0, 0, 0, 0, @notes,
+        @type, @statut_reception, @exo, @timbre, @ht_7, @tva_7, @ht_19, @tva_19, @total_remise, @created_at, @updated_at
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        numero_facture = excluded.numero_facture,
+        fournisseur_id = excluded.fournisseur_id,
+        date_facture = excluded.date_facture,
+        date_echeance = excluded.date_echeance,
+        notes = excluded.notes,
+        type = excluded.type,
+        statut_reception = excluded.statut_reception,
+        exo = excluded.exo,
+        timbre = excluded.timbre,
+        ht_7 = excluded.ht_7,
+        tva_7 = excluded.tva_7,
+        ht_19 = excluded.ht_19,
+        tva_19 = excluded.tva_19,
+        total_remise = excluded.total_remise,
+        updated_at = excluded.updated_at
+    `)
+
+    const deleteLines = db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`)
+    const insertLine = db.prepare(`
+      INSERT INTO lignes_facture_fournisseur (
+        id, facture_id, produit_id, designation, quantite,
+        ancien_prix_achat, nouveau_prix_achat, prix_vente_suggere, prix_vente_applique, tva_taux, pending_product_json
+      ) VALUES (
+        @id, @facture_id, @produit_id, @designation, @quantite,
+        NULL, @nouveau_prix_achat, NULL, NULL, @tva_taux, @pending_product_json
+      )
+    `)
+
+    const row = {
+      id: draftId,
+      numero_facture: f.numero_facture || `BROUILLON-${draftId.slice(0, 8)}`,
+      fournisseur_id: f.fournisseur_id || null,
+      date_facture: f.date_facture || now.slice(0, 10),
+      date_echeance: f.date_echeance ?? null,
+      notes: f.notes ?? null,
+      type: isBL ? 'FACTURE_ACHAT_BL' : 'FACTURE_ACHAT',
+      statut_reception: isBL ? 'NON_ARRIVE' : 'ARRIVE',
+      exo: f.exo ?? null,
+      timbre: f.timbre ?? 1,
+      ht_7: f.ht_7 ?? null,
+      tva_7: f.tva_7 ?? null,
+      ht_19: f.ht_19 ?? null,
+      tva_19: f.tva_19 ?? null,
+      total_remise: f.total_remise ?? null,
+      created_at: f.created_at ?? now,
+      updated_at: now,
+    }
+
+    db.transaction(() => {
+      upsertFacture.run(row)
+      deleteLines.run(draftId)
+      for (const l of payload.lignes) {
+        insertLine.run({
+          id: l.id || randomUUID(),
+          facture_id: draftId,
+          produit_id: l.produit_id || null,
+          designation: l.designation || '',
+          quantite: l.quantite ?? 1,
+          nouveau_prix_achat: l.nouveau_prix_achat ?? 0,
+          tva_taux: l.tva_taux ?? 0,
+          pending_product_json: l.pending_product_json ?? null,
+        })
+      }
+    })()
+
+    return { success: true, draftId, updated_at: now }
+  })
+
+  ipcMain.handle('facturesFournisseurs:deleteDraft', (_e, draftId: string) => {
+    const facture = db.prepare(`SELECT id FROM factures_fournisseurs WHERE id = ? AND statut_paiement = 'BROUILLON'`).get(draftId)
+    if (!facture) return { success: false, error: 'Brouillon introuvable' }
+    db.transaction(() => {
+      db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(draftId)
+      db.prepare(`DELETE FROM factures_fournisseurs WHERE id = ?`).run(draftId)
+    })()
+    return { success: true }
   })
 
   ipcMain.handle('paiementsFournisseurs:create', (_e, p: Record<string, unknown>) => {

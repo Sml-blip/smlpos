@@ -294,6 +294,7 @@ export default function PrintManagerModal({
           labelSource.prix,
           labelSource.productRef,
           labelCfg,
+          opts.copies,
         )
       }
       return html
@@ -302,7 +303,7 @@ export default function PrintManagerModal({
       return wrapFragment(html, opts.margins, 'A4')
     }
     return html
-  }, [kind, labelSource, labelCfg, html, opts.margins])
+  }, [kind, labelSource, labelCfg, html, opts.margins, opts.copies])
 
   // ── Option helpers ─────────────────────────────────────────────────────────
 
@@ -652,6 +653,7 @@ export default function PrintManagerModal({
         </div>
 
         {renderPrinterSelect()}
+        {renderCopiesControl()}
       </>
     )
   }

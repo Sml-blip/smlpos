@@ -27,7 +27,6 @@ import { bootstrapSync, startSyncPolling } from './lib/sync'
 import ToastProvider from './components/ToastProvider'
 import { PrintManagerProvider } from './components/PrintManagerProvider'
 import UpdateModal from './components/UpdateModal'
-import QuickActionsBubble from './components/QuickActionsBubble'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
 import { applyAgentTheme, loadAgentTheme } from './lib/agentTheme'
@@ -201,8 +200,6 @@ export default function App() {
           onDismiss={updateStatus.state === 'error' ? dismissError : undefined}
         />
       )}
-
-      <QuickActionsBubble hidden={showSplash || locked} />
 
       <ToastProvider />
     </div>

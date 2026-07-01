@@ -85,6 +85,7 @@ export default function InventaireTab() {
   const [loading, setLoading] = useState(initialCache.data.length === 0)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [exactBarcodeProduct, setExactBarcodeProduct] = useState<Produit | null>(null)
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [filterType, setFilterType] = useState<'all' | 'F' | 'NF'>('all')
@@ -163,6 +164,27 @@ export default function InventaireTab() {
     return () => clearTimeout(t)
   }, [search])
 
+  useEffect(() => {
+    const q = debouncedSearch.trim()
+    if (!q) {
+      setExactBarcodeProduct(null)
+      return
+    }
+    const cacheHit = produits.find(p => p.code_barre === q)
+    if (cacheHit) {
+      setExactBarcodeProduct(cacheHit)
+      return
+    }
+    const looksLikeBarcode = /^\d{6,}$/.test(q) || /^SML-/i.test(q)
+    if (!looksLikeBarcode) {
+      setExactBarcodeProduct(null)
+      return
+    }
+    void api.produitsFindByBarcode(q).then((p) => {
+      setExactBarcodeProduct((p as Produit | null) ?? null)
+    }).catch(() => setExactBarcodeProduct(null))
+  }, [debouncedSearch, produits])
+
   // Reset visible count when filters change
   useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, sortKey, sortDir])
 
@@ -198,6 +220,14 @@ export default function InventaireTab() {
 
   // Filter & sort — memoized, only recomputes when dependencies change
   const filtered = useMemo(() => {
+    const q = debouncedSearch.trim()
+    if (q && exactBarcodeProduct && exactBarcodeProduct.code_barre === q) {
+      const p = exactBarcodeProduct
+      if (filterType !== 'all' && p.type !== filterType) return []
+      if (filterLowStock && p.stock_actuel > p.stock_minimum) return []
+      if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return []
+      return [p]
+    }
     const baseList = debouncedSearch.length >= 2
       ? fuseIndex.search(debouncedSearch, { limit: 300 }).map(r => r.item)
       : produits
@@ -217,7 +247,7 @@ export default function InventaireTab() {
           ? va < vb ? -1 : va > vb ? 1 : 0
           : va > vb ? -1 : va < vb ? 1 : 0
       })
-  }, [produits, debouncedSearch, fuseIndex, filterType, filterLowStock, filterCategorie, sortKey, sortDir])
+  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, sortKey, sortDir])
 
   // Visible slice — virtual scroll
   const visibleRows = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])

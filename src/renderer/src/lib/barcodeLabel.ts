@@ -28,6 +28,7 @@ export function buildBarcodeLabelHtml(
   prix: number,
   productRef = '',
   configPartial?: Partial<LabelPrintConfig>,
+  copies = 1,
 ): string {
   const cfg = mergeConfig(configPartial)
   const barcodeText = normalizeBarcodeText(code)
@@ -44,7 +45,7 @@ export function buildBarcodeLabelHtml(
 
   const svg = code128Svg(barcodeText, {
     moduleWidthMm: moduleMm,
-    barHeightMm: Math.min(7.5, cfg.heightMm * 0.38),
+    barHeightMm: Math.min(9, cfg.heightMm * 0.42),
     quietZoneModules: 10,
     showText: false,
     bgColor: '#ffffff',
@@ -55,27 +56,42 @@ export function buildBarcodeLabelHtml(
     ? 'transform: rotate(180deg); transform-origin: center center;'
     : ''
 
+  const labelInner = `
+        <div class="label">
+        <div class="header">
+          <div class="name" title="${safeName}">${safeName}</div>
+          <div class="price">${priceStr}</div>
+        </div>
+        <div class="barcode-wrap">${svg}</div>
+        <div class="code-line">${safeCode}</div>
+      </div>`
+
+  const count = Math.min(99, Math.max(1, copies))
+  const sheets = Array.from({ length: count }, (_, i) =>
+    `<div class="sheet${i < count - 1 ? ' page-break' : ''}">${labelInner}</div>`,
+  ).join('')
+
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Étiquette ${safeRef}</title><style>
     @page { size: ${cfg.widthMm}mm ${cfg.heightMm}mm; margin: 0; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: ${cfg.widthMm}mm;
-      height: ${cfg.heightMm}mm;
       font-family: Arial, Helvetica, sans-serif;
       background: #fff;
       color: #000;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
-      overflow: hidden;
     }
     .sheet {
-      width: 100%;
-      height: 100%;
+      width: ${cfg.widthMm}mm;
+      height: ${cfg.heightMm}mm;
       padding: 0 ${cfg.stripRightMm}mm 0 ${cfg.stripLeftMm}mm;
       display: flex;
       align-items: center;
       justify-content: center;
+      overflow: hidden;
     }
+    .sheet.page-break { page-break-after: always; break-after: page; }
     .label {
       width: ${contentW}mm;
       height: 100%;
@@ -120,7 +136,7 @@ export function buildBarcodeLabelHtml(
       display: block;
       max-width: ${maxBarWidthMm}mm;
       height: auto;
-      max-height: ${Math.min(8, cfg.heightMm * 0.42)}mm;
+      max-height: ${Math.min(9, cfg.heightMm * 0.42)}mm;
       width: auto;
     }
     .code-line {
@@ -133,18 +149,7 @@ export function buildBarcodeLabelHtml(
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-  </style></head><body>
-    <div class="sheet">
-      <div class="label">
-        <div class="header">
-          <div class="name" title="${safeName}">${safeName}</div>
-          <div class="price">${priceStr}</div>
-        </div>
-        <div class="barcode-wrap">${svg}</div>
-        <div class="code-line">${safeCode}</div>
-      </div>
-    </div>
-  </body></html>`
+  </style></head><body>${sheets}</body></html>`
 }
 
 /** Sample label for Settings → Test étiquette */

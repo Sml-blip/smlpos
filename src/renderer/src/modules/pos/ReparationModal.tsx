@@ -147,7 +147,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(false)
   const [degatPrompt, setDegatPrompt] = useState<{ repId: string; pieces: DegatPromptPiece[] } | null>(null)
 
-  const piecesAchat = pieces.reduce((s, p) => s + p.quantite * (p.destock_stock ? 0 : p.prix_achat), 0)
+  const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
   const totalFinalNum = parseMoney(totalFinal)
   const acompteNum = parseMoney(acompte)
   const benefice = totalFinalNum - piecesAchat
@@ -202,10 +202,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       const repId = generateId()
       const now = new Date().toISOString()
 
-      const piecesForSave = pieces.map(p => ({
-        ...p,
-        prix_achat: p.destock_stock ? 0 : p.prix_achat,
-      }))
+      const piecesForSave = pieces.map(p => ({ ...p }))
       const mainOeuvre = piecesForSave.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
 
       const rep = {
@@ -244,14 +241,15 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       await api.reparationsCreate(rep, piecesData)
 
       const degatPieces = pieces.filter(p => p.destock_stock)
-      if (degatPieces.length > 0) {
+      const degatNeedingPrice = degatPieces.filter(p => !p.prix_achat || p.prix_achat <= 0)
+      if (degatNeedingPrice.length > 0) {
         setDegatPrompt({
           repId,
-          pieces: degatPieces.map(p => ({
+          pieces: degatNeedingPrice.map(p => ({
             id: p.id,
             designation: p.designation,
             quantite: p.quantite,
-            prix_achat: '',
+            prix_achat: p.prix_achat ? String(p.prix_achat) : '',
           })),
         })
       } else {
@@ -347,13 +345,12 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
                   className="w-11 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
                 <input type="text" inputMode="decimal" value={p.prix_unitaire || ''} onChange={e => { const u = [...pieces]; u[i].prix_unitaire = parseMoney(e.target.value); setPieces(u) }}
                   className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix pièce client (TND)" placeholder="Prix client" />
-                <input type="text" inputMode="decimal" value={p.destock_stock ? '' : (p.prix_achat || '')}
-                  disabled={p.destock_stock}
+                <input type="text" inputMode="decimal" value={p.prix_achat || ''}
                   onChange={e => { const u = [...pieces]; u[i].prix_achat = parseMoney(e.target.value); setPieces(u) }}
-                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price disabled:bg-gray-100 disabled:text-text-muted"
-                  title={p.destock_stock ? 'Prix dégât saisi après enregistrement' : 'Prix achat TND'} placeholder={p.destock_stock ? 'Après submit' : 'Prix achat'} />
+                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price"
+                  title="Prix achat TND" placeholder="Prix achat" />
                 <label className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 cursor-pointer whitespace-nowrap">
-                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; if (e.target.checked) u[i].prix_achat = 0; setPieces(u) }} />
+                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; setPieces(u) }} />
                   <AlertTriangle size={11} /> Dégât
                 </label>
                 {p.produit_id && p.destock_stock && (
