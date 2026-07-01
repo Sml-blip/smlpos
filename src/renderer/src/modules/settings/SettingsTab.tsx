@@ -564,6 +564,7 @@ function FactoryResetCard() {
     )
     if (!ok) return
     setResetting(true)
+    const watchdog = window.setTimeout(() => setResetting(false), 12000)
     try {
       Object.keys(localStorage).filter(k => k.startsWith('smlpos_')).forEach(k => localStorage.removeItem(k))
       invalidateProduitsCache()
@@ -576,6 +577,8 @@ function FactoryResetCard() {
     } catch {
       showToast('error', 'Échec de la réinitialisation')
       setResetting(false)
+    } finally {
+      window.clearTimeout(watchdog)
     }
   }
 

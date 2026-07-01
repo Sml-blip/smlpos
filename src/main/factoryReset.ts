@@ -1,4 +1,4 @@
-import { app, session } from 'electron'
+import { app } from 'electron'
 import { existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { closeDatabase, getDb } from './db'
@@ -9,7 +9,7 @@ import {
   requestWipeFlags,
 } from './userDataWipe'
 
-export { applyPendingWipeBeforeDbOpen, getResetDiagnostics } from './userDataWipe'
+export { applyPendingWipeBeforeDbOpen, getResetDiagnostics, requestWipeFlags } from './userDataWipe'
 
 function readExternalBackupFolder(): string | null {
   try {
@@ -30,7 +30,7 @@ function wipeExternalLatestBackup(folder: string | null): void {
   }
 }
 
-/** Empty every table while the DB handle is still open (fallback if file delete fails). */
+/** Fast in-memory purge — no VACUUM (that can freeze the UI for minutes). */
 function purgeDatabaseContents(): void {
   try {
     const db = getDb()
@@ -46,25 +46,23 @@ function purgeDatabaseContents(): void {
       }
     })()
     db.pragma('foreign_keys = ON')
-    db.exec('VACUUM')
+    db.pragma('wal_checkpoint(TRUNCATE)')
     console.log('[factoryReset] Database tables purged in-memory')
   } catch (e) {
     console.warn('[factoryReset] In-memory DB purge failed:', e)
   }
 }
 
-/** Close DB, delete files, relaunch. If delete fails, flag ensures wipe before DB opens next launch. */
+/**
+ * Factory reset must finish quickly and always relaunch.
+ * Do NOT call session.clearStorageData() here — it often hangs while the renderer is alive.
+ * Renderer storage dirs are deleted in deleteAllLocalDataFiles / pending wipe on next boot.
+ */
 export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; deferred?: boolean }> {
   const externalBackupFolder = readExternalBackupFolder()
   requestWipeFlags()
   purgeDatabaseContents()
   wipeExternalLatestBackup(externalBackupFolder)
-
-  try {
-    await session.defaultSession.clearStorageData()
-  } catch (e) {
-    console.warn('[factoryReset] clearStorageData failed:', e)
-  }
 
   try {
     getDb().pragma('wal_checkpoint(TRUNCATE)')
@@ -82,6 +80,6 @@ export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; 
 }
 
 export function relaunchFresh(): void {
-  app.relaunch()
+  app.relaunch({ args: process.argv.slice(1).concat(['--smlpos-factory-reset']) })
   app.exit(0)
 }

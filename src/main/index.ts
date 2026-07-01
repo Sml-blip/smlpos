@@ -7,7 +7,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
 import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
-import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
+import { wipeAllUserData, relaunchFresh, getResetDiagnostics, requestWipeFlags } from './factoryReset'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -243,11 +243,14 @@ function setupIpcHandlers() {
   ipcMain.handle('app:factoryReset', async () => {
     try {
       const result = await wipeAllUserData()
-      if (!result.ok) return { success: false, error: result.error ?? 'Échec réinitialisation' }
-      relaunchFresh()
+      // Relaunch immediately — do not block on IPC response reaching the renderer.
+      setImmediate(() => relaunchFresh())
       return { success: true, deferred: result.deferred === true }
     } catch (e) {
-      return { success: false, error: String(e) }
+      console.error('[factoryReset] Wipe error — relaunching with deferred wipe:', e)
+      try { requestWipeFlags() } catch { /* ignore */ }
+      setImmediate(() => relaunchFresh())
+      return { success: true, deferred: true, error: String(e) }
     }
   })
 
