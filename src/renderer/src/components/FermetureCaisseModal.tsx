@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
-import { formatPrice, generateId } from '../lib/utils'
+import { formatPrice } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
-import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, LogOut, AlertCircle, CheckCircle, CreditCard } from 'lucide-react'
+import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText } from 'lucide-react'
 
 const api = window.api
 
@@ -33,6 +33,9 @@ export default function FermetureCaisseModal({ onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
+  const [closedShiftsToday, setClosedShiftsToday] = useState(0)
+
+  const isEndOfDayClose = closedShiftsToday >= 1
 
   useEffect(() => {
     if (!currentShift) return
@@ -40,12 +43,17 @@ export default function FermetureCaisseModal({ onClose }: Props) {
     const timeout = setTimeout(() => {
       if (!cancelled) setLoadingSummary(false)
     }, 8000)
-    api.shiftsGetSummary(currentShift.id)
-      .then((s) => {
-        if (!cancelled && s) setSummary(s as ShiftSummary)
+    Promise.all([
+      api.shiftsGetSummary(currentShift.id),
+      api.shiftsCountClosedToday?.() ?? Promise.resolve(0),
+    ])
+      .then(([s, closedCount]) => {
+        if (cancelled) return
+        if (s) setSummary(s as ShiftSummary)
+        setClosedShiftsToday(typeof closedCount === 'number' ? closedCount : 0)
       })
       .catch((e) => {
-        console.error('[FermetureCaisse] shiftsGetSummary failed:', e)
+        console.error('[FermetureCaisse] load failed:', e)
       })
       .finally(() => {
         if (!cancelled) setLoadingSummary(false)
@@ -63,70 +71,6 @@ export default function FermetureCaisseModal({ onClose }: Props) {
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
   const ecart = soldeCaisse ? soldeReel - soldeTheorique : null
 
-  const generateFactureJournaliereF = async () => {
-    try {
-      // Get all F-type lignes_vente for this shift
-      const lignesF = await api.dbQuery(
-        `SELECT lv.*, v.client_nom FROM lignes_vente lv JOIN ventes v ON v.id = lv.vente_id WHERE v.shift_id = ? AND lv.type_produit = 'F'`,
-        [currentShift!.id]
-      ) as Array<Record<string, unknown>>
-
-      if (!lignesF || lignesF.length === 0) return
-
-      const totalTTC = lignesF.reduce((s, l) => s + (l.total_ligne as number || 0), 0)
-      if (totalTTC <= 0) return
-
-      // Get next sequence number
-      const year = new Date().getFullYear()
-      const yy = String(year).slice(-2)
-      const seqKey = `facture_vente_sequence_${year}`
-      const prevSeqRaw = await api.settingsGet(seqKey) as string | null
-      const prevSeq = parseInt(prevSeqRaw ?? '0') || 0
-      const nextSeq = prevSeq + 1
-      await api.settingsSet(seqKey, String(nextSeq))
-      const numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
-
-      const now = new Date().toISOString()
-      const docId = generateId()
-
-      const doc = {
-        id: docId,
-        numero,
-        type_document: 'FACTURE_JOURNALIERE_F',
-        statut: 'ACTIF',
-        shift_id: currentShift!.id,
-        vente_id: null,
-        client_nom: 'Client Passager',
-        total_ht: totalTTC,
-        total_tva: 0,
-        total_ttc: totalTTC,
-        statut_paiement: 'PAYE',
-        montant_paye: totalTTC,
-        created_at: now,
-        updated_at: now,
-      }
-
-      const docLignes = lignesF.map(l => ({
-        id: generateId(),
-        document_id: docId,
-        produit_id: l.produit_id || null,
-        designation: l.designation,
-        quantite: l.quantite,
-        prix_unitaire: l.prix_unitaire,
-        remise_pct: l.remise_pct || 0,
-        tva_taux: 0,
-        total_ht: l.total_ligne,
-        total_tva: 0,
-        total_ttc: l.total_ligne,
-        type_produit: 'F',
-      }))
-
-      await api.documentsCreate(doc, docLignes)
-    } catch (e) {
-      console.error('Erreur génération facture journalière F:', e)
-    }
-  }
-
   const handleClose = async () => {
     if (!confirmed) { setConfirmed(true); return }
     await runAction('Fermeture de caisse', async () => {
@@ -136,13 +80,34 @@ export default function FermetureCaisseModal({ onClose }: Props) {
         solde_theorique: soldeTheorique,
         notes_cloture: notes || null,
       })
-      await generateFactureJournaliereF()
+
+      if (isEndOfDayClose) {
+        const facture = await api.documentsCreateDailyFactureF?.() as {
+          success?: boolean
+          skipped?: boolean
+          numero?: string
+          lineCount?: number
+          reason?: string
+          error?: string
+        } | undefined
+        if (facture?.success && !facture.skipped && facture.numero) {
+          console.info(`[FermetureCaisse] Facture journalière F ${facture.numero} (${facture.lineCount} lignes)`)
+        } else if (facture?.error) {
+          console.warn('[FermetureCaisse] Facture journalière F:', facture.error)
+        }
+      }
+
       await api.caisseInterneTransferShift(currentShift.id)
       setCurrentShift(null)
       setCurrentOperateur(null)
       setShowShiftModal(true)
       onClose()
-    }, { setLoading, successMessage: 'Caisse fermée' })
+    }, {
+      setLoading,
+      successMessage: isEndOfDayClose
+        ? 'Caisse fermée — facture journalière F générée (Documents)'
+        : 'Caisse fermée',
+    })
   }
 
   return (
@@ -162,6 +127,24 @@ export default function FermetureCaisseModal({ onClose }: Props) {
         </div>
 
         <div className="p-6 space-y-5">
+          {isEndOfDayClose ? (
+            <div className="flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
+              <FileText size={14} className="flex-shrink-0 mt-0.5" />
+              <span>
+                <strong>Clôture fin de journée</strong> — toutes les ventes produits <strong>F</strong> du jour
+                seront regroupées en une facture unique dans l&apos;onglet <strong>Documents</strong>.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900">
+              <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>
+                <strong>Première clôture du jour</strong> — fermeture normale. La facture journalière F sera créée
+                à la <strong>deuxième</strong> clôture (fin de journée).
+              </span>
+            </div>
+          )}
+
           {/* Shift info */}
           <div className="bg-muted rounded-xl p-4">
             <div className="flex items-center justify-between text-sm">
@@ -175,6 +158,10 @@ export default function FermetureCaisseModal({ onClose }: Props) {
             <div className="flex items-center justify-between text-sm mt-1">
               <span className="text-text-secondary">Fond de caisse</span>
               <span className="font-price font-semibold">{formatPrice(currentShift.fond_de_caisse)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm mt-1">
+              <span className="text-text-secondary">Shifts déjà clos aujourd&apos;hui</span>
+              <span className="font-semibold">{closedShiftsToday}</span>
             </div>
           </div>
 

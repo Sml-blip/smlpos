@@ -26,6 +26,7 @@ interface Window {
     shiftsGetActive: () => Promise<unknown>
     shiftsGetToday: () => Promise<unknown[]>
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
+    shiftsCountClosedToday?: () => Promise<number>
 
     // Services POS
     servicesPosList: () => Promise<unknown[]>
@@ -146,6 +147,7 @@ interface Window {
     // Documents (Facture/Devis/BL)
     documentsList: (filters?: unknown) => Promise<unknown[]>
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
+    documentsCreateDailyFactureF?: () => Promise<{ success?: boolean; skipped?: boolean; numero?: string; lineCount?: number; reason?: string; error?: string }>
     documentsUpdate: (id: string, data: unknown) => Promise<unknown>
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
     documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: { total_ht: number; total_tva: number; total_ttc: number }) => Promise<{ success?: boolean }>

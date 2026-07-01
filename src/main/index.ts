@@ -397,6 +397,130 @@ function setupIpcHandlers() {
     return { ventes, reparations, sorties, parMode, creditsPercus }
   })
 
+  ipcMain.handle('shifts:countClosedToday', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const row = db.prepare(`
+      SELECT COUNT(*) as cnt FROM shifts
+      WHERE ended_at IS NOT NULL AND started_at >= ? AND started_at <= ?
+    `).get(`${today}T00:00:00.000Z`, `${today}T23:59:59.999Z`) as { cnt: number }
+    return row?.cnt ?? 0
+  })
+
+  /** End-of-day: merge all F sales from today's shifts into one FACTURE_JOURNALIERE_F document. */
+  ipcMain.handle('documents:createDailyFactureF', () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const dayStart = `${today}T00:00:00.000Z`
+      const dayEnd = `${today}T23:59:59.999Z`
+
+      const existing = db.prepare(`
+        SELECT id, numero FROM documents
+        WHERE type_document = 'FACTURE_JOURNALIERE_F'
+        AND created_at >= ? AND created_at <= ?
+      `).get(dayStart, dayEnd) as { id: string; numero: string } | undefined
+      if (existing) {
+        return { success: true, skipped: true, reason: 'already_exists', documentId: existing.id, numero: existing.numero }
+      }
+
+      const lignesF = db.prepare(`
+        SELECT lv.produit_id, lv.designation, lv.quantite, lv.prix_unitaire, lv.remise_pct, lv.total_ligne
+        FROM lignes_vente lv
+        INNER JOIN ventes v ON v.id = lv.vente_id
+        INNER JOIN shifts s ON s.id = v.shift_id
+        WHERE lv.type_produit = 'F'
+        AND s.started_at >= ? AND s.started_at <= ?
+        AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
+        ORDER BY v.created_at ASC, lv.designation ASC
+      `).all(dayStart, dayEnd) as Array<{
+        produit_id: string | null
+        designation: string
+        quantite: number
+        prix_unitaire: number
+        remise_pct: number
+        total_ligne: number
+      }>
+
+      if (!lignesF.length) {
+        return { success: true, skipped: true, reason: 'no_f_lines', count: 0 }
+      }
+
+      const totalTTC = lignesF.reduce((s, l) => s + (Number(l.total_ligne) || 0), 0)
+      if (totalTTC <= 0) {
+        return { success: true, skipped: true, reason: 'zero_total', count: 0 }
+      }
+
+      const year = new Date().getFullYear()
+      const yy = String(year).slice(-2)
+      const seqKey = `facture_vente_sequence_${year}`
+      const prevRow = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(seqKey) as { value?: string } | undefined
+      const nextSeq = (parseInt(prevRow?.value ?? '0', 10) || 0) + 1
+      db.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`).run(seqKey, String(nextSeq))
+      const numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
+      const now = new Date().toISOString()
+      const docId = randomUUID()
+
+      const doc = {
+        id: docId,
+        numero,
+        type_document: 'FACTURE_JOURNALIERE_F',
+        statut: 'ACTIF',
+        shift_id: null,
+        vente_id: null,
+        fournisseur_id: null,
+        client_id: null,
+        client_nom: 'Client Passager',
+        client_tel: null,
+        client_adresse: null,
+        client_matricule: null,
+        total_ht: totalTTC,
+        total_tva: 0,
+        total_ttc: totalTTC,
+        statut_paiement: 'PAYE',
+        montant_paye: totalTTC,
+        date_echeance: null,
+        layout_snapshot: null,
+        contenu_json: null,
+        created_at: now,
+        updated_at: now,
+      }
+
+      const docLignes = lignesF.map(l => ({
+        id: randomUUID(),
+        document_id: docId,
+        produit_id: l.produit_id ?? null,
+        designation: l.designation,
+        quantite: l.quantite,
+        prix_unitaire: l.prix_unitaire,
+        remise_pct: l.remise_pct ?? 0,
+        tva_taux: 0,
+        total_ht: l.total_ligne,
+        total_tva: 0,
+        total_ttc: l.total_ligne,
+        type_produit: 'F',
+      }))
+
+      db.transaction(() => {
+        db.prepare(`
+          INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at)
+          VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)
+        `).run(doc)
+        const insertLigne = db.prepare(`
+          INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit)
+          VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)
+        `)
+        for (const l of docLignes) insertLigne.run(l)
+      })()
+
+      addActivityLog({ action: 'DOCUMENT_CREATED', details: { type_document: 'FACTURE_JOURNALIERE_F', numero, lineCount: docLignes.length }, montant: totalTTC })
+      enqueueSync('documents', 'INSERT', doc)
+      for (const l of docLignes) enqueueSync('lignes_document', 'INSERT', l)
+
+      return { success: true, documentId: docId, numero, lineCount: docLignes.length, totalTTC }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
   // ─── Produits ────────────────────────────────────────────────────────────────
   ipcMain.handle('produits:list', (_e, filters: { search?: string; type?: string; lowStock?: boolean } = {}) => {
     let sql = 'SELECT * FROM produits WHERE actif = 1'

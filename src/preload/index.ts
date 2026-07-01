@@ -33,6 +33,7 @@ const api = {
   shiftsGetActive: () => ipcRenderer.invoke('shifts:getActive'),
   shiftsGetToday: () => ipcRenderer.invoke('shifts:getToday'),
   shiftsGetSummary: (shiftId: string) => ipcRenderer.invoke('shifts:getSummary', shiftId),
+  shiftsCountClosedToday: () => ipcRenderer.invoke('shifts:countClosedToday'),
 
   // Services POS
   servicesPosList: () => ipcRenderer.invoke('servicesPOS:list'),
@@ -163,6 +164,7 @@ const api = {
   documentsList: (filters?: unknown) => ipcRenderer.invoke('documents:list', filters),
   documentsListAll: (filters?: unknown) => ipcRenderer.invoke('documents:listAll', filters),
   documentsCreate: (doc: unknown, lignes: unknown[]) => ipcRenderer.invoke('documents:create', doc, lignes),
+  documentsCreateDailyFactureF: () => ipcRenderer.invoke('documents:createDailyFactureF'),
   documentsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('documents:update', id, data),
   documentsRevoquer: (id: string, motif: string, par: string) => ipcRenderer.invoke('documents:revoquer', id, motif, par),
   documentsGetLignes: (documentId: string) => ipcRenderer.invoke('documents:getLignes', documentId),

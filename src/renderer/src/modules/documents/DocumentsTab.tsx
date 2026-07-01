@@ -18,7 +18,7 @@ const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 
 
 const api = window.api
 
-type SubTab = 'TOUS' | 'FACTURE_VENTE' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL'
+type SubTab = 'TOUS' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL'
 
 interface DocRow {
   id: string
@@ -51,6 +51,7 @@ const STATUT_CONFIG: Record<string, { label: string; cls: string }> = {
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'TOUS', label: 'Tous' },
   { id: 'FACTURE_VENTE', label: 'Factures Vente' },
+  { id: 'FACTURE_JOURNALIERE_F', label: 'Facture Journalière F' },
   { id: 'DEVIS', label: 'Devis' },
   { id: 'BON_LIVRAISON', label: 'BL Vente' },
   { id: 'FACTURE_ACHAT', label: 'Factures Achat' },

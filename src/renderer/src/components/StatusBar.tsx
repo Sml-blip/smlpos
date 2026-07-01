@@ -239,6 +239,9 @@ export default function StatusBar() {
               <button onClick={() => setShowErrorModal(false)}><X size={16} className="text-text-muted" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <p className="text-xs text-text-secondary bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-2">
+                Vos ventes et shifts sont déjà enregistrés localement (SQLite). La file sync sert uniquement à copier vers Supabase — rien n&apos;est perdu si un élément est en attente.
+              </p>
               {errorRows.length === 0 && <p className="text-sm text-text-muted text-center py-4">Aucun élément en attente</p>}
               {errorRows.map(r => (
                 <div key={r.id} className={`text-xs rounded-lg border px-3 py-2 ${r.last_error ? 'border-red-200 bg-red-50' : 'border-border bg-muted'}`}>
@@ -247,8 +250,10 @@ export default function StatusBar() {
                     <span className="px-1.5 py-0.5 bg-white border border-border rounded text-[10px]">{r.operation}</span>
                     <span className="text-text-muted">tentatives: {r.attempts}</span>
                   </div>
-                  {r.last_error && (
+                  {r.last_error ? (
                     <p className="text-red-700 font-mono text-[10px] break-all">{r.last_error}</p>
+                  ) : (
+                    <p className="text-text-muted text-[10px]">En attente sync cloud — données locales OK</p>
                   )}
                 </div>
               ))}
