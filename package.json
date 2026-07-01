@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.919",
+  "version": "1.9.920",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -144,6 +144,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "SMLPOS",
       "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
       "installerIcon": "icon.ico",
       "uninstallerIcon": "icon.ico",
       "artifactName": "SMLPOS-v${version}-Setup.${ext}"

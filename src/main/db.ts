@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { seedProductsIfEmpty } from './seedProducts'
 import { applyPendingWipeBeforeDbOpen, getActiveDbPath, recoverLegacyDatabaseIfNeeded } from './userDataWipe'
+import { migrateLegacyDataToCanonical } from './dataPaths'
 
 let dbInstance: Database.Database | null = null
 export let dbFilePath = ''
@@ -11,6 +12,13 @@ export let dbFilePath = ''
 export function connectDatabase(): Database.Database {
   if (dbInstance) return dbInstance
   applyPendingWipeBeforeDbOpen()
+  const migration = migrateLegacyDataToCanonical()
+  if (migration.backupsMerged > 0) {
+    console.log(`[migrate] Merged ${migration.backupsMerged} backup file(s) into canonical folder`)
+  }
+  if (migration.dbMerged) {
+    console.log(`[migrate] Promoted database from ${migration.dbFrom}`)
+  }
   const recovery = recoverLegacyDatabaseIfNeeded()
   if (recovery.recovered) {
     console.log(`[db] Auto-recovered ${recovery.productCount} products from ${recovery.from}`)

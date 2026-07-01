@@ -9,6 +9,8 @@ import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh, getResetDiagnostics, requestWipeFlags } from './factoryReset'
 import { discoverRecoverableDatabases } from './userDataWipe'
+import { bootstrapCanonicalUserDataPath } from './dataPaths'
+import { createLocalBackup, copyToExternalFolder, getBackupDir } from './backupService'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -16,56 +18,9 @@ import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
-const MAX_LOCAL_BACKUPS = 20
+bootstrapCanonicalUserDataPath()
 
-function getBackupDir(): string {
-  const dir = join(app.getPath('userData'), 'backups')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
-}
-
-function createLocalBackup(): { path: string; filename: string } | null {
-  try {
-    const backupDir = getBackupDir()
-    const ts = new Date().toISOString().replace(/:/g, '-').replace('T', '_').slice(0, 19)
-    const filename = `smlpos_${ts}.db`
-    const backupPath = join(backupDir, filename)
-
-    // Checkpoint WAL so the backup includes all committed data
-    try { db.pragma('wal_checkpoint(FULL)') } catch {}
-    copyFileSync(dbFilePath, backupPath)
-
-    // Prune old backups, keep MAX_LOCAL_BACKUPS most recent
-    const files = readdirSync(backupDir)
-      .filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
-      .map(f => ({ name: f, time: statSync(join(backupDir, f)).mtimeMs }))
-      .sort((a, b) => b.time - a.time)
-    files.slice(MAX_LOCAL_BACKUPS).forEach(({ name }) => {
-      try { unlinkSync(join(backupDir, name)) } catch {}
-    })
-
-    return { path: backupPath, filename }
-  } catch (e) {
-    console.warn('[backup] Local backup failed:', e)
-    return null
-  }
-}
-
-function copyToExternalFolder(localPath: string): boolean {
-  try {
-    const row = db.prepare(`SELECT value FROM app_settings WHERE key='backup_folder_path'`).get() as { value?: string } | undefined
-    const extFolder = row?.value?.trim()
-    if (!extFolder || !existsSync(extFolder)) return false
-    const filename = localPath.split(/[\\/]/).pop()!
-    copyFileSync(localPath, join(extFolder, filename))
-    // Always overwrite a "latest" copy for easy access
-    copyFileSync(localPath, join(extFolder, 'smlpos_latest.db'))
-    return true
-  } catch (e) {
-    console.warn('[backup] External copy failed:', e)
-    return false
-  }
-}
+let mainWindow: BrowserWindow | null = null
 
 let _backupInterval: ReturnType<typeof setInterval> | null = null
 
@@ -88,7 +43,6 @@ function startAutoBackup() {
   }, 5 * 60 * 1000)
 }
 
-let mainWindow: BrowserWindow | null = null
 let cachedAppIcon: NativeImage | undefined
 
 if (process.platform === 'win32') {

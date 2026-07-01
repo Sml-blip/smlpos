@@ -1,8 +1,9 @@
 import { app } from 'electron'
-import Database from 'better-sqlite3'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync, copyFileSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { countProductsInDbFile } from './dbProbe'
+import { getCanonicalDbPath, getCanonicalUserDataPath, getLegacyUserDataDirs } from './dataPaths'
 
 export const WIPE_FLAG = '.wipe-requested'
 export const SKIP_SEED_FLAG = '.skip-product-seed'
@@ -20,30 +21,19 @@ export function getUserDataDir(): string {
 
 /** Roaming + Local AppData folders that may hold SMLPOS data (case variants). */
 export function getUserDataDirCandidates(): string[] {
-  const roaming = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
-  const local = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-  const candidates = [
-    getUserDataDir(),
-    join(roaming, 'smlpos'),
-    join(roaming, 'SMLPOS'),
-    join(local, 'smlpos'),
-    join(local, 'SMLPOS'),
-  ]
-  const seen = new Set<string>()
-  const unique: string[] = []
-  for (const dir of candidates) {
-    const key = dir.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(dir)
+  try {
+    return getLegacyUserDataDirs()
+  } catch {
+    const roaming = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
+    const local = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+    return [getUserDataDir(), join(roaming, 'smlpos'), join(roaming, 'SMLPOS'), join(local, 'smlpos'), join(local, 'SMLPOS')]
   }
-  return unique
 }
 
 /** SQLite file used by the running app (packaged vs dev). */
 export function getActiveDbPath(): string {
   return app.isPackaged
-    ? join(getUserDataDir(), 'smlpos.db')
+    ? getCanonicalDbPath()
     : join(process.cwd(), 'smlpos-dev.db')
 }
 
@@ -71,7 +61,7 @@ export function getAllDbCandidatePaths(): string[] {
 }
 
 export function getPackagedDbPath(): string {
-  return join(getUserDataDir(), 'smlpos.db')
+  return getCanonicalDbPath()
 }
 
 function ensureDir(dir: string): void {
@@ -118,20 +108,7 @@ function readResetStateFromDir(dir: string): ResetState | null {
 }
 
 /** Count products in a SQLite file without opening the main app connection. */
-export function countProductsInDbFile(dbPath: string): number | null {
-  if (!existsSync(dbPath)) return null
-  try {
-    const probe = new Database(dbPath, { readonly: true, fileMustExist: true })
-    try {
-      const row = probe.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }
-      return row?.cnt ?? 0
-    } finally {
-      probe.close()
-    }
-  } catch {
-    return null
-  }
-}
+export { countProductsInDbFile } from './dbProbe'
 
 /** If the active DB is missing/empty, copy the best legacy backup or sibling DB we can find. */
 export function recoverLegacyDatabaseIfNeeded(): { recovered: boolean; from?: string; productCount?: number } {
@@ -304,13 +281,11 @@ function deleteRendererStorage(userDataDir: string, errors: string[]): void {
 export function deleteAllLocalDataFiles(userDataDir?: string): { ok: boolean; errors: string[] } {
   const errors: string[] = []
 
-  for (const dbPath of getAllDbCandidatePaths()) {
-    deleteSqliteFiles(dbPath, errors)
-  }
+  // Factory reset clears the live DB only — backups/ and smlpos_*.db archives are NEVER deleted here.
+  deleteSqliteFiles(getActiveDbPath(), errors)
 
-  const dirsToClean = userDataDir ? [userDataDir] : getUserDataDirCandidates()
+  const dirsToClean = userDataDir ? [userDataDir] : [getUserDataDir()]
   for (const dir of dirsToClean) {
-    // Never delete backups/ — they are the last line of recovery after a bad reset or update.
     deleteRendererStorage(dir, errors)
   }
 

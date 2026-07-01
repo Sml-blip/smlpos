@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import updaterPkg from 'electron-updater'
 import type { ProgressInfo, UpdateInfo } from 'electron-updater'
+import { createEmergencyBackup } from './backupService'
 
 const { autoUpdater } = updaterPkg
 
@@ -75,6 +76,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   })
 
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+    createEmergencyBackup()
     send({ state: 'downloaded', version: info.version })
   })
 
@@ -106,6 +108,10 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   })
 
   ipcMain.handle('update:install', () => {
+    const emergency = createEmergencyBackup()
+    if (emergency) {
+      console.log('[updater] Emergency backup before install:', emergency.filename)
+    }
     autoUpdater.quitAndInstall(false, true)
   })
 
