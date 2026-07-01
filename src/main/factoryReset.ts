@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, session } from 'electron'
 import { db } from './db'
 import {
   applyPendingWipeBeforeDbOpen,
@@ -9,9 +9,38 @@ import {
 
 export { applyPendingWipeBeforeDbOpen } from './userDataWipe'
 
+/** Empty every table while the DB handle is still open (fallback if file delete fails). */
+function purgeDatabaseContents(): void {
+  try {
+    const tables = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+    `).all() as { name: string }[]
+
+    db.transaction(() => {
+      db.pragma('foreign_keys = OFF')
+      for (const { name } of tables) {
+        db.prepare(`DELETE FROM "${name}"`).run()
+      }
+      db.pragma('foreign_keys = ON')
+    })()
+    db.pragma('wal_checkpoint(TRUNCATE)')
+    console.log('[factoryReset] Database tables purged in-memory')
+  } catch (e) {
+    console.warn('[factoryReset] In-memory DB purge failed:', e)
+  }
+}
+
 /** Close DB, delete files, relaunch. If delete fails, flag ensures wipe before DB opens next launch. */
-export function wipeAllUserData(): { ok: boolean; error?: string; deferred?: boolean } {
+export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; deferred?: boolean }> {
   requestWipeFlags()
+  purgeDatabaseContents()
+
+  try {
+    await session.defaultSession.clearStorageData()
+  } catch (e) {
+    console.warn('[factoryReset] clearStorageData failed:', e)
+  }
 
   try {
     db.pragma('wal_checkpoint(TRUNCATE)')

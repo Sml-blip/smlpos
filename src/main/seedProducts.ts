@@ -1,9 +1,9 @@
 // Auto-generated from ETAT_Produit Excel — 1146 produits
 import type Database from 'better-sqlite3'
-import { consumeSkipProductSeedFlag } from './userDataWipe'
+import { shouldSkipProductSeed } from './userDataWipe'
 
 export function seedProductsIfEmpty(db: Database.Database): void {
-  if (consumeSkipProductSeedFlag()) {
+  if (shouldSkipProductSeed()) {
     console.log('[seed] Skipped product catalog — factory reset / empty catalog requested')
     return
   }

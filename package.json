@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.910",
+  "version": "1.9.911",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -14,7 +14,7 @@
     "package:msi": "npm run prepackage && npm run build && electron-builder --win msi",
     "package:nsis": "npm run prepackage && npm run build && electron-builder --win nsis",
     "release:win": "npm run prepackage && npm run build && electron-builder --win nsis --publish always",
-    "release:win:local": "npm run build && electron-builder --win nsis --dir --config.win.signAndEditExecutable=false",
+    "release:win:local": "npm run prepackage && npm run build && electron-builder --win nsis --dir",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -74,6 +74,7 @@
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
+    "rcedit": "^5.0.2",
     "sharp": "^0.33.5",
     "tailwindcss": "^3.4.17",
     "to-ico": "^1.1.5",
@@ -100,9 +101,10 @@
         "to": "resources"
       }
     ],
-    "icon": "resources/icon.png",
+    "afterPack": "scripts/after-pack.mjs",
+    "icon": "icon.png",
     "win": {
-      "icon": "resources/icon.ico",
+      "icon": "icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -139,7 +141,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "SMLPOS",
       "allowElevation": true,
-      "installerIcon": "resources/icon.ico",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
       "artifactName": "SMLPOS-v${version}-Setup.${ext}"
     },
     "directories": {

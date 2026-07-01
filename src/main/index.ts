@@ -1,4 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, dialog, nativeImage } from 'electron'
+import type { NativeImage } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
@@ -140,14 +141,20 @@ function enqueueProductSnapshot(productId: unknown) {
 
 // ─── Window ───────────────────────────────────────────────────────────────────
 
-function resolveAppIcon(): string {
+function resolveAppIcon(): NativeImage | undefined {
   const candidates = [
     join(process.resourcesPath, 'resources/icon.ico'),
     join(process.resourcesPath, 'resources/icon.png'),
+    join(process.resourcesPath, 'icon.ico'),
     join(__dirname, '../../resources/icon.ico'),
     join(__dirname, '../../resources/icon.png'),
   ]
-  return candidates.find(p => existsSync(p)) ?? join(__dirname, '../../resources/icon.ico')
+  for (const iconPath of candidates) {
+    if (!existsSync(iconPath)) continue
+    const image = nativeImage.createFromPath(iconPath)
+    if (!image.isEmpty()) return image
+  }
+  return undefined
 }
 
 function createWindow(): void {
@@ -159,7 +166,7 @@ function createWindow(): void {
     minHeight: 700,
     show: false,
     autoHideMenuBar: true,
-    icon: appIcon,
+    ...(appIcon ? { icon: appIcon } : {}),
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#FFD600',
@@ -231,9 +238,9 @@ function setupIpcHandlers() {
   // App version (used in Settings / About)
   ipcMain.handle('app:version', () => app.getVersion())
 
-  ipcMain.handle('app:factoryReset', () => {
+  ipcMain.handle('app:factoryReset', async () => {
     try {
-      const result = wipeAllUserData()
+      const result = await wipeAllUserData()
       if (!result.ok) return { success: false, error: result.error ?? 'Échec réinitialisation' }
       relaunchFresh()
       return { success: true, deferred: result.deferred === true }

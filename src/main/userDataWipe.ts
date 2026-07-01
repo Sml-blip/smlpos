@@ -16,6 +16,26 @@ export function getActiveDbPath(): string {
     : join(process.cwd(), 'smlpos-dev.db')
 }
 
+/** Every SQLite path we have ever used — wipe all to avoid stale catalogs. */
+export function getAllDbCandidatePaths(): string[] {
+  const userDataDir = getUserDataDir()
+  const candidates = [
+    getActiveDbPath(),
+    join(userDataDir, 'smlpos.db'),
+    join(userDataDir, 'smlpos-dev.db'),
+    join(process.cwd(), 'smlpos-dev.db'),
+  ]
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(candidate)
+  }
+  return unique
+}
+
 export function getPackagedDbPath(): string {
   return join(getUserDataDir(), 'smlpos.db')
 }
@@ -35,20 +55,16 @@ export function applyPendingWipeBeforeDbOpen(): boolean {
   if (!existsSync(flagPath)) return false
 
   const result = deleteAllLocalDataFiles(dir)
-  try { unlinkSync(flagPath) } catch { /* ignore */ }
-
-  if (!result.ok) {
-    console.error('[wipe] Pending wipe had errors:', result.errors.join('; '))
-  } else {
+  if (result.ok) {
+    try { unlinkSync(flagPath) } catch { /* ignore */ }
     console.log('[wipe] Pending wipe applied before DB open')
+  } else {
+    console.error('[wipe] Pending wipe failed — will retry on next launch:', result.errors.join('; '))
   }
-  return true
+  return result.ok
 }
 
-export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; errors: string[] } {
-  const errors: string[] = []
-  const dbPath = getActiveDbPath()
-
+function deleteSqliteFiles(dbPath: string, errors: string[]): void {
   for (const suffix of ['', '-wal', '-shm']) {
     const p = suffix ? `${dbPath}${suffix}` : dbPath
     if (!existsSync(p)) continue
@@ -57,6 +73,37 @@ export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; err
     } catch (e) {
       errors.push(`${p}: ${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+}
+
+function deleteRendererStorage(userDataDir: string, errors: string[]): void {
+  const storageDirs = [
+    'Local Storage',
+    'Session Storage',
+    'IndexedDB',
+    'Partitions',
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'blob_storage',
+    'databases',
+  ]
+  for (const name of storageDirs) {
+    const dirPath = join(userDataDir, name)
+    if (!existsSync(dirPath)) continue
+    try {
+      rmSync(dirPath, { recursive: true, force: true })
+    } catch (e) {
+      errors.push(`${dirPath}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+}
+
+export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; errors: string[] } {
+  const errors: string[] = []
+
+  for (const dbPath of getAllDbCandidatePaths()) {
+    deleteSqliteFiles(dbPath, errors)
   }
 
   const backupDir = join(userDataDir, 'backups')
@@ -68,31 +115,17 @@ export function deleteAllLocalDataFiles(userDataDir: string): { ok: boolean; err
     }
   }
 
-  // Drop Electron renderer storage (localStorage / IndexedDB) so UI cannot show stale data
-  const partitionsDir = join(userDataDir, 'Partitions')
-  if (existsSync(partitionsDir)) {
-    try {
-      rmSync(partitionsDir, { recursive: true, force: true })
-    } catch (e) {
-      errors.push(`${partitionsDir}: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-  const localStorageDir = join(userDataDir, 'Local Storage')
-  if (existsSync(localStorageDir)) {
-    try {
-      rmSync(localStorageDir, { recursive: true, force: true })
-    } catch (e) {
-      errors.push(`${localStorageDir}: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
+  deleteRendererStorage(userDataDir, errors)
 
   return { ok: errors.length === 0, errors }
 }
 
-/** One-shot skip after factory reset — empty product catalog for first use. */
+/** Persistent after factory reset — blocks auto-seed until user imports a catalog. */
+export function shouldSkipProductSeed(): boolean {
+  return existsSync(join(getUserDataDir(), SKIP_SEED_FLAG))
+}
+
+/** @deprecated one-shot consume caused catalog to re-seed on the next app launch */
 export function consumeSkipProductSeedFlag(): boolean {
-  const flagPath = join(getUserDataDir(), SKIP_SEED_FLAG)
-  if (!existsSync(flagPath)) return false
-  try { unlinkSync(flagPath) } catch { /* ignore */ }
-  return true
+  return shouldSkipProductSeed()
 }
