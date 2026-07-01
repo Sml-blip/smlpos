@@ -1,24 +1,48 @@
 import Database from 'better-sqlite3'
-import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { seedProductsIfEmpty } from './seedProducts'
 import { applyPendingWipeBeforeDbOpen, getActiveDbPath } from './userDataWipe'
 
-applyPendingWipeBeforeDbOpen()
+let dbInstance: Database.Database | null = null
+export let dbFilePath = ''
 
-export const dbFilePath = getActiveDbPath()
-const dbPath = dbFilePath
+/** Open SQLite after any pending factory wipe — call from app.whenReady() only. */
+export function connectDatabase(): Database.Database {
+  if (dbInstance) return dbInstance
+  applyPendingWipeBeforeDbOpen()
+  dbFilePath = getActiveDbPath()
+  const dbDir = join(dbFilePath, '..')
+  if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true })
+  dbInstance = new Database(dbFilePath)
+  return dbInstance
+}
 
-const dbDir = join(dbPath, '..')
-if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true })
+export function getDb(): Database.Database {
+  if (!dbInstance) throw new Error('Database not connected — call connectDatabase() first')
+  return dbInstance
+}
 
-export const db = new Database(dbPath)
+export function closeDatabase(): void {
+  if (!dbInstance) return
+  try { dbInstance.close() } catch { /* ignore */ }
+  dbInstance = null
+}
+
+export const db = new Proxy({} as Database.Database, {
+  get(_target, prop) {
+    const inst = getDb()
+    const value = Reflect.get(inst as object, prop)
+    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(inst) : value
+  },
+})
 
 /** Bump when migrations change — logged on boot and returned by app:health */
 export const SCHEMA_VERSION = '1.9.5'
 
 export function initDatabase() {
+  const db = getDb()
+  const dbPath = dbFilePath
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
 
@@ -736,10 +760,11 @@ export function initDatabase() {
   const insertSetting = db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)`)
   for (const [k, v] of Object.entries(settingsDefaults)) insertSetting.run(k, v)
 
-  // Seed real products on first run
+  // Seed demo catalog only on genuine first install (never after factory reset)
   seedProductsIfEmpty(db)
 
   db.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('schema_version', ?, datetime('now'))`).run(SCHEMA_VERSION)
 
-  console.log(`Database initialized at: ${dbPath} (schema ${SCHEMA_VERSION})`)
+  const productCount = (db.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }).cnt
+  console.log(`Database initialized at: ${dbPath} (schema ${SCHEMA_VERSION}, ${productCount} products)`)
 }

@@ -555,6 +555,7 @@ function SecuriteSection({ values, set, toggle, appVer }: { values: Record<strin
 function FactoryResetCard() {
   const [confirm, setConfirm] = useState('')
   const [resetting, setResetting] = useState(false)
+  const [importingCatalog, setImportingCatalog] = useState(false)
 
   const handleReset = async () => {
     if (confirm !== 'REINITIALISER') return
@@ -575,6 +576,25 @@ function FactoryResetCard() {
     } catch {
       showToast('error', 'Échec de la réinitialisation')
       setResetting(false)
+    }
+  }
+
+  const handleImportDefaultCatalog = async () => {
+    const ok = window.confirm('Importer le catalogue par défaut (~1146 produits) dans l\'inventaire ?')
+    if (!ok) return
+    setImportingCatalog(true)
+    try {
+      const res = await api.importDefaultCatalog?.() as { success?: boolean; count?: number; error?: string } | undefined
+      if (res?.success) {
+        invalidateProduitsCache()
+        showToast('success', `Catalogue importé (${res.count ?? 0} produits)`)
+      } else {
+        showToast('error', res?.error ?? 'Échec import catalogue')
+      }
+    } catch {
+      showToast('error', 'Échec import catalogue')
+    } finally {
+      setImportingCatalog(false)
     }
   }
 
@@ -599,6 +619,19 @@ function FactoryResetCard() {
         >
           {resetting ? 'Réinitialisation…' : 'Effacer toutes les données et redémarrer'}
         </button>
+        <div className="mt-4 pt-4 border-t border-border">
+          <p className="text-xs text-text-secondary mb-2">
+            Après une réinitialisation, l&apos;inventaire reste vide. Importez le catalogue seulement si vous en avez besoin.
+          </p>
+          <button
+            type="button"
+            disabled={importingCatalog || !api.importDefaultCatalog}
+            onClick={handleImportDefaultCatalog}
+            className="px-4 py-2 text-sm font-semibold border border-border rounded-xl hover:bg-surface-secondary disabled:opacity-40"
+          >
+            {importingCatalog ? 'Import…' : 'Importer le catalogue par défaut (~1146 produits)'}
+          </button>
+        </div>
       </Section>
     </Card>
   )

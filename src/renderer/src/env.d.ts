@@ -9,7 +9,9 @@ interface Window {
 
     // App
     appVersion: () => Promise<string>
-    factoryReset?: () => Promise<{ success?: boolean; error?: string }>
+    factoryReset?: () => Promise<{ success?: boolean; error?: string; deferred?: boolean }>
+    resetDiagnostics?: () => Promise<Record<string, unknown>>
+    importDefaultCatalog?: () => Promise<{ success?: boolean; count?: number; error?: string }>
     updateCheck?: (manual?: boolean) => Promise<{ ok?: boolean; reason?: string }>
     updateInstall?: () => Promise<void>
     onUpdateStatus?: (callback: (status: unknown) => void) => () => void

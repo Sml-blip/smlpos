@@ -1,30 +1,52 @@
 import { app, session } from 'electron'
-import { db } from './db'
+import { existsSync, unlinkSync } from 'fs'
+import { join } from 'path'
+import { closeDatabase, getDb } from './db'
 import {
   applyPendingWipeBeforeDbOpen,
   deleteAllLocalDataFiles,
-  getUserDataDir,
+  getResetDiagnostics,
   requestWipeFlags,
 } from './userDataWipe'
 
-export { applyPendingWipeBeforeDbOpen } from './userDataWipe'
+export { applyPendingWipeBeforeDbOpen, getResetDiagnostics } from './userDataWipe'
+
+function readExternalBackupFolder(): string | null {
+  try {
+    const row = getDb().prepare(`SELECT value FROM app_settings WHERE key = 'backup_folder_path'`).get() as { value?: string } | undefined
+    const folder = row?.value?.trim()
+    return folder || null
+  } catch {
+    return null
+  }
+}
+
+function wipeExternalLatestBackup(folder: string | null): void {
+  if (!folder) return
+  for (const name of ['smlpos_latest.db', 'smlpos_latest.db-wal', 'smlpos_latest.db-shm']) {
+    const p = join(folder, name)
+    if (!existsSync(p)) continue
+    try { unlinkSync(p) } catch { /* ignore */ }
+  }
+}
 
 /** Empty every table while the DB handle is still open (fallback if file delete fails). */
 function purgeDatabaseContents(): void {
   try {
+    const db = getDb()
     const tables = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
     `).all() as { name: string }[]
 
+    db.pragma('foreign_keys = OFF')
     db.transaction(() => {
-      db.pragma('foreign_keys = OFF')
       for (const { name } of tables) {
         db.prepare(`DELETE FROM "${name}"`).run()
       }
-      db.pragma('foreign_keys = ON')
     })()
-    db.pragma('wal_checkpoint(TRUNCATE)')
+    db.pragma('foreign_keys = ON')
+    db.exec('VACUUM')
     console.log('[factoryReset] Database tables purged in-memory')
   } catch (e) {
     console.warn('[factoryReset] In-memory DB purge failed:', e)
@@ -33,8 +55,10 @@ function purgeDatabaseContents(): void {
 
 /** Close DB, delete files, relaunch. If delete fails, flag ensures wipe before DB opens next launch. */
 export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; deferred?: boolean }> {
+  const externalBackupFolder = readExternalBackupFolder()
   requestWipeFlags()
   purgeDatabaseContents()
+  wipeExternalLatestBackup(externalBackupFolder)
 
   try {
     await session.defaultSession.clearStorageData()
@@ -43,19 +67,17 @@ export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; 
   }
 
   try {
-    db.pragma('wal_checkpoint(TRUNCATE)')
+    getDb().pragma('wal_checkpoint(TRUNCATE)')
   } catch { /* ignore */ }
-  try {
-    db.close()
-  } catch { /* ignore */ }
+  closeDatabase()
 
-  const result = deleteAllLocalDataFiles(getUserDataDir())
+  const result = deleteAllLocalDataFiles()
   if (!result.ok) {
     console.warn('[factoryReset] Files still locked — wipe will run on next launch:', result.errors.join('; '))
     return { ok: true, deferred: true }
   }
 
-  console.log('[factoryReset] User data wiped:', getUserDataDir())
+  console.log('[factoryReset] User data wiped:', getResetDiagnostics())
   return { ok: true }
 }
 

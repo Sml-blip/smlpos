@@ -11,6 +11,8 @@ const api = {
   appVersion: () => ipcRenderer.invoke('app:version'),
   appHealth: () => ipcRenderer.invoke('app:health'),
   factoryReset: () => ipcRenderer.invoke('app:factoryReset'),
+  resetDiagnostics: () => ipcRenderer.invoke('app:resetDiagnostics'),
+  importDefaultCatalog: () => ipcRenderer.invoke('app:importDefaultCatalog'),
 
   // Auto-update (GitHub Releases + NSIS)
   updateCheck: (manual = false) => ipcRenderer.invoke('update:check', { manual }),

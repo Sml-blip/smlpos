@@ -4,10 +4,11 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { initDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
+import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
 import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
-import { wipeAllUserData, relaunchFresh } from './factoryReset'
+import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
+import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
@@ -209,8 +210,9 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Initialize database
+  // Initialize database (after pending factory wipe)
   try {
+    connectDatabase()
     initDatabase()
   } catch (err) {
     console.error('DB init error:', err)
@@ -244,6 +246,24 @@ function setupIpcHandlers() {
       if (!result.ok) return { success: false, error: result.error ?? 'Échec réinitialisation' }
       relaunchFresh()
       return { success: true, deferred: result.deferred === true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('app:resetDiagnostics', () => {
+    try {
+      const productCount = (db.prepare('SELECT COUNT(*) as cnt FROM produits').get() as { cnt: number }).cnt
+      return { ok: true, productCount, ...getResetDiagnostics() }
+    } catch (e) {
+      return { ok: false, error: String(e), ...getResetDiagnostics() }
+    }
+  })
+
+  ipcMain.handle('app:importDefaultCatalog', () => {
+    try {
+      const count = importDefaultProductCatalog(db)
+      return { success: true, count }
     } catch (e) {
       return { success: false, error: String(e) }
     }
