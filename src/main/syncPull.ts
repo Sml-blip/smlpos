@@ -6,6 +6,15 @@ export const LOCAL_SETTINGS_KEYS = new Set([
   'bootstrap_last_errors',
   'pull_last_at',
   'backup_folder_path',
+  'r2_enabled',
+  'r2_endpoint',
+  'r2_bucket',
+  'r2_access_key_id',
+  'r2_secret_access_key',
+  'r2_machine_id',
+  'r2_last_upload_at',
+  'r2_last_upload_key',
+  'r2_last_upload_error',
 ])
 
 const SYNC_PULL_ALLOWED = new Set([

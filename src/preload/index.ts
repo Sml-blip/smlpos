@@ -221,6 +221,13 @@ const api = {
   backupChooseExternalFolder: () => ipcRenderer.invoke('backup:chooseExternalFolder'),
   backupRestore: (backupPath: string) => ipcRenderer.invoke('backup:restore', backupPath),
   backupDiscover: () => ipcRenderer.invoke('backup:discover'),
+
+  // Cloud backup (R2)
+  r2GetStatus: () => ipcRenderer.invoke('r2:getStatus'),
+  r2ListSnapshots: () => ipcRenderer.invoke('r2:listSnapshots'),
+  r2TestConnection: () => ipcRenderer.invoke('r2:testConnection'),
+  r2UploadNow: () => ipcRenderer.invoke('r2:uploadNow'),
+  r2Restore: (key: string) => ipcRenderer.invoke('r2:restore', key),
 }
 
 if (process.contextIsolated) {

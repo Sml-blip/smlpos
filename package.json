@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.923",
+  "version": "1.9.924",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -29,6 +29,7 @@
     "url": "https://github.com/Sml-blip/smlpos.git"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1078.0",
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^3.0.0",
     "@hookform/resolvers": "^3.9.1",

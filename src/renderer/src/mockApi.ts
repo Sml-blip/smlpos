@@ -484,6 +484,24 @@ const mockApi = {
   settingsSet: async () => ({ success: true }),
   settingsSetMany: async () => ({ success: true }),
 
+  // Cloud backup (R2) — mock for browser preview
+  r2GetStatus: async () => ({
+    configured: false,
+    enabled: false,
+    machineId: 'preview-pc',
+    bucket: '',
+    endpoint: '',
+    lastUploadAt: null,
+    lastUploadKey: null,
+    lastError: null,
+    snapshotCount: 0,
+    nextUploadInMs: null,
+  }),
+  r2ListSnapshots: async () => [],
+  r2TestConnection: async () => ({ ok: false, error: 'Disponible dans l\'application Electron' }),
+  r2UploadNow: async () => ({ success: false, error: 'Disponible dans l\'application Electron' }),
+  r2Restore: async () => ({ success: false, error: 'Disponible dans l\'application Electron' }),
+
   // Caisse interne stats
   caisseInterneGetStats: async () => ({
     byAgent: [], byCategorie: [], totalEntrees: 0, totalSorties: 0,

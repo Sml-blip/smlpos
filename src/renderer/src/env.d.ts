@@ -183,6 +183,30 @@ interface Window {
     backupOpenFolder?: () => Promise<void>
     backupChooseExternalFolder?: () => Promise<{ canceled?: boolean; path?: string }>
 
+    // Cloud backup (R2)
+    r2GetStatus?: () => Promise<{
+      configured: boolean
+      enabled: boolean
+      machineId: string
+      bucket: string
+      endpoint: string
+      lastUploadAt: number | null
+      lastUploadKey: string | null
+      lastError: string | null
+      snapshotCount: number
+      nextUploadInMs: number | null
+    }>
+    r2ListSnapshots?: () => Promise<{
+      key: string
+      size: number
+      lastModified: number
+      machineId: string
+      label: string
+    }[]>
+    r2TestConnection?: () => Promise<{ ok: boolean; error?: string }>
+    r2UploadNow?: () => Promise<{ success: boolean; key?: string; skipped?: boolean; error?: string }>
+    r2Restore?: (key: string) => Promise<{ success: boolean; error?: string }>
+
     // Sync Queue
     syncQueueGetPending: () => Promise<unknown[]>
     syncQueueMarkSynced: (id: string) => Promise<unknown>

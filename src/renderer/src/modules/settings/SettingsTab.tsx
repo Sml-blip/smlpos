@@ -77,6 +77,11 @@ const DEFAULTS: Record<string, string> = {
   invoice_primary_color:  '#F59E0B',
   // Backup
   backup_folder_path:     '',
+  r2_enabled:             'true',
+  r2_endpoint:            'https://f41f0491f27adcea5c38afd25e244765.r2.cloudflarestorage.com',
+  r2_bucket:              'smlpos',
+  r2_access_key_id:       '053d5f9c1dc031fed95ded144c57eba3',
+  r2_secret_access_key:   'c2f3cc80323c8e51d69a895c7a779620db84cf97b4414fe43a21630259c0d641',
   // v1.9
   facture_vente_sequence_2026: '0',
   boutique_rib:           '',
@@ -717,6 +722,23 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   const [bootstrapDone, setBootstrapDone] = useState(false)
   const [bootstrapErrors, setBootstrapErrors] = useState<string | undefined>()
   const [syncing, setSyncing] = useState(false)
+  const [r2Status, setR2Status] = useState<{
+    configured: boolean
+    enabled: boolean
+    machineId: string
+    bucket: string
+    endpoint: string
+    lastUploadAt: number | null
+    lastError: string | null
+    snapshotCount: number
+    nextUploadInMs: number | null
+  } | null>(null)
+  const [r2Snapshots, setR2Snapshots] = useState<{ key: string; size: number; lastModified: number; label: string }[]>([])
+  const [r2Loading, setR2Loading] = useState(false)
+  const [r2Uploading, setR2Uploading] = useState(false)
+  const [r2Testing, setR2Testing] = useState(false)
+  const [showR2Secret, setShowR2Secret] = useState(false)
+  const [restoringR2, setRestoringR2] = useState<string | null>(null)
 
   const refreshSync = useCallback(async () => {
     if (!isSupabaseEnabled) return
@@ -745,6 +767,74 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   }, [api])
 
   useEffect(() => { loadStats() }, [loadStats])
+
+  const loadR2 = useCallback(async () => {
+    if (!api.r2GetStatus) return
+    setR2Loading(true)
+    const [status, snaps] = await Promise.all([
+      api.r2GetStatus().catch(() => null),
+      api.r2ListSnapshots?.().catch(() => []),
+    ])
+    if (status) setR2Status(status)
+    if (snaps) setR2Snapshots(snaps.slice(0, 720))
+    setR2Loading(false)
+  }, [api])
+
+  useEffect(() => { void loadR2() }, [loadR2])
+
+  const saveR2Config = useCallback(async (silent = false) => {
+    const action = async () => {
+      await api.settingsSetMany({
+        r2_enabled: values.r2_enabled,
+        r2_endpoint: values.r2_endpoint,
+        r2_bucket: values.r2_bucket,
+        r2_access_key_id: values.r2_access_key_id,
+        r2_secret_access_key: values.r2_secret_access_key,
+      })
+      await loadR2()
+    }
+    if (silent) {
+      await action()
+      return
+    }
+    await runAction('Configuration cloud', action, { successMessage: 'Configuration cloud enregistrée' })
+  }, [api, values.r2_enabled, values.r2_endpoint, values.r2_bucket, values.r2_access_key_id, values.r2_secret_access_key, loadR2])
+
+  const handleSaveR2 = () => saveR2Config(false)
+
+  const handleR2Test = async () => {
+    if (!api.r2TestConnection) return
+    setR2Testing(true)
+    await saveR2Config(true)
+    const r = await api.r2TestConnection()
+    setR2Testing(false)
+    if (r.ok) showToast('success', 'Connexion R2 OK')
+    else showToast('error', r.error ?? 'Connexion R2 échouée')
+  }
+
+  const handleR2Upload = async () => {
+    if (!api.r2UploadNow) return
+    setR2Uploading(true)
+    await saveR2Config(true)
+    const r = await api.r2UploadNow()
+    setR2Uploading(false)
+    if (r.success && !r.skipped) {
+      showToast('success', 'Snapshot cloud envoyé')
+      await loadR2()
+    } else if (r.skipped) {
+      showToast('info', 'Snapshot déjà envoyé cette heure')
+    } else {
+      showToast('error', r.error ?? 'Envoi cloud échoué')
+    }
+  }
+
+  const handleR2Restore = async (key: string, label: string) => {
+    if (!api.r2Restore) return
+    if (!confirm(`Restaurer le snapshot cloud "${label}" ?\n\nL'application va redémarrer.`)) return
+    setRestoringR2(key)
+    await runAction('Restauration cloud', () => api.r2Restore!(key), { silent: true })
+    setRestoringR2(null)
+  }
 
   const scanRecovery = useCallback(async () => {
     if (!api.backupDiscover) return
@@ -892,7 +982,8 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
         <CheckCircle size={15} className="text-green-600 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-green-800">
           <p className="font-bold mb-0.5">Protection des données active</p>
-          <p>Sauvegarde automatique toutes les <strong>5 minutes</strong> + à chaque fermeture, mise à jour et migration.</p>
+          <p>Sauvegarde locale toutes les <strong>5 minutes</strong> + snapshot cloud <strong>chaque heure</strong> (30 jours conservés).</p>
+          <p className="mt-1">À chaque fermeture, mise à jour et migration, une copie protégée est aussi créée.</p>
           <p className="mt-1">Archive protégée (jamais effacée par reset/mise à jour) : <code className="bg-green-100 px-1 rounded">%APPDATA%\SMLPOS-Archive\</code></p>
           <p className="mt-1">Données live : <code className="bg-green-100 px-1 rounded">%APPDATA%\SMLPOS\</code></p>
         </div>
@@ -985,6 +1076,134 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
         </Section>
       </Card>
 
+      {/* Cloudflare R2 snapshots */}
+      <Card>
+        <Section title="Snapshots cloud (Cloudflare R2)">
+          <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 flex gap-2 text-xs text-sky-900 mb-3">
+            <CloudUpload size={13} className="flex-shrink-0 mt-0.5" />
+            <span>
+              Copie horaire de la base SQLite vers le cloud. Conservation <strong>30 jours</strong> (~720 snapshots max).
+              Utile si un PC est perdu ou si Supabase et la copie locale ne suffisent pas.
+            </span>
+          </div>
+
+          {r2Status && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+              <div className="bg-muted rounded-lg px-3 py-2 text-center">
+                <p className="text-xs text-text-muted">Statut</p>
+                <p className={`font-bold text-xs mt-0.5 ${r2Status.configured && r2Status.enabled ? 'text-green-700' : 'text-orange-700'}`}>
+                  {!r2Status.configured ? 'Non configuré' : r2Status.enabled ? 'Actif' : 'Désactivé'}
+                </p>
+              </div>
+              <div className="bg-muted rounded-lg px-3 py-2 text-center">
+                <p className="text-xs text-text-muted">Dernier envoi</p>
+                <p className="font-bold text-xs mt-0.5">{fmtTime(r2Status.lastUploadAt)}</p>
+              </div>
+              <div className="bg-muted rounded-lg px-3 py-2 text-center">
+                <p className="text-xs text-text-muted">Snapshots (30j)</p>
+                <p className="font-bold text-lg">{r2Status.snapshotCount}</p>
+              </div>
+              <div className="bg-muted rounded-lg px-3 py-2 text-center">
+                <p className="text-xs text-text-muted">Prochain envoi</p>
+                <p className="font-bold text-xs mt-0.5">
+                  {r2Status.nextUploadInMs == null
+                    ? '—'
+                    : r2Status.nextUploadInMs <= 0
+                      ? 'Bientôt'
+                      : `${Math.ceil(r2Status.nextUploadInMs / 60000)} min`}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {r2Status?.lastError && (
+            <p className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3 font-mono break-all">
+              {r2Status.lastError}
+            </p>
+          )}
+
+          <Toggle label="Activer les snapshots cloud" checked={values.r2_enabled === 'true'} onChange={() => set('r2_enabled', values.r2_enabled === 'true' ? 'false' : 'true')} />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+            <Field label="Endpoint S3 R2">
+              <TextInput value={values.r2_endpoint} onChange={v => set('r2_endpoint', v)} placeholder="https://….r2.cloudflarestorage.com" />
+            </Field>
+            <Field label="Bucket">
+              <TextInput value={values.r2_bucket} onChange={v => set('r2_bucket', v)} placeholder="smlpos" />
+            </Field>
+            <Field label="Access Key ID">
+              <TextInput value={values.r2_access_key_id} onChange={v => set('r2_access_key_id', v)} placeholder="053d…" />
+            </Field>
+            <Field label="Secret Access Key">
+              <div className="relative">
+                <TextInput
+                  value={values.r2_secret_access_key}
+                  onChange={v => set('r2_secret_access_key', v)}
+                  type={showR2Secret ? 'text' : 'password'}
+                  placeholder="••••••••"
+                />
+                <button type="button" onClick={() => setShowR2Secret(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                  {showR2Secret ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+            </Field>
+          </div>
+
+          {r2Status?.machineId && (
+            <p className="text-[10px] text-text-muted mt-2 font-mono">PC : {r2Status.machineId}</p>
+          )}
+
+          <div className="flex gap-2 flex-wrap mt-3">
+            <button type="button" onClick={handleSaveR2}
+              className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
+              <Save size={12} /> Enregistrer config
+            </button>
+            <button type="button" onClick={handleR2Test} disabled={r2Testing}
+              className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
+              <CheckCircle size={12} className={r2Testing ? 'animate-pulse' : ''} /> Tester connexion
+            </button>
+            <button type="button" onClick={handleR2Upload} disabled={r2Uploading}
+              className="flex items-center gap-1.5 px-3 py-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 rounded-lg text-xs font-bold">
+              <CloudUpload size={12} className={r2Uploading ? 'animate-pulse' : ''} /> {r2Uploading ? 'Envoi…' : 'Envoyer maintenant'}
+            </button>
+            <button type="button" onClick={() => void loadR2()} disabled={r2Loading}
+              className="flex items-center gap-1.5 px-3 py-2 bg-muted hover:bg-border rounded-lg text-xs font-semibold">
+              <RefreshCw size={12} className={r2Loading ? 'animate-spin' : ''} /> Actualiser liste
+            </button>
+          </div>
+
+          {r2Snapshots.length > 0 ? (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-text-secondary mb-2">
+                Snapshots cloud ({r2Snapshots.length} — dernières 30 jours) :
+              </p>
+              <div className="space-y-1 max-h-56 overflow-y-auto">
+                {r2Snapshots.map(s => (
+                  <div key={s.key} className="flex items-center gap-2 text-xs bg-muted rounded-lg px-3 py-1.5">
+                    <CloudUpload size={11} className="text-sky-600 flex-shrink-0" />
+                    <span className="flex-1 font-semibold truncate">{s.label}</span>
+                    <span className="text-text-muted flex-shrink-0">{fmt(s.size)}</span>
+                    <span className="text-text-muted flex-shrink-0 hidden sm:inline">{fmtTime(s.lastModified)}</span>
+                    <button type="button" onClick={() => handleR2Restore(s.key, s.label)}
+                      disabled={restoringR2 === s.key}
+                      className="flex items-center gap-1 px-2 py-0.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded font-semibold flex-shrink-0">
+                      <RotateCcw size={9} /> Restaurer
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-text-muted mt-3">
+              {r2Status?.configured
+                ? 'Aucun snapshot cloud pour ce PC. Cliquez « Envoyer maintenant » ou attendez la prochaine sauvegarde horaire.'
+                : 'Renseignez les clés R2 puis enregistrez pour activer les snapshots horaires.'}
+            </p>
+          )}
+        </Section>
+      </Card>
+
       {/* Supabase migration */}
       <Card>
         <Section title="Créer les tables Supabase (sync cloud)">
@@ -1022,8 +1241,12 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
               <span className="font-semibold text-green-700">✓ Sauvegarde automatique</span>
             </div>
             <div className="flex items-center justify-between py-1.5 border-b border-border">
-              <span className="flex items-center gap-2 text-text-secondary"><HardDrive size={12} /> Fichiers conservés</span>
-              <span className="font-semibold">20 dernières sauvegardes</span>
+              <span className="flex items-center gap-2 text-text-secondary"><Clock size={12} /> Cloud R2 (horaire)</span>
+              <span className="font-semibold text-green-700">✓ 30 jours conservés</span>
+            </div>
+            <div className="flex items-center justify-between py-1.5 border-b border-border">
+              <span className="flex items-center gap-2 text-text-secondary"><HardDrive size={12} /> Fichiers locaux</span>
+              <span className="font-semibold">30 dernières sauvegardes</span>
             </div>
             <div className="flex items-center justify-between py-1.5">
               <span className="flex items-center gap-2 text-text-secondary"><Database size={12} /> Chemin DB</span>

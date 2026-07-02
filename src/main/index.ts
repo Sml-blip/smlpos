@@ -12,6 +12,14 @@ import { discoverRecoverableDatabases } from './userDataWipe'
 import { applyRemoteRows, getLocalTableCount, isPullTableAllowed, LOCAL_SETTINGS_KEYS } from './syncPull'
 import { bootstrapCanonicalUserDataPath, getArchiveDir } from './dataPaths'
 import { createProtectedBackup, copyToExternalFolder, getBackupDir } from './backupService'
+import {
+  downloadR2Snapshot,
+  getR2Status,
+  listR2Snapshots,
+  startR2BackupScheduler,
+  testR2Connection,
+  uploadR2Snapshot,
+} from './r2BackupService'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -206,6 +214,7 @@ app.whenReady().then(() => {
   }
 
   startAutoBackup()
+  startR2BackupScheduler()
   setupIpcHandlers()
   createWindow()
   setupAutoUpdater(() => mainWindow)
@@ -2526,6 +2535,27 @@ function setupIpcHandlers() {
       return { success: true, activeCount, activeDbPath: dbFilePath, candidates }
     } catch (e) {
       return { success: false, error: String(e), candidates: [] as unknown[] }
+    }
+  })
+
+  // ─── Cloud backup (Cloudflare R2) ─────────────────────────────────────────────
+  ipcMain.handle('r2:getStatus', () => getR2Status())
+  ipcMain.handle('r2:listSnapshots', () => listR2Snapshots())
+  ipcMain.handle('r2:testConnection', () => testR2Connection())
+  ipcMain.handle('r2:uploadNow', () => uploadR2Snapshot(true))
+  ipcMain.handle('r2:restore', async (_e, key: string) => {
+    try {
+      const dl = await downloadR2Snapshot(key)
+      if (!dl.success || !dl.path) return { success: false, error: dl.error ?? 'Téléchargement échoué' }
+      if (!existsSync(dl.path)) return { success: false, error: 'Fichier introuvable' }
+      createProtectedBackup('auto_recover')
+      db.close()
+      copyFileSync(dl.path, dbFilePath)
+      app.relaunch()
+      app.exit(0)
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
     }
   })
 }
