@@ -7,10 +7,10 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
 import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
-import { wipeAllUserData, relaunchFresh, getResetDiagnostics, requestWipeFlags } from './factoryReset'
+import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
 import { discoverRecoverableDatabases } from './userDataWipe'
-import { bootstrapCanonicalUserDataPath } from './dataPaths'
-import { createLocalBackup, copyToExternalFolder, getBackupDir } from './backupService'
+import { bootstrapCanonicalUserDataPath, getArchiveDir } from './dataPaths'
+import { createProtectedBackup, copyToExternalFolder, getBackupDir } from './backupService'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -25,21 +25,17 @@ let mainWindow: BrowserWindow | null = null
 let _backupInterval: ReturnType<typeof setInterval> | null = null
 
 function startAutoBackup() {
-  // Startup backup — protects data before anything writes
   setTimeout(() => {
-    const r = createLocalBackup()
+    const r = createProtectedBackup('startup')
     if (r) {
-      copyToExternalFolder(r.path)
+      copyToExternalFolder(r.archivePath)
       console.log('[backup] Startup backup:', r.filename)
     }
   }, 3000)
 
-  // Then every 5 minutes
   _backupInterval = setInterval(() => {
-    const r = createLocalBackup()
-    if (r) {
-      copyToExternalFolder(r.path)
-    }
+    const r = createProtectedBackup('scheduled')
+    if (r) copyToExternalFolder(r.archivePath)
   }, 5 * 60 * 1000)
 }
 
@@ -197,7 +193,7 @@ app.whenReady().then(() => {
     connectDatabase()
     try {
       if (existsSync(dbFilePath)) {
-        const r = createLocalBackup()
+        const r = createProtectedBackup('pre_migration')
         if (r) console.log('[backup] Pre-migration safety backup:', r.filename)
       }
     } catch (e) {
@@ -216,6 +212,10 @@ app.whenReady().then(() => {
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  createProtectedBackup('quit')
 })
 
 app.on('window-all-closed', () => {
@@ -237,8 +237,8 @@ function setupIpcHandlers() {
       setImmediate(() => relaunchFresh())
       return { success: true, deferred: result.deferred === true }
     } catch (e) {
-      console.error('[factoryReset] Wipe error — relaunching with deferred wipe:', e)
-      try { requestWipeFlags() } catch { /* ignore */ }
+      console.error('[factoryReset] Reset error — relaunching:', e)
+      try { createProtectedBackup('pre_reset') } catch { /* ignore */ }
       setImmediate(() => relaunchFresh())
       return { success: true, deferred: true, error: String(e) }
     }
@@ -2369,10 +2369,10 @@ function setupIpcHandlers() {
 
   // ─── Backup ───────────────────────────────────────────────────────────────────
   ipcMain.handle('backup:create', () => {
-    const r = createLocalBackup()
+    const r = createProtectedBackup('scheduled')
     if (!r) return { success: false, error: 'Backup failed' }
-    const external = copyToExternalFolder(r.path)
-    return { success: true, filename: r.filename, path: r.path, external }
+    const external = copyToExternalFolder(r.archivePath)
+    return { success: true, filename: r.filename, path: r.path, archivePath: r.archivePath, external }
   })
 
   ipcMain.handle('backup:list', () => {
@@ -2398,7 +2398,7 @@ function setupIpcHandlers() {
       try { return acc + statSync(join(backupDir, f)).size } catch { return acc }
     }, 0)
     const dbSize = existsSync(dbFilePath) ? statSync(dbFilePath).size : 0
-    return { count: files.length, lastTime, totalSize, dbSize, dbPath: dbFilePath, backupDir }
+    return { count: files.length, lastTime, totalSize, dbSize, dbPath: dbFilePath, backupDir, archiveDir: getArchiveDir() }
   })
 
   ipcMain.handle('backup:openFolder', () => {
@@ -2418,7 +2418,7 @@ function setupIpcHandlers() {
     try {
       if (!existsSync(backupPath)) return { success: false, error: 'Fichier introuvable' }
       // Safety: backup current state first
-      createLocalBackup()
+      createProtectedBackup('auto_recover')
       // Close DB, copy, then restart
       db.close()
       copyFileSync(backupPath, dbFilePath)

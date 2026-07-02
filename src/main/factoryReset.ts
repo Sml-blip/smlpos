@@ -1,34 +1,14 @@
 import { app } from 'electron'
-import { existsSync, unlinkSync } from 'fs'
-import { join } from 'path'
 import { closeDatabase, getDb } from './db'
+import { createProtectedBackup } from './backupService'
 import {
   applyPendingWipeBeforeDbOpen,
   deleteAllLocalDataFiles,
   getResetDiagnostics,
-  requestWipeFlags,
+  markFactoryResetState,
 } from './userDataWipe'
 
-export { applyPendingWipeBeforeDbOpen, getResetDiagnostics, requestWipeFlags } from './userDataWipe'
-
-function readExternalBackupFolder(): string | null {
-  try {
-    const row = getDb().prepare(`SELECT value FROM app_settings WHERE key = 'backup_folder_path'`).get() as { value?: string } | undefined
-    const folder = row?.value?.trim()
-    return folder || null
-  } catch {
-    return null
-  }
-}
-
-function wipeExternalLatestBackup(folder: string | null): void {
-  if (!folder) return
-  for (const name of ['smlpos_latest.db', 'smlpos_latest.db-wal', 'smlpos_latest.db-shm']) {
-    const p = join(folder, name)
-    if (!existsSync(p)) continue
-    try { unlinkSync(p) } catch { /* ignore */ }
-  }
-}
+export { applyPendingWipeBeforeDbOpen, getResetDiagnostics } from './userDataWipe'
 
 /** Fast in-memory purge — no VACUUM (that can freeze the UI for minutes). */
 function purgeDatabaseContents(): void {
@@ -54,32 +34,26 @@ function purgeDatabaseContents(): void {
 }
 
 /**
- * Factory reset must finish quickly and always relaunch.
- * Do NOT call session.clearStorageData() here — it often hangs while the renderer is alive.
- * Renderer storage dirs are deleted in deleteAllLocalDataFiles / pending wipe on next boot.
+ * Factory reset: archive first, purge tables in place, clear UI cache only.
+ * Never deletes backup files or the immutable archive folder.
  */
 export async function wipeAllUserData(): Promise<{ ok: boolean; error?: string; deferred?: boolean }> {
-  const externalBackupFolder = readExternalBackupFolder()
-  requestWipeFlags()
+  createProtectedBackup('pre_reset')
   purgeDatabaseContents()
-  wipeExternalLatestBackup(externalBackupFolder)
+  markFactoryResetState(app.getVersion())
 
   try {
     getDb().pragma('wal_checkpoint(TRUNCATE)')
   } catch { /* ignore */ }
-  closeDatabase()
 
   const result = deleteAllLocalDataFiles()
-  if (!result.ok) {
-    console.warn('[factoryReset] Files still locked — wipe will run on next launch:', result.errors.join('; '))
-    return { ok: true, deferred: true }
-  }
+  closeDatabase()
 
-  console.log('[factoryReset] User data wiped:', getResetDiagnostics())
-  return { ok: true }
+  console.log('[factoryReset] Reset complete — archive preserved:', getResetDiagnostics())
+  return { ok: true, deferred: !result.ok }
 }
 
 export function relaunchFresh(): void {
-  app.relaunch({ args: process.argv.slice(1).concat(['--smlpos-factory-reset']) })
+  app.relaunch()
   app.exit(0)
 }

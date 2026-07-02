@@ -1,10 +1,31 @@
 import { app } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { getCanonicalBackupDir, getCanonicalDbPath } from './dataPaths'
+import { getArchiveDir, getCanonicalBackupDir, getCanonicalDbPath } from './dataPaths'
 import { getDb, dbFilePath } from './db'
 
-const MAX_LOCAL_BACKUPS = 20
+const MAX_LOCAL_BACKUPS = 30
+const MAX_ARCHIVE_SCHEDULED = 80
+
+export type BackupReason =
+  | 'scheduled'
+  | 'startup'
+  | 'pre_migration'
+  | 'pre_update'
+  | 'pre_reset'
+  | 'quit'
+  | 'legacy_wipe'
+  | 'auto_recover'
+
+/** Critical backups are never auto-deleted from the archive. */
+const PROTECTED_ARCHIVE_PREFIXES = [
+  'smlpos_pre_reset_',
+  'smlpos_pre_update_',
+  'smlpos_pre_migration_',
+  'smlpos_quit_',
+  'smlpos_legacy_wipe_',
+  'smlpos_auto_recover_',
+]
 
 export function getBackupDir(): string {
   if (app.isPackaged) return getCanonicalBackupDir()
@@ -21,54 +42,92 @@ export function resolveLiveDbPath(): string {
   }
 }
 
-export function createLocalBackup(): { path: string; filename: string } | null {
+function timestampSlug(): string {
+  return new Date().toISOString().replace(/:/g, '-').replace('T', '_').slice(0, 19)
+}
+
+function checkpointIfPossible(): void {
+  try {
+    getDb().pragma('wal_checkpoint(FULL)')
+  } catch {
+    // DB may not be open — file copy still captures committed pages
+  }
+}
+
+function pruneRotatingBackups(dir: string, maxFiles: number, protectedPrefixes: string[]): void {
+  if (!existsSync(dir)) return
+  try {
+    const files = readdirSync(dir)
+      .filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
+      .filter(f => !protectedPrefixes.some(p => f.startsWith(p)))
+      .map(f => ({ name: f, time: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time)
+    files.slice(maxFiles).forEach(({ name }) => {
+      try { unlinkSync(join(dir, name)) } catch { /* ignore */ }
+    })
+  } catch { /* ignore */ }
+}
+
+/**
+ * Copy live DB to archive + local backups (+ external if configured).
+ * Archive copies are the last line of defence — never deleted by factory reset.
+ */
+export function createProtectedBackup(reason: BackupReason): {
+  path: string
+  filename: string
+  archivePath: string
+} | null {
   try {
     const liveDb = resolveLiveDbPath()
     if (!existsSync(liveDb)) return null
 
-    const backupDir = getBackupDir()
-    const ts = new Date().toISOString().replace(/:/g, '-').replace('T', '_').slice(0, 19)
-    const filename = `smlpos_${ts}.db`
-    const backupPath = join(backupDir, filename)
+    checkpointIfPossible()
 
-    try {
-      getDb().pragma('wal_checkpoint(FULL)')
-    } catch {
-      // DB may not be open yet — file copy still captures committed pages
-    }
-    copyFileSync(liveDb, backupPath)
+    const ts = timestampSlug()
+    const filename = `smlpos_${reason}_${ts}.db`
+    const archivePath = join(getArchiveDir(), filename)
+    const localPath = join(getBackupDir(), filename)
 
-    const files = readdirSync(backupDir)
-      .filter(f => f.startsWith('smlpos_') && f.endsWith('.db'))
-      .map(f => ({ name: f, time: statSync(join(backupDir, f)).mtimeMs }))
-      .sort((a, b) => b.time - a.time)
-    files.slice(MAX_LOCAL_BACKUPS).forEach(({ name }) => {
-      try { unlinkSync(join(backupDir, name)) } catch { /* ignore */ }
-    })
+    copyFileSync(liveDb, archivePath)
+    copyFileSync(liveDb, localPath)
 
-    return { path: backupPath, filename }
+    copyToExternalFolder(archivePath)
+
+    pruneRotatingBackups(getBackupDir(), MAX_LOCAL_BACKUPS, PROTECTED_ARCHIVE_PREFIXES)
+    pruneRotatingBackups(getArchiveDir(), MAX_ARCHIVE_SCHEDULED, PROTECTED_ARCHIVE_PREFIXES)
+
+    console.log(`[backup] Protected backup (${reason}): ${filename}`)
+    return { path: localPath, filename, archivePath }
   } catch (e) {
-    console.warn('[backup] Local backup failed:', e)
+    console.warn(`[backup] Protected backup failed (${reason}):`, e)
     return null
   }
 }
 
-/** Called before auto-update install — never skip even if DB handle is busy. */
-export function createEmergencyBackup(): { path: string; filename: string } | null {
+/** Raw file copy when DB handle is unavailable (boot / legacy wipe flag). */
+export function archiveLiveDbFileCopy(reason: BackupReason): string | null {
   try {
     const liveDb = resolveLiveDbPath()
     if (!existsSync(liveDb)) return null
-    const backupDir = getBackupDir()
-    const ts = new Date().toISOString().replace(/:/g, '-').replace('T', '_').slice(0, 19)
-    const filename = `smlpos_pre_update_${ts}.db`
-    const backupPath = join(backupDir, filename)
-    copyFileSync(liveDb, backupPath)
-    console.log('[backup] Pre-update emergency backup:', filename)
-    return { path: backupPath, filename }
+    const filename = `smlpos_${reason}_${timestampSlug()}.db`
+    const archivePath = join(getArchiveDir(), filename)
+    copyFileSync(liveDb, archivePath)
+    console.log(`[backup] Archive copy (${reason}): ${filename}`)
+    return archivePath
   } catch (e) {
-    console.warn('[backup] Pre-update backup failed:', e)
+    console.warn(`[backup] Archive copy failed (${reason}):`, e)
     return null
   }
+}
+
+export function createLocalBackup(): { path: string; filename: string } | null {
+  const r = createProtectedBackup('scheduled')
+  return r ? { path: r.path, filename: r.filename } : null
+}
+
+export function createEmergencyBackup(): { path: string; filename: string } | null {
+  const r = createProtectedBackup('pre_update')
+  return r ? { path: r.path, filename: r.filename } : null
 }
 
 export function copyToExternalFolder(localPath: string, externalFolder?: string | null): boolean {
@@ -91,4 +150,9 @@ export function copyToExternalFolder(localPath: string, externalFolder?: string 
     console.warn('[backup] External copy failed:', e)
     return false
   }
+}
+
+/** All directories scanned for recovery (archive first). */
+export function getProtectedBackupScanDirs(): string[] {
+  return [getArchiveDir(), getBackupDir()]
 }

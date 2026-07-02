@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, w
 import { homedir } from 'os'
 import { join } from 'path'
 import { countProductsInDbFile } from './dbProbe'
-import { getCanonicalDbPath, getCanonicalUserDataPath, getLegacyUserDataDirs } from './dataPaths'
+import { getCanonicalDbPath, getCanonicalUserDataPath, getLegacyUserDataDirs, getArchiveDir, archiveDbFileCopy, collectBackupDbPaths } from './dataPaths'
 
 export const WIPE_FLAG = '.wipe-requested'
 export const SKIP_SEED_FLAG = '.skip-product-seed'
@@ -89,10 +89,10 @@ export function markFactoryResetState(appVersion?: string): void {
   const payload = JSON.stringify(state, null, 2)
   writeFileToAllUserDataDirs(RESET_STATE_FILE, payload)
   writeFileToAllUserDataDirs(SKIP_SEED_FLAG, '1')
-  writeFileToAllUserDataDirs(WIPE_FLAG, state.factoryResetAt)
+  // Never set WIPE_FLAG — deferred wipes caused data loss on update/relaunch.
 }
 
-/** Mark next launch (and current exit) for a full local data wipe. */
+/** @deprecated Do not use — wipe flags caused data loss. Kept for API compat. */
 export function requestWipeFlags(): void {
   markFactoryResetState(app.getVersion())
 }
@@ -117,17 +117,8 @@ export function recoverLegacyDatabaseIfNeeded(): { recovered: boolean; from?: st
   if (activeCount !== null && activeCount > 0) return { recovered: false }
 
   const scanPaths = new Set<string>()
+  for (const p of collectBackupDbPaths()) scanPaths.add(p)
   for (const p of getAllDbCandidatePaths()) scanPaths.add(p)
-
-  for (const dir of getUserDataDirCandidates()) {
-    const backupDir = join(dir, 'backups')
-    if (!existsSync(backupDir)) continue
-    try {
-      for (const f of readdirSync(backupDir)) {
-        if (f.startsWith('smlpos_') && f.endsWith('.db')) scanPaths.add(join(backupDir, f))
-      }
-    } catch { /* ignore */ }
-  }
 
   let best: { path: string; count: number; mtime: number } | null = null
   for (const candidate of scanPaths) {
@@ -166,18 +157,18 @@ export function discoverRecoverableDatabases(externalFolder?: string | null): Ar
   productCount: number
   size: number
   mtime: number
-  source: 'active' | 'legacy' | 'backup' | 'external'
+  source: 'active' | 'legacy' | 'backup' | 'external' | 'archive'
 }> {
   const results: Array<{
     path: string
     productCount: number
     size: number
     mtime: number
-    source: 'active' | 'legacy' | 'backup' | 'external'
+    source: 'active' | 'legacy' | 'backup' | 'external' | 'archive'
   }> = []
   const seen = new Set<string>()
 
-  const add = (dbPath: string, source: 'active' | 'legacy' | 'backup' | 'external') => {
+  const add = (dbPath: string, source: 'active' | 'legacy' | 'backup' | 'external' | 'archive') => {
     const key = dbPath.toLowerCase()
     if (seen.has(key) || !existsSync(dbPath)) return
     seen.add(key)
@@ -194,17 +185,11 @@ export function discoverRecoverableDatabases(externalFolder?: string | null): Ar
   }
 
   add(getActiveDbPath(), 'active')
-  for (const p of getAllDbCandidatePaths()) add(p, 'legacy')
-
-  for (const dir of getUserDataDirCandidates()) {
-    const backupDir = join(dir, 'backups')
-    if (!existsSync(backupDir)) continue
-    try {
-      for (const f of readdirSync(backupDir)) {
-        if (f.startsWith('smlpos_') && f.endsWith('.db')) add(join(backupDir, f), 'backup')
-      }
-    } catch { /* ignore */ }
+  const archiveRoot = getArchiveDir().toLowerCase()
+  for (const p of collectBackupDbPaths()) {
+    add(p, p.toLowerCase().startsWith(archiveRoot) ? 'archive' : 'backup')
   }
+  for (const p of getAllDbCandidatePaths()) add(p, 'legacy')
 
   const ext = externalFolder?.trim()
   if (ext && existsSync(ext)) {
@@ -218,29 +203,29 @@ export function discoverRecoverableDatabases(externalFolder?: string | null): Ar
   return results.sort((a, b) => b.mtime - a.mtime)
 }
 
-/** Run before SQLite opens — deletes DB even if previous wipe could not close the handle. */
+/** Legacy wipe flags from old builds — archive then clear flag; NEVER delete database files. */
 export function applyPendingWipeBeforeDbOpen(): boolean {
-  let shouldWipe = false
+  let shouldClear = false
   for (const dir of getUserDataDirCandidates()) {
     if (existsSync(join(dir, WIPE_FLAG))) {
-      shouldWipe = true
+      shouldClear = true
       break
     }
   }
-  if (!shouldWipe) return false
+  if (!shouldClear) return false
 
-  const result = deleteAllLocalDataFiles()
-  if (result.ok) {
-    for (const dir of getUserDataDirCandidates()) {
-      const flagPath = join(dir, WIPE_FLAG)
-      if (!existsSync(flagPath)) continue
-      try { unlinkSync(flagPath) } catch { /* ignore */ }
-    }
-    console.log('[wipe] Pending wipe applied before DB open')
-  } else {
-    console.error('[wipe] Pending wipe failed — will retry on next launch:', result.errors.join('; '))
+  const liveDb = getActiveDbPath()
+  if (existsSync(liveDb)) {
+    archiveDbFileCopy(liveDb, 'legacy_wipe')
   }
-  return result.ok
+
+  for (const dir of getUserDataDirCandidates()) {
+    const flagPath = join(dir, WIPE_FLAG)
+    if (!existsSync(flagPath)) continue
+    try { unlinkSync(flagPath) } catch { /* ignore */ }
+  }
+  console.log('[wipe] Legacy wipe flag cleared — database preserved, copy saved to archive')
+  return true
 }
 
 function deleteSqliteFiles(dbPath: string, errors: string[]): void {
@@ -280,10 +265,12 @@ function deleteRendererStorage(userDataDir: string, errors: string[]): void {
 
 export function deleteAllLocalDataFiles(userDataDir?: string): { ok: boolean; errors: string[] } {
   const errors: string[] = []
+  const liveDb = getActiveDbPath()
+  if (existsSync(liveDb)) {
+    archiveDbFileCopy(liveDb, 'pre_reset')
+  }
 
-  // Factory reset clears the live DB only — backups/ and smlpos_*.db archives are NEVER deleted here.
-  deleteSqliteFiles(getActiveDbPath(), errors)
-
+  // Only clear renderer cache — never delete smlpos.db or backups/ (data lives in archive).
   const dirsToClean = userDataDir ? [userDataDir] : [getUserDataDir()]
   for (const dir of dirsToClean) {
     deleteRendererStorage(dir, errors)

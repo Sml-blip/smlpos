@@ -891,7 +891,9 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
         <CheckCircle size={15} className="text-green-600 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-green-800">
           <p className="font-bold mb-0.5">Protection des données active</p>
-          <p>Sauvegarde automatique toutes les <strong>5 minutes</strong> dans le dossier userData. En cas de réinstallation, la base de données est préservée car stockée dans <code className="bg-green-100 px-1 rounded">AppData\Roaming\SMLPOS\</code>.</p>
+          <p>Sauvegarde automatique toutes les <strong>5 minutes</strong> + à chaque fermeture, mise à jour et migration.</p>
+          <p className="mt-1">Archive protégée (jamais effacée par reset/mise à jour) : <code className="bg-green-100 px-1 rounded">%APPDATA%\SMLPOS-Archive\</code></p>
+          <p className="mt-1">Données live : <code className="bg-green-100 px-1 rounded">%APPDATA%\SMLPOS\</code></p>
         </div>
       </div>
 
