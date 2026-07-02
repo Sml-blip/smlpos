@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/appStore'
 import type { TypeAppareil, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReparationNumber } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
+import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { printLabelHtml } from '../../lib/nativePrint'
 import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench, AlertTriangle } from 'lucide-react'
 
@@ -133,8 +134,7 @@ function DegatPriceModal({
 
 export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const { currentShift } = useAppStore()
-  const [clientNom, setClientNom] = useState('')
-  const [clientTel, setClientTel] = useState('')
+  const [clientForm, setClientForm] = useState<ClientFormValue>(emptyClientForm())
   const [typeAppareil, setTypeAppareil] = useState<TypeAppareil>('SMARTPHONE')
   const [marque, setMarque] = useState('')
   const [modele, setModele] = useState('')
@@ -210,8 +210,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         numero,
         shift_id: currentShift?.id ?? null,
         operateur_nom: currentShift?.operateur_nom ?? null,
-        client_nom: clientNom || null,
-        client_tel: clientTel || null,
+        client_nom: clientForm.nom || null,
+        client_tel: clientForm.tel || null,
         type_appareil: typeAppareil,
         marque: marque || null,
         modele: modele || null,
@@ -280,16 +280,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-6 space-y-5">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Nom client</label>
-              <input value={clientNom} onChange={e => setClientNom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Téléphone</label>
-              <input value={clientTel} onChange={e => setClientTel(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
-            </div>
-          </div>
+          <ClientPicker compact value={clientForm} onChange={setClientForm} />
 
           <div>
             <label className="block text-xs font-semibold text-text-secondary mb-2">Type d&apos;appareil</label>
@@ -388,7 +379,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Annuler</button>
           <button type="button" onClick={() => printFicheReparation({
-            numero: 'BROUILLON', clientNom, clientTel, typeAppareil, marque, modele, panne,
+            numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne,
             pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, prix_unitaire: p.prix_unitaire, destock: p.destock_stock })),
             piecesAchat, totalFinal: totalFinalNum, acompte: acompteNum, benefice,
           })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">

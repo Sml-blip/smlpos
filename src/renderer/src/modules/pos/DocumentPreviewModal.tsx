@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
-import { generateId, cn } from '../../lib/utils'
+import { generateId } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { X, Printer, CheckCircle, FileText, Edit2, Plus, Trash2 } from 'lucide-react'
 import InvoicePrintTemplate from '../../components/InvoicePrintTemplate'
@@ -13,6 +13,7 @@ import {
   recalcInvoiceLineFromHtUnit,
   sumInvoiceLines,
 } from '../../lib/invoiceLineCalc'
+import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 
 const api = window.api
 
@@ -26,6 +27,7 @@ interface Props {
   initialClientTel?: string
   initialClientAdresse?: string
   initialClientMatricule?: string
+  initialClientId?: string
   onClose: () => void
   onSuccess: () => void
 }
@@ -34,13 +36,17 @@ export default function DocumentPreviewModal({
   items, vente, typeVente,
   initialClientNom = '', initialClientTel = '',
   initialClientAdresse = '', initialClientMatricule = '',
+  initialClientId,
   onClose, onSuccess,
 }: Props) {
   const { currentShift } = useAppStore()
-  const [clientNom, setClientNom] = useState(initialClientNom)
-  const [clientTel, setClientTel] = useState(initialClientTel)
-  const [clientAdresse, setClientAdresse] = useState(initialClientAdresse)
-  const [clientMatricule, setClientMatricule] = useState(initialClientMatricule)
+  const [clientForm, setClientForm] = useState<ClientFormValue>({
+    clientId: initialClientId,
+    nom: initialClientNom,
+    tel: initialClientTel,
+    adresse: initialClientAdresse,
+    matricule: initialClientMatricule,
+  })
   const [settings, setSettings] = useState<InvoiceCompanySettings>({})
   const [loading, setLoading] = useState(false)
   const [docCreated, setDocCreated] = useState(false)
@@ -49,8 +55,6 @@ export default function DocumentPreviewModal({
   const [editLinesMode, setEditLinesMode] = useState(false)
   const [editableLignes, setEditableLignes] = useState<InvoiceLineData[]>([])
   const [showPrintDialog, setShowPrintDialog] = useState(false)
-  const [serialOptions, setSerialOptions] = useState<Record<string, string[]>>({})
-  const [selectedSerials, setSelectedSerials] = useState<Record<string, string[]>>({})
   const previewRef = useRef<HTMLDivElement>(null)
 
   const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
@@ -66,7 +70,6 @@ export default function DocumentPreviewModal({
 
   const buildLineFromCart = useCallback((item: CartItem, idx: number): InvoiceLineData => {
     const tvaRate = item.type_produit === 'F' ? (item.tva_taux ?? defaultTva) : 0
-    const sns = item.produit_id ? selectedSerials[item.produit_id] : undefined
     return buildInvoiceLineFromCart({
       id: item.produit_id || `line-${idx}`,
       designation: item.designation,
@@ -74,9 +77,9 @@ export default function DocumentPreviewModal({
       prix_unitaire_ttc: item.prix_unitaire,
       remise_pct: item.remise_pct || 0,
       tva_taux: tvaRate,
-      numero_serie: sns?.length ? sns.join(', ') : null,
+      numero_serie: item.numero_serie ?? null,
     })
-  }, [defaultTva, selectedSerials])
+  }, [defaultTva])
 
   const docLignes: InvoiceLineData[] = useMemo(() => {
     if (docId || editLinesMode) return editableLignes
@@ -88,17 +91,17 @@ export default function DocumentPreviewModal({
   const previewDoc: InvoiceDocData = useMemo(() => applyTotalsToDoc({
     numero: docNumero || '—',
     type_document: typeDoc,
-    client_nom: clientNom || 'Client Passager',
-    client_tel: clientTel || null,
-    client_adresse: clientAdresse || null,
-    client_matricule: clientMatricule || null,
+    client_nom: clientForm.nom || 'Client Passager',
+    client_tel: clientForm.tel || null,
+    client_adresse: clientForm.adresse || null,
+    client_matricule: clientForm.matricule || null,
     total_ht: lineSums.total_ht,
     total_tva: lineSums.total_tva,
     total_ttc: lineSums.total_ttc,
     statut_paiement: 'PAYE',
     created_at: vente.created_at || new Date().toISOString(),
     timbre: settings.invoice_timbre_fiscal !== 'false' ? 1 : 0,
-  }, docLignes), [docNumero, typeDoc, clientNom, clientTel, clientAdresse, clientMatricule, lineSums, vente.created_at, settings.invoice_timbre_fiscal, docLignes])
+  }, docLignes), [docNumero, typeDoc, clientForm, lineSums, vente.created_at, settings.invoice_timbre_fiscal, docLignes])
 
   const totalTTC = lineSums.total_ttc
 
@@ -107,52 +110,6 @@ export default function DocumentPreviewModal({
       if (s) setSettings((s as InvoiceCompanySettings) || {})
     })
   }, [])
-
-  useEffect(() => {
-    const loadSerials = async () => {
-      const qtyByProduit = new Map<string, number>()
-      for (const item of lignesItems) {
-        if (!item.produit_id) continue
-        qtyByProduit.set(item.produit_id, (qtyByProduit.get(item.produit_id) ?? 0) + item.quantite)
-      }
-
-      const optionEntries: [string, string[]][] = []
-      const selectedEntries: [string, string[]][] = []
-
-      await Promise.all(
-        Array.from(qtyByProduit.entries()).map(async ([produitId, qty]) => {
-          const sold = await api.serialNumbersGetByProduit(produitId) as { numero_serie: string; statut: string; vente_id?: string }[]
-          const forVente = sold.filter(s => s.statut === 'VENDU' && s.vente_id === vente.id).map(s => s.numero_serie)
-          const pending = sold.filter(s => s.statut === 'EN_STOCK').map(s => s.numero_serie)
-          const sns = forVente.length ? forVente : pending
-          optionEntries.push([produitId, sns])
-          selectedEntries.push([produitId, sns.slice(0, qty)])
-        }),
-      )
-
-      setSerialOptions(Object.fromEntries(optionEntries))
-      setSelectedSerials(prev => {
-        const next: Record<string, string[]> = {}
-        for (const [pid, sns] of selectedEntries) {
-          const kept = prev[pid]?.filter(sn => sns.includes(sn)) ?? []
-          next[pid] = kept.length ? kept.slice(0, qtyByProduit.get(pid) ?? kept.length) : sns
-        }
-        return next
-      })
-    }
-    void loadSerials()
-  }, [lignesItems, vente.id])
-
-  const toggleSerial = (produitId: string, sn: string, maxQty: number) => {
-    setSelectedSerials(prev => {
-      const current = prev[produitId] ?? []
-      if (current.includes(sn)) {
-        return { ...prev, [produitId]: current.filter(s => s !== sn) }
-      }
-      if (current.length >= maxQty) return prev
-      return { ...prev, [produitId]: [...current, sn] }
-    })
-  }
 
   const getNextNumero = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -180,10 +137,11 @@ export default function DocumentPreviewModal({
       statut: 'ACTIF',
       shift_id: currentShift?.id ?? null,
       vente_id: vente.id,
-      client_nom: clientNom.trim() || 'Client Passager',
-      client_tel: clientTel.trim() || null,
-      client_adresse: clientAdresse.trim() || null,
-      client_matricule: clientMatricule.trim() || null,
+      client_id: clientForm.clientId ?? null,
+      client_nom: clientForm.nom.trim() || 'Client Passager',
+      client_tel: clientForm.tel.trim() || null,
+      client_adresse: clientForm.adresse.trim() || null,
+      client_matricule: clientForm.matricule.trim() || null,
       total_ht: lineSums.total_ht,
       total_tva: lineSums.total_tva,
       total_ttc: lineSums.total_ttc,
@@ -379,50 +337,7 @@ export default function DocumentPreviewModal({
           {/* Left: editable client fields */}
           <div className="w-72 flex-shrink-0 p-5 space-y-4">
             <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Informations client</h3>
-
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Nom / Raison sociale</label>
-              <input
-                type="text"
-                value={clientNom}
-                onChange={e => setClientNom(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent-500"
-                placeholder="Client Passager"
-                autoFocus
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Téléphone</label>
-              <input
-                type="text"
-                value={clientTel}
-                onChange={e => setClientTel(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent-500"
-                placeholder="2x xxx xxx"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Matricule fiscal</label>
-              <input
-                type="text"
-                value={clientMatricule}
-                onChange={e => setClientMatricule(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent-500"
-                placeholder="MF-..."
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Adresse</label>
-              <textarea
-                value={clientAdresse}
-                onChange={e => setClientAdresse(e.target.value)}
-                className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent-500 resize-none h-16"
-                placeholder="Adresse (optionnel)"
-              />
-            </div>
+            <ClientPicker value={clientForm} onChange={setClientForm} required />
 
             {/* Lines summary */}
             <div className="bg-muted rounded-lg p-3 text-xs text-text-secondary">
@@ -436,36 +351,6 @@ export default function DocumentPreviewModal({
               )}
               <div className="font-price font-bold text-text-primary">TTC : {totalTTC.toFixed(3)} DT</div>
             </div>
-
-            {Object.entries(serialOptions).filter(([, sns]) => sns.length > 1).map(([produitId, sns]) => {
-              const item = lignesItems.find(i => i.produit_id === produitId)
-              if (!item) return null
-              return (
-                <div key={produitId} className="border border-border rounded-xl p-3 bg-white">
-                  <p className="text-xs font-semibold text-text-secondary mb-2">
-                    S/N — {item.designation} <span className="text-text-muted">(max {item.quantite})</span>
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sns.map(sn => {
-                      const checked = selectedSerials[produitId]?.includes(sn) ?? false
-                      return (
-                        <button
-                          key={sn}
-                          type="button"
-                          onClick={() => toggleSerial(produitId, sn, item.quantite)}
-                          className={cn(
-                            'text-[10px] px-2 py-1 rounded-lg border font-mono transition-colors',
-                            checked ? 'bg-accent-100 border-accent-500 text-text-primary' : 'bg-muted border-border hover:bg-border',
-                          )}
-                        >
-                          {sn}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )
-            })}
 
             {lignesItems.length === 0 && (
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-xs text-yellow-700">

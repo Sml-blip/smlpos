@@ -5,6 +5,7 @@ import { formatPrice, generateId, generateVenteNumber } from '../../lib/utils'
 import { X, CreditCard, Banknote, FileCheck, Layers, FileText, ChevronDown, ChevronUp, Printer, Package } from 'lucide-react'
 import TicketModal from './TicketModal'
 import DocumentPreviewModal from './DocumentPreviewModal'
+import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { runAction } from '../../lib/apiCall'
 
 const api = window.api
@@ -16,11 +17,12 @@ interface Props {
   total: number
   sousTotal: number
   totalRemises: number
+  initialClient?: ClientFormValue
   onClose: () => void
   onSuccess: (vente?: Vente, items?: CartItem[]) => void
 }
 
-export default function CheckoutModal({ items, total, sousTotal, totalRemises, onClose, onSuccess }: Props) {
+export default function CheckoutModal({ items, total, sousTotal, totalRemises, initialClient, onClose, onSuccess }: Props) {
   const { currentShift } = useAppStore()
   const [mode, setMode] = useState<ModePaiement>('ESPECES')
   const [montantRecu, setMontantRecu] = useState('')
@@ -28,10 +30,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, o
   const [venteEnregistree, setVenteEnregistree] = useState<Vente | null>(null)
   const [typeVente, setTypeVente] = useState<TypeVente>('TICKET')
   const [showClientFields, setShowClientFields] = useState(false)
-  const [clientNom, setClientNom] = useState('')
-  const [clientTel, setClientTel] = useState('')
-  const [clientAdresse, setClientAdresse] = useState('')
-  const [clientMatricule, setClientMatricule] = useState('')
+  const [clientForm, setClientForm] = useState<ClientFormValue>(initialClient ?? emptyClientForm())
   const [showFacture, setShowFacture] = useState(false)
   const [showTicket, setShowTicket] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
@@ -70,10 +69,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, o
         monnaie_rendue: monnaieRendue,
         type: 'VENTE',
         type_vente: typeVente,
-        client_nom: clientNom.trim() || undefined,
-        client_tel: clientTel.trim() || undefined,
-        client_adresse: clientAdresse.trim() || undefined,
-        client_matricule: clientMatricule.trim() || undefined,
+        client_id: clientForm.clientId,
+        client_nom: clientForm.nom.trim() || undefined,
+        client_tel: clientForm.tel.trim() || undefined,
+        client_adresse: clientForm.adresse.trim() || undefined,
+        client_matricule: clientForm.matricule.trim() || undefined,
         a_facture: typeVente !== 'TICKET' ? 1 : 0,
         created_at: now,
       }
@@ -88,6 +88,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, o
         remise_pct: item.remise_pct,
         total_ligne: item.total_ligne,
         type_produit: item.type_produit,
+        numero_serie: item.numero_serie ?? null,
       }))
 
       await api.ventesCreate(vente, lignes)
@@ -106,10 +107,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, o
           items={items}
           vente={venteEnregistree}
           typeVente={typeVente === 'BL_VENTE' ? 'BL_VENTE' : 'FACTURE'}
-          initialClientNom={clientNom}
-          initialClientTel={clientTel}
-          initialClientAdresse={clientAdresse}
-          initialClientMatricule={clientMatricule}
+          initialClientNom={clientForm.nom}
+          initialClientTel={clientForm.tel}
+          initialClientAdresse={clientForm.adresse}
+          initialClientMatricule={clientForm.matricule}
+          initialClientId={clientForm.clientId}
           onClose={() => { setShowFacture(false); onSuccess(venteEnregistree, items) }}
           onSuccess={() => onSuccess(venteEnregistree, items)}
         />
@@ -274,31 +276,12 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, o
               Client {typeVente !== 'TICKET' ? '(requis pour facture)' : '(optionnel)'}
             </button>
             {showClientFields && (
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-text-secondary mb-1">Nom client</label>
-                  <input type="text" value={clientNom} onChange={e => setClientNom(e.target.value)}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    placeholder="Nom ou raison sociale" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-text-secondary mb-1">Téléphone</label>
-                  <input type="text" value={clientTel} onChange={e => setClientTel(e.target.value)}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    placeholder="2x xxx xxx" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-text-secondary mb-1">Matricule fiscal</label>
-                  <input type="text" value={clientMatricule} onChange={e => setClientMatricule(e.target.value)}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    placeholder="MF optionnel" />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-text-secondary mb-1">Adresse</label>
-                  <input type="text" value={clientAdresse} onChange={e => setClientAdresse(e.target.value)}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    placeholder="Adresse (optionnel)" />
-                </div>
+              <div className="mt-3">
+                <ClientPicker
+                  value={clientForm}
+                  onChange={setClientForm}
+                  required={typeVente !== 'TICKET'}
+                />
               </div>
             )}
           </div>

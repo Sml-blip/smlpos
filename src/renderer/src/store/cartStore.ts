@@ -22,7 +22,10 @@ export const useCartStore = create<CartState>((set, get) => ({
     set((state) => {
       // Check if same product already in cart
       const existingIdx = state.items.findIndex(
-        i => i.produit_id && i.produit_id === item.produit_id && i.remise_pct === item.remise_pct
+        i => i.produit_id && i.produit_id === item.produit_id
+          && i.remise_pct === item.remise_pct
+          && (i.numero_serie || '') === (item.numero_serie || '')
+          && !item.numero_serie,
       )
       if (existingIdx >= 0) {
         const updated = [...state.items]

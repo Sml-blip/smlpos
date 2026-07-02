@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Operateur, Shift } from '../lib/types'
+import type { Client, Operateur, Shift } from '../lib/types'
 
 export type TabId = 'pos' | 'historique' | 'inventaire' | 'achats' | 'dashboard' | 'caisse_interne' | 'vente_en_ligne' | 'credits' | 'retours' | 'settings' | 'clients' | 'personnels' | 'documents'
 
@@ -10,6 +10,7 @@ interface AppState {
   isOnline: boolean
   activeTab: TabId
   showShiftModal: boolean
+  sessionClient: Client | null
 
   setCurrentShift: (shift: Shift | null) => void
   setCurrentOperateur: (op: Operateur | null) => void
@@ -17,6 +18,7 @@ interface AppState {
   setIsOnline: (v: boolean) => void
   setActiveTab: (tab: TabId) => void
   setShowShiftModal: (v: boolean) => void
+  setSessionClient: (client: Client | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -26,6 +28,7 @@ export const useAppStore = create<AppState>((set) => ({
   isOnline: navigator.onLine,
   activeTab: 'pos',
   showShiftModal: true,
+  sessionClient: null,
 
   setCurrentShift: (shift) => set({ currentShift: shift }),
   setCurrentOperateur: (op) => set({ currentOperateur: op }),
@@ -33,4 +36,5 @@ export const useAppStore = create<AppState>((set) => ({
   setIsOnline: (v) => set({ isOnline: v }),
   setActiveTab: (tab) => set({ activeTab: tab }),
   setShowShiftModal: (v) => set({ showShiftModal: v }),
+  setSessionClient: (client) => set({ sessionClient: client }),
 }))

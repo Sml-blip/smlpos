@@ -88,8 +88,24 @@ export interface CartItem {
   total_ligne: number
   type_produit: TypeFacturation
   tva_taux?: number
+  numero_serie?: string
   is_service?: boolean
   is_libre?: boolean
+}
+
+export interface Client {
+  id: string
+  nom: string
+  telephone?: string
+  email?: string
+  adresse?: string
+  matricule_fiscal?: string
+  organisation_id?: string
+  solde_credit: number
+  credit_limite?: number
+  notes?: string
+  actif?: number
+  created_at?: string
 }
 
 export interface Vente {
@@ -97,6 +113,7 @@ export interface Vente {
   numero: string
   shift_id?: string
   operateur_nom?: string
+  client_id?: string
   client_nom?: string
   client_tel?: string
   client_adresse?: string
@@ -127,6 +144,7 @@ export interface LigneVente {
   remise_pct: number
   total_ligne: number
   type_produit: TypeFacturation
+  numero_serie?: string
 }
 
 export interface Reparation {

@@ -5,6 +5,7 @@ import { formatPrice, generateId } from '../../lib/utils'
 import { runAction } from '../../lib/apiCall'
 import { X, FileText, Printer, CheckCircle } from 'lucide-react'
 import PrintDialog from '../../components/PrintDialog'
+import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 
 const api = window.api
 
@@ -21,10 +22,12 @@ interface Props {
 
 export default function FactureClientModal({ items, vente, onClose, onSuccess, initialClientNom = '', initialClientTel = '', initialClientAdresse = '', initialClientMatricule = '' }: Props) {
   const { currentShift } = useAppStore()
-  const [clientNom, setClientNom] = useState(initialClientNom)
-  const [clientTel, setClientTel] = useState(initialClientTel)
-  const [clientAdresse, setClientAdresse] = useState(initialClientAdresse)
-  const [clientMatricule, setClientMatricule] = useState(initialClientMatricule)
+  const [clientForm, setClientForm] = useState<ClientFormValue>({
+    nom: initialClientNom,
+    tel: initialClientTel,
+    adresse: initialClientAdresse,
+    matricule: initialClientMatricule,
+  })
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [factureNumero, setFactureNumero] = useState('')
@@ -37,7 +40,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
   const totalTTC = totalHT + totalTVA
 
   const handleGenerate = async () => {
-    if (!clientNom.trim()) return
+    if (!clientForm.nom.trim()) return
     await runAction('Génération facture', async () => {
       const now = new Date().toISOString()
       const year = new Date().getFullYear()
@@ -55,10 +58,10 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
         shift_id: currentShift?.id,
         vente_id: vente?.id ?? null,
         type_facture: 'VENTE_INDIVIDUELLE',
-        client_nom: clientNom.trim(),
-        client_tel: clientTel.trim() || null,
-        client_adresse: clientAdresse.trim() || null,
-        client_matricule: clientMatricule.trim() || null,
+        client_nom: clientForm.nom.trim(),
+        client_tel: clientForm.tel.trim() || null,
+        client_adresse: clientForm.adresse.trim() || null,
+        client_matricule: clientForm.matricule.trim() || null,
         total_ht: totalHT,
         total_tva: totalTVA,
         total_ttc: totalTTC,
@@ -90,7 +93,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
       <h1 style={{ fontSize: 20, marginBottom: 4 }}>FACTURE</h1>
       <div style={{ marginBottom: 16 }}>
         <strong>N° :</strong> {factureNumero}<br />
-        <strong>Client :</strong> {clientNom}<br />
+        <strong>Client :</strong> {clientForm.nom}<br />
         <strong>Date :</strong> {new Date().toLocaleDateString('fr-FR')}
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -132,7 +135,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
               <p className="text-text-secondary text-sm mb-1">Référence :</p>
               <p className="font-price font-bold text-lg text-text-primary mb-6">{factureNumero}</p>
               <p className="text-sm text-text-secondary mb-6">
-                Client : <strong>{clientNom}</strong><br />
+                Client : <strong>{clientForm.nom}</strong><br />
                 Montant TTC : <strong className="font-price">{formatPrice(totalTTC)}</strong>
               </p>
               <div className="flex gap-3">
@@ -154,7 +157,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
         {showPrintDialog && (
           <PrintDialog
             title={`Facture ${factureNumero}`}
-            subtitle={clientNom}
+            subtitle={clientForm.nom}
             getPrintHtml={() => printRef.current?.innerHTML ?? ''}
             preview={printPreview}
             pageSize="A4"
@@ -203,53 +206,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">
-                Nom client <span className="text-danger">*</span>
-              </label>
-              <input
-                type="text"
-                value={clientNom}
-                onChange={e => setClientNom(e.target.value)}
-                className="w-full border border-border rounded-xl px-4 py-2.5 text-sm focus:border-accent-500 outline-none"
-                placeholder="Nom ou raison sociale"
-                autoFocus
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-text-secondary mb-1.5">Téléphone</label>
-                <input
-                  type="text"
-                  value={clientTel}
-                  onChange={e => setClientTel(e.target.value)}
-                  className="w-full border border-border rounded-xl px-4 py-2.5 text-sm focus:border-accent-500 outline-none"
-                  placeholder="2x xxx xxx"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-text-secondary mb-1.5">Matricule fiscal</label>
-                <input
-                  type="text"
-                  value={clientMatricule}
-                  onChange={e => setClientMatricule(e.target.value)}
-                  className="w-full border border-border rounded-xl px-4 py-2.5 text-sm focus:border-accent-500 outline-none"
-                  placeholder="MF-XXXXX/A"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Adresse</label>
-              <input
-                type="text"
-                value={clientAdresse}
-                onChange={e => setClientAdresse(e.target.value)}
-                className="w-full border border-border rounded-xl px-4 py-2.5 text-sm focus:border-accent-500 outline-none"
-                placeholder="Adresse complète"
-              />
-            </div>
-          </div>
+          <ClientPicker value={clientForm} onChange={setClientForm} required />
         </div>
 
         <div className="flex gap-3 px-6 py-4 border-t border-border">
@@ -263,7 +220,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={loading || !clientNom.trim() || lignesF.length === 0}
+            disabled={loading || !clientForm.nom.trim() || lignesF.length === 0}
             className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors text-sm flex items-center justify-center gap-2"
           >
             <FileText size={15} />

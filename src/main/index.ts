@@ -770,33 +770,41 @@ function setupIpcHandlers() {
   // ─── Ventes ──────────────────────────────────────────────────────────────────
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
     const insertVente = db.prepare(`
-      INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_nom, client_tel, client_adresse, client_matricule,
+      INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_id, client_nom, client_tel, client_adresse, client_matricule,
         sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture, created_at)
-      VALUES (@id, @numero, @shift_id, @operateur_nom, @client_nom, @client_tel, @client_adresse, @client_matricule,
+      VALUES (@id, @numero, @shift_id, @operateur_nom, @client_id, @client_nom, @client_tel, @client_adresse, @client_matricule,
         @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture, @created_at)
     `)
     const insertLigne = db.prepare(`
-      INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit)
-      VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit)
+      INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit, numero_serie)
+      VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit, @numero_serie)
     `)
     const updateStock = db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?')
     const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?`)
     const nextSn = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1`)
+    const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`)
 
     const transaction = db.transaction(() => {
       insertVente.run({
-        client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
-        ...vente
+        client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+        ...vente,
       })
       const now = new Date().toISOString()
       for (const ligne of lignes) {
-        insertLigne.run(ligne)
+        insertLigne.run({ numero_serie: null, ...ligne })
         if (ligne.produit_id) {
           updateStock.run(ligne.quantite, ligne.produit_id)
           const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(ligne.produit_id) as { has_serial_number?: number } | undefined
           if (prod?.has_serial_number) {
-            for (let q = 0; q < (ligne.quantite as number); q++) {
-              const sn = nextSn.get(ligne.produit_id) as { id: string } | undefined
+            const serials = String(ligne.numero_serie ?? '')
+              .split(',')
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+            const toMark = serials.length ? serials : Array.from({ length: ligne.quantite as number }, () => null)
+            for (const snVal of toMark) {
+              const sn = snVal
+                ? snByValue.get(ligne.produit_id, snVal) as { id: string } | undefined
+                : nextSn.get(ligne.produit_id) as { id: string } | undefined
               if (sn) markSnSold.run(vente.id, now, sn.id)
             }
           }
@@ -805,7 +813,7 @@ function setupIpcHandlers() {
     })
     transaction()
     const normalizedVente = {
-      client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+      client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
       ...vente,
     }
     addActivityLog({ shift_id: vente.shift_id, operateur: vente.operateur_nom, action: 'SALE_CREATED', montant: vente.total_ttc, details: { numero: vente.numero, mode: vente.mode_paiement, type_vente: normalizedVente.type_vente } })

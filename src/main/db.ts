@@ -711,6 +711,8 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE produits ADD COLUMN source_tag TEXT`) } catch { /* already exists */ }
   // lignes_document: numéro de série
   try { db.exec(`ALTER TABLE lignes_document ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN client_id TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE lignes_vente ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
 
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }

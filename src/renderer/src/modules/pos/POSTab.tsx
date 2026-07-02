@@ -5,6 +5,8 @@ import { useCartStore } from '../../store/cartStore'
 import type { Produit, ServicePOS, Vente, CartItem } from '../../lib/types'
 import { cn, formatPrice } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
+import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
+import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent } from 'lucide-react'
 import ReparationModal from './ReparationModal'
 import RetourModal from './RetourModal'
@@ -18,7 +20,7 @@ import TicketModal from './TicketModal'
 const api = window.api
 
 export default function POSTab() {
-  const { currentShift, showShiftModal } = useAppStore()
+  const { currentShift, showShiftModal, sessionClient, setSessionClient } = useAppStore()
   const { items, addItem, updateItem, removeItem, clearCart, total, totalRemises, sousTotal, remiseTotale, setRemiseTotale } = useCartStore()
 
   const [scanInput, setScanInput] = useState('')
@@ -40,6 +42,11 @@ export default function POSTab() {
   const [showLastTicket, setShowLastTicket] = useState(false)
   const [showRetour, setShowRetour] = useState(false)
   const [showProductBrowse, setShowProductBrowse] = useState(false)
+  const [availableSerials, setAvailableSerials] = useState<string[]>([])
+  const [selectedSerials, setSelectedSerials] = useState<string[]>([])
+  const [sessionClientForm, setSessionClientForm] = useState<ClientFormValue>(
+    () => (sessionClient ? clientFromRecord(sessionClient) : emptyClientForm()),
+  )
   const [lastVente, setLastVente] = useState<{ vente: Vente; items: CartItem[] } | null>(null)
   const [notification, setNotification] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
 
@@ -123,6 +130,74 @@ export default function POSTab() {
     setTimeout(() => setNotification(null), 2500)
   }
 
+  useEffect(() => {
+    if (!scannedProduct || !productTracksSerial(scannedProduct)) {
+      setAvailableSerials([])
+      setSelectedSerials([])
+      return
+    }
+    void loadAvailableSerials(scannedProduct, items).then(sns => {
+      setAvailableSerials(sns)
+      setSelectedSerials(prev => {
+        const kept = prev.filter(sn => sns.includes(sn))
+        if (kept.length) return kept.slice(0, qty)
+        if (sns.length === 1 && qty === 1) return [sns[0]]
+        return []
+      })
+    })
+  }, [scannedProduct, items, qty])
+
+  useEffect(() => {
+    setSelectedSerials(prev => prev.slice(0, qty))
+  }, [qty])
+
+  const toggleSerialPick = (sn: string) => {
+    setSelectedSerials(prev => {
+      if (prev.includes(sn)) return prev.filter(s => s !== sn)
+      if (prev.length >= qty) return prev
+      return [...prev, sn]
+    })
+  }
+
+  const pushProductToCart = (product: Produit, quantity: number, remisePct: number, serials: string[]) => {
+    const unitTotal = product.prix_vente * (1 - remisePct / 100)
+    if (serials.length > 1 && quantity === serials.length) {
+      for (const sn of serials) {
+        addItem({
+          produit_id: product.id,
+          designation: product.nom,
+          quantite: 1,
+          prix_unitaire: product.prix_vente,
+          remise_pct: remisePct,
+          total_ligne: unitTotal,
+          type_produit: product.type,
+          tva_taux: product.tva_taux ?? 0,
+          numero_serie: sn,
+        })
+      }
+      showNotif(`${product.nom} ×${serials.length} ajouté(s) au panier`)
+    } else {
+      addItem({
+        produit_id: product.id,
+        designation: product.nom,
+        quantite: quantity,
+        prix_unitaire: product.prix_vente,
+        remise_pct: remisePct,
+        total_ligne: unitTotal * quantity,
+        type_produit: product.type,
+        tva_taux: product.tva_taux ?? 0,
+        numero_serie: serials.length ? serials.join(', ') : undefined,
+      })
+      showNotif(`${product.nom} ajouté au panier`)
+    }
+    setScannedProduct(null)
+    setSelectedSerials([])
+    setAvailableSerials([])
+    setScanInput('')
+    setRemise(0)
+    refocusScanner()
+  }
+
   const handleScanSubmit = async (code: string, fromScanner = false) => {
     // Cancel any pending auto-submit to avoid double-fire
     if (autoSubmitTimer.current) { clearTimeout(autoSubmitTimer.current); autoSubmitTimer.current = null }
@@ -142,15 +217,13 @@ export default function POSTab() {
     // STEP 2 — Product by barcode
     const product = await loadData('Recherche produit', () => api.produitsFindByBarcode(trimmed) as Promise<Produit | null>, { silent: true })
     if (product) {
-      if (fromScanner) {
-        // Block if stock exhausted (F products only)
+      if (fromScanner && !productTracksSerial(product)) {
         if (product.type === 'F' && product.stock_actuel <= 0) {
           showNotif(`Stock épuisé — ${product.nom} ne peut pas être ajouté`, 'error')
           return
         }
-        // Auto-add or increment (cartStore.addItem already merges duplicates)
-        const alreadyInCart = items.some(i => i.produit_id === product.id)
-        const currentQty = items.find(i => i.produit_id === product.id)?.quantite ?? 0
+        const alreadyInCart = items.some(i => i.produit_id === product.id && !i.numero_serie)
+        const currentQty = items.find(i => i.produit_id === product.id && !i.numero_serie)?.quantite ?? 0
         addItem({
           produit_id: product.id,
           designation: product.nom,
@@ -169,6 +242,13 @@ export default function POSTab() {
         refocusScanner()
         return
       }
+      if (fromScanner && productTracksSerial(product)) {
+        if (product.type === 'F' && product.stock_actuel <= 0) {
+          showNotif(`Stock épuisé — ${product.nom} ne peut pas être ajouté`, 'error')
+          return
+        }
+        showNotif(`Confirmer le S/N — ${product.nom}`, 'success')
+      }
       setScannedProduct(product)
       setQty(1)
       setRemise(0)
@@ -178,13 +258,13 @@ export default function POSTab() {
     // STEP 3 — Text search
     const results = await loadData('Recherche produits', () => api.produitsList({ search: trimmed }) as Promise<Produit[]>, { silent: true }) ?? []
     if (results.length === 1) {
-      if (fromScanner) {
+      if (fromScanner && !productTracksSerial(results[0])) {
         if (results[0].type === 'F' && results[0].stock_actuel <= 0) {
           showNotif(`Stock épuisé — ${results[0].nom} ne peut pas être ajouté`, 'error')
           return
         }
-        const alreadyInCart = items.some(i => i.produit_id === results[0].id)
-        const currentQty = items.find(i => i.produit_id === results[0].id)?.quantite ?? 0
+        const alreadyInCart = items.some(i => i.produit_id === results[0].id && !i.numero_serie)
+        const currentQty = items.find(i => i.produit_id === results[0].id && !i.numero_serie)?.quantite ?? 0
         addItem({
           produit_id: results[0].id,
           designation: results[0].nom,
@@ -231,22 +311,18 @@ export default function POSTab() {
     const effectivePct = remiseMode === 'DT'
       ? Math.min(100, (remise / scannedProduct.prix_vente) * 100)
       : remise
-    const prixFinal = scannedProduct.prix_vente * (1 - effectivePct / 100)
-    addItem({
-      produit_id: scannedProduct.id,
-      designation: scannedProduct.nom,
-      quantite: qty,
-      prix_unitaire: scannedProduct.prix_vente,
-      remise_pct: effectivePct,
-      total_ligne: prixFinal * qty,
-      type_produit: scannedProduct.type,
-      tva_taux: scannedProduct.tva_taux ?? 0,
-    })
-    showNotif(`${scannedProduct.nom} ajouté au panier`)
-    setScannedProduct(null)
-    setScanInput('')
-    setRemise(0)
-    refocusScanner()
+    const needsSerial = productTracksSerial(scannedProduct)
+    if (needsSerial) {
+      if (!availableSerials.length) {
+        showNotif(`Aucun S/N disponible pour ${scannedProduct.nom}`, 'error')
+        return
+      }
+      if (selectedSerials.length !== qty) {
+        showNotif(`Sélectionnez ${qty} numéro(s) de série`, 'error')
+        return
+      }
+    }
+    pushProductToCart(scannedProduct, qty, effectivePct, needsSerial ? selectedSerials : [])
   }
 
   const handleServiceConfirm = (service: ServicePOS, montantFrais: number, note: string) => {
@@ -500,6 +576,38 @@ export default function POSTab() {
               </div>
             </div>
 
+            {scannedProduct && productTracksSerial(scannedProduct) && (
+              <div className="mt-3 pt-3 border-t border-border">
+                <label className="block text-xs font-semibold text-text-secondary mb-2">
+                  Numéro(s) de série * <span className="text-text-muted">({selectedSerials.length}/{qty})</span>
+                </label>
+                {availableSerials.length === 0 ? (
+                  <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    Aucun S/N disponible — vérifiez l&apos;inventaire.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {availableSerials.map(sn => {
+                      const checked = selectedSerials.includes(sn)
+                      return (
+                        <button
+                          key={sn}
+                          type="button"
+                          onClick={() => toggleSerialPick(sn)}
+                          className={cn(
+                            'text-[10px] px-2 py-1 rounded-lg border font-mono transition-colors',
+                            checked ? 'bg-accent-100 border-accent-500 text-text-primary' : 'bg-muted border-border hover:bg-border',
+                          )}
+                        >
+                          {sn}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
               <span className="text-sm text-text-secondary font-medium">Prix final :</span>
               <span className="text-lg font-bold font-price text-text-primary">
@@ -509,7 +617,8 @@ export default function POSTab() {
 
             <button
               onClick={handleAddToCart}
-              className="w-full mt-3 flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 text-text-primary font-bold py-2.5 rounded-xl transition-colors"
+              disabled={!!scannedProduct && productTracksSerial(scannedProduct) && selectedSerials.length !== qty}
+              className="w-full mt-3 flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors"
             >
               <Plus size={16} />
               Ajouter au Panier
@@ -545,7 +654,7 @@ export default function POSTab() {
 
       {/* Right panel - Cart */}
       <div className="w-80 bg-white border-l border-border flex flex-col">
-        <div className="px-4 py-3 border-b border-border">
+        <div className="px-4 py-3 border-b border-border space-y-2">
           <h2 className="font-bold text-sm text-text-primary flex items-center gap-2">
             <ShoppingBag size={15} />
             Panier Actuel
@@ -555,6 +664,22 @@ export default function POSTab() {
               </span>
             )}
           </h2>
+          <ClientPicker
+            compact
+            value={sessionClientForm}
+            onChange={v => {
+              setSessionClientForm(v)
+              setSessionClient(v.clientId ? {
+                id: v.clientId,
+                nom: v.nom,
+                telephone: v.tel,
+                adresse: v.adresse,
+                matricule_fiscal: v.matricule,
+                solde_credit: sessionClient?.id === v.clientId ? sessionClient.solde_credit : 0,
+                created_at: sessionClient?.created_at ?? new Date().toISOString(),
+              } : null)
+            }}
+          />
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-2">
@@ -575,10 +700,15 @@ export default function POSTab() {
                       }
                     </div>
                     <p className="text-xs font-medium truncate">{item.designation}</p>
+                    {item.numero_serie && (
+                      <p className="text-[10px] font-mono text-accent-700 truncate">S/N: {item.numero_serie}</p>
+                    )}
                     <div className="flex items-center gap-2 mt-1">
-                      <button onClick={() => { const nq = item.quantite - 1; if (nq <= 0) removeItem(idx); else updateItem(idx, { quantite: nq }) }} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">-</button>
+                      <button onClick={() => { const nq = item.quantite - 1; if (nq <= 0) removeItem(idx); else if (!item.numero_serie) updateItem(idx, { quantite: nq }); else removeItem(idx) }} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">-</button>
                       <span className="font-price text-xs font-semibold">{item.quantite}</span>
-                      <button onClick={() => updateItem(idx, { quantite: item.quantite + 1 })} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">+</button>
+                      {!item.numero_serie && (
+                        <button onClick={() => updateItem(idx, { quantite: item.quantite + 1 })} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">+</button>
+                      )}
                       {item.remise_pct > 0 && <span className="text-xs text-danger font-medium">-{item.remise_pct}%</span>}
                     </div>
                   </div>
@@ -671,6 +801,7 @@ export default function POSTab() {
       {showCheckout && (
         <CheckoutModal
           items={items} total={effectiveTotal} sousTotal={cartSousTotal} totalRemises={totalAllRemises}
+          initialClient={sessionClientForm}
           onClose={() => { setShowCheckout(false); refocusScanner() }}
           onSuccess={handleCheckoutSuccess}
         />
