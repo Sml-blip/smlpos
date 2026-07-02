@@ -1,12 +1,18 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
-import { generateId } from '../../lib/utils'
+import { generateId, cn } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { X, Printer, CheckCircle, FileText, Edit2, Plus, Trash2 } from 'lucide-react'
 import InvoicePrintTemplate from '../../components/InvoicePrintTemplate'
 import PrintDialog from '../../components/PrintDialog'
 import type { InvoiceCompanySettings, InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
+import {
+  applyTotalsToDoc,
+  buildInvoiceLineFromCart,
+  recalcInvoiceLineFromHtUnit,
+  sumInvoiceLines,
+} from '../../lib/invoiceLineCalc'
 
 const api = window.api
 
@@ -43,47 +49,58 @@ export default function DocumentPreviewModal({
   const [editLinesMode, setEditLinesMode] = useState(false)
   const [editableLignes, setEditableLignes] = useState<InvoiceLineData[]>([])
   const [showPrintDialog, setShowPrintDialog] = useState(false)
-  const [serialByProduit, setSerialByProduit] = useState<Record<string, string>>({})
+  const [serialOptions, setSerialOptions] = useState<Record<string, string[]>>({})
+  const [selectedSerials, setSelectedSerials] = useState<Record<string, string[]>>({})
   const previewRef = useRef<HTMLDivElement>(null)
 
   const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
-  // FACTURE: F items only. BL_VENTE: all items
   const lignesItems = useMemo(
     () => (typeVente === 'FACTURE' ? items.filter(i => i.type_produit === 'F') : items),
     [items, typeVente],
   )
 
-  const docLignes: InvoiceLineData[] = (docId || editLinesMode)
-    ? editableLignes
-    : lignesItems.map((item, idx) => ({
-    id: item.produit_id || `line-${idx}`,
-    designation: item.designation,
-    quantite: item.quantite,
-    prix_unitaire: item.prix_unitaire,
-    remise_pct: item.remise_pct || 0,
-    tva_taux: 0,
-    total_ht: item.total_ligne,
-    total_tva: 0,
-    total_ttc: item.total_ligne,
-    numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
-  }))
+  const defaultTva = useMemo(
+    () => parseFloat(String(settings.tva_defaut_pct ?? '19').replace(',', '.')) || 19,
+    [settings.tva_defaut_pct],
+  )
 
-  const totalHT = docLignes.reduce((s, l) => s + l.total_ht, 0)
-  const totalTTC = totalHT
+  const buildLineFromCart = useCallback((item: CartItem, idx: number): InvoiceLineData => {
+    const tvaRate = item.type_produit === 'F' ? (item.tva_taux ?? defaultTva) : 0
+    const sns = item.produit_id ? selectedSerials[item.produit_id] : undefined
+    return buildInvoiceLineFromCart({
+      id: item.produit_id || `line-${idx}`,
+      designation: item.designation,
+      quantite: item.quantite,
+      prix_unitaire_ttc: item.prix_unitaire,
+      remise_pct: item.remise_pct || 0,
+      tva_taux: tvaRate,
+      numero_serie: sns?.length ? sns.join(', ') : null,
+    })
+  }, [defaultTva, selectedSerials])
 
-  const previewDoc: InvoiceDocData = {
+  const docLignes: InvoiceLineData[] = useMemo(() => {
+    if (docId || editLinesMode) return editableLignes
+    return lignesItems.map((item, idx) => buildLineFromCart(item, idx))
+  }, [docId, editLinesMode, editableLignes, lignesItems, buildLineFromCart])
+
+  const lineSums = useMemo(() => sumInvoiceLines(docLignes), [docLignes])
+
+  const previewDoc: InvoiceDocData = useMemo(() => applyTotalsToDoc({
     numero: docNumero || '—',
     type_document: typeDoc,
     client_nom: clientNom || 'Client Passager',
     client_tel: clientTel || null,
     client_adresse: clientAdresse || null,
     client_matricule: clientMatricule || null,
-    total_ht: totalHT,
-    total_tva: 0,
-    total_ttc: totalTTC,
+    total_ht: lineSums.total_ht,
+    total_tva: lineSums.total_tva,
+    total_ttc: lineSums.total_ttc,
     statut_paiement: 'PAYE',
     created_at: vente.created_at || new Date().toISOString(),
-  }
+    timbre: settings.invoice_timbre_fiscal !== 'false' ? 1 : 0,
+  }, docLignes), [docNumero, typeDoc, clientNom, clientTel, clientAdresse, clientMatricule, lineSums, vente.created_at, settings.invoice_timbre_fiscal, docLignes])
+
+  const totalTTC = lineSums.total_ttc
 
   useEffect(() => {
     loadData('Chargement paramètres', () => api.settingsGetAll(), { silent: true }).then((s: unknown) => {
@@ -99,19 +116,43 @@ export default function DocumentPreviewModal({
         qtyByProduit.set(item.produit_id, (qtyByProduit.get(item.produit_id) ?? 0) + item.quantite)
       }
 
-      const entries = await Promise.all(
+      const optionEntries: [string, string[]][] = []
+      const selectedEntries: [string, string[]][] = []
+
+      await Promise.all(
         Array.from(qtyByProduit.entries()).map(async ([produitId, qty]) => {
-            const sold = await api.serialNumbersGetByProduit(produitId) as { numero_serie: string; statut: string; vente_id?: string }[]
-            const forVente = sold.filter(s => s.statut === 'VENDU' && s.vente_id === vente.id).map(s => s.numero_serie)
-            const pending = sold.filter(s => s.statut === 'EN_STOCK').slice(0, qty).map(s => s.numero_serie)
-            const sns = forVente.length ? forVente : pending
-            return [produitId, sns.join(', ')] as const
-          }),
+          const sold = await api.serialNumbersGetByProduit(produitId) as { numero_serie: string; statut: string; vente_id?: string }[]
+          const forVente = sold.filter(s => s.statut === 'VENDU' && s.vente_id === vente.id).map(s => s.numero_serie)
+          const pending = sold.filter(s => s.statut === 'EN_STOCK').map(s => s.numero_serie)
+          const sns = forVente.length ? forVente : pending
+          optionEntries.push([produitId, sns])
+          selectedEntries.push([produitId, sns.slice(0, qty)])
+        }),
       )
-      setSerialByProduit(Object.fromEntries(entries.filter(([, v]) => v)))
+
+      setSerialOptions(Object.fromEntries(optionEntries))
+      setSelectedSerials(prev => {
+        const next: Record<string, string[]> = {}
+        for (const [pid, sns] of selectedEntries) {
+          const kept = prev[pid]?.filter(sn => sns.includes(sn)) ?? []
+          next[pid] = kept.length ? kept.slice(0, qtyByProduit.get(pid) ?? kept.length) : sns
+        }
+        return next
+      })
     }
     void loadSerials()
   }, [lignesItems, vente.id])
+
+  const toggleSerial = (produitId: string, sn: string, maxQty: number) => {
+    setSelectedSerials(prev => {
+      const current = prev[produitId] ?? []
+      if (current.includes(sn)) {
+        return { ...prev, [produitId]: current.filter(s => s !== sn) }
+      }
+      if (current.length >= maxQty) return prev
+      return { ...prev, [produitId]: [...current, sn] }
+    })
+  }
 
   const getNextNumero = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -132,7 +173,7 @@ export default function DocumentPreviewModal({
     const now = new Date().toISOString()
     const docId = generateId()
 
-    const doc = {
+    const docPayload = {
       id: docId,
       numero,
       type_document: typeDoc,
@@ -143,50 +184,45 @@ export default function DocumentPreviewModal({
       client_tel: clientTel.trim() || null,
       client_adresse: clientAdresse.trim() || null,
       client_matricule: clientMatricule.trim() || null,
-      total_ht: totalHT,
-      total_tva: 0,
-      total_ttc: totalTTC,
+      total_ht: lineSums.total_ht,
+      total_tva: lineSums.total_tva,
+      total_ttc: lineSums.total_ttc,
       statut_paiement: 'PAYE',
-      montant_paye: totalTTC,
+      montant_paye: lineSums.total_ttc,
+      timbre: previewDoc.timbre ?? 1,
       created_at: now,
       updated_at: now,
     }
 
-    const lignes = lignesItems.map(item => ({
-      id: generateId(),
-      document_id: docId,
-      produit_id: item.produit_id || null,
-      designation: item.designation,
-      quantite: item.quantite,
-      prix_unitaire: item.prix_unitaire,
-      remise_pct: item.remise_pct || 0,
-      tva_taux: 0,
-      total_ht: item.total_ligne,
-      total_tva: 0,
-      total_ttc: item.total_ligne,
-      type_produit: item.type_produit,
-      numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
-    }))
+    const builtLines = lignesItems.map((item, idx) => buildLineFromCart(item, idx))
+    const lignes = lignesItems.map((item, idx) => {
+      const line = builtLines[idx]
+      return {
+        id: generateId(),
+        document_id: docId,
+        produit_id: item.produit_id ?? null,
+        designation: line.designation,
+        quantite: line.quantite,
+        prix_unitaire: line.prix_unitaire,
+        remise_pct: line.remise_pct,
+        tva_taux: line.tva_taux,
+        total_ht: line.total_ht,
+        total_tva: line.total_tva,
+        total_ttc: line.total_ttc,
+        type_produit: item.type_produit,
+        numero_serie: line.numero_serie ?? null,
+      }
+    })
 
-    await api.documentsCreate(doc, lignes)
+    await api.documentsCreate(docPayload, lignes)
     setDocId(docId)
-    setEditableLignes(lignesItems.map((item, idx) => ({
-      id: item.produit_id || `line-${idx}`,
-      designation: item.designation,
-      quantite: item.quantite,
-      prix_unitaire: item.prix_unitaire,
-      remise_pct: item.remise_pct || 0,
-      tva_taux: 0,
-      total_ht: item.total_ligne,
-      total_tva: 0,
-      total_ttc: item.total_ligne,
-      numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
-    })))
+    setEditableLignes(builtLines)
     return numero
   }
 
   const saveLineEdits = async () => {
     if (!docId) return
+    const sums = sumInvoiceLines(editableLignes)
     await runAction('Mise à jour lignes', async () => {
       const lignes = editableLignes.map(l => ({
         id: l.id.startsWith('line-') ? generateId() : l.id,
@@ -203,7 +239,11 @@ export default function DocumentPreviewModal({
         type_produit: 'F',
         numero_serie: l.numero_serie ?? null,
       }))
-      await api.documentsReplaceLignes?.(docId, lignes, { total_ht: totalHT, total_tva: 0, total_ttc: totalTTC })
+      await api.documentsReplaceLignes?.(docId, lignes, {
+        total_ht: sums.total_ht,
+        total_tva: sums.total_tva,
+        total_ttc: sums.total_ttc,
+      })
       setEditLinesMode(false)
       setDocCreated(true)
     }, { successMessage: 'Lignes mises à jour' })
@@ -212,12 +252,7 @@ export default function DocumentPreviewModal({
   const updateLine = (idx: number, patch: Partial<InvoiceLineData>) => {
     setEditableLignes(prev => prev.map((l, i) => {
       if (i !== idx) return l
-      const next = { ...l, ...patch }
-      const brut = next.quantite * next.prix_unitaire * (1 - (next.remise_pct || 0) / 100)
-      next.total_ht = brut
-      next.total_tva = 0
-      next.total_ttc = brut
-      return next
+      return recalcInvoiceLineFromHtUnit({ ...l, ...patch })
     }))
   }
 
@@ -395,8 +430,42 @@ export default function DocumentPreviewModal({
                 {lignesItems.length} ligne{lignesItems.length !== 1 ? 's' : ''}
                 {typeVente === 'FACTURE' && ' (F uniquement)'}
               </div>
-              <div className="font-price font-bold text-text-primary">Total : {totalTTC.toFixed(3)} DT</div>
+              <div>HT : {lineSums.total_ht.toFixed(3)} DT</div>
+              {settings.invoice_show_tva !== 'false' && (
+                <div>TVA : {lineSums.total_tva.toFixed(3)} DT</div>
+              )}
+              <div className="font-price font-bold text-text-primary">TTC : {totalTTC.toFixed(3)} DT</div>
             </div>
+
+            {Object.entries(serialOptions).filter(([, sns]) => sns.length > 1).map(([produitId, sns]) => {
+              const item = lignesItems.find(i => i.produit_id === produitId)
+              if (!item) return null
+              return (
+                <div key={produitId} className="border border-border rounded-xl p-3 bg-white">
+                  <p className="text-xs font-semibold text-text-secondary mb-2">
+                    S/N — {item.designation} <span className="text-text-muted">(max {item.quantite})</span>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sns.map(sn => {
+                      const checked = selectedSerials[produitId]?.includes(sn) ?? false
+                      return (
+                        <button
+                          key={sn}
+                          type="button"
+                          onClick={() => toggleSerial(produitId, sn, item.quantite)}
+                          className={cn(
+                            'text-[10px] px-2 py-1 rounded-lg border font-mono transition-colors',
+                            checked ? 'bg-accent-100 border-accent-500 text-text-primary' : 'bg-muted border-border hover:bg-border',
+                          )}
+                        >
+                          {sn}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
 
             {lignesItems.length === 0 && (
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-xs text-yellow-700">
@@ -406,7 +475,7 @@ export default function DocumentPreviewModal({
           </div>
 
           {/* Right: live preview */}
-          <div className="flex-1 overflow-auto max-h-[65vh] bg-gray-50" ref={previewRef}>
+          <div className="flex-1 overflow-auto max-h-[70vh] bg-gray-50 p-2 sm:p-4" ref={previewRef}>
             <InvoicePrintTemplate
               doc={previewDoc}
               lignes={docLignes}

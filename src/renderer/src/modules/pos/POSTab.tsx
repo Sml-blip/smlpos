@@ -159,6 +159,7 @@ export default function POSTab() {
           remise_pct: 0,
           total_ligne: product.prix_vente,
           type_produit: product.type,
+          tva_taux: product.tva_taux ?? 0,
         })
         if (alreadyInCart) {
           showNotif(`+1 × ${product.nom}  ×${currentQty + 1}`)
@@ -192,6 +193,7 @@ export default function POSTab() {
           remise_pct: 0,
           total_ligne: results[0].prix_vente,
           type_produit: results[0].type,
+          tva_taux: results[0].tva_taux ?? 0,
         })
         if (alreadyInCart) {
           showNotif(`+1 × ${results[0].nom}  ×${currentQty + 1}`)
@@ -238,6 +240,7 @@ export default function POSTab() {
       remise_pct: effectivePct,
       total_ligne: prixFinal * qty,
       type_produit: scannedProduct.type,
+      tva_taux: scannedProduct.tva_taux ?? 0,
     })
     showNotif(`${scannedProduct.nom} ajouté au panier`)
     setScannedProduct(null)
@@ -255,6 +258,7 @@ export default function POSTab() {
       total_ligne: montantFrais,
       type_produit: 'NF',
       is_service: true,
+      tva_taux: 0,
     })
     showNotif(`Service ${service.nom} — ${formatPrice(montantFrais)}`)
     setShowService(null)
@@ -655,7 +659,7 @@ export default function POSTab() {
           onClose={() => { setUnknownBarcode(null); refocusScanner() }}
           onProductCreated={p => { setScannedProduct(p); setUnknownBarcode(null) }}
           onFreeAdd={(designation, prix) => {
-            addItem({ designation, quantite: 1, prix_unitaire: prix, remise_pct: 0, total_ligne: prix, type_produit: 'NF', is_libre: true })
+            addItem({ designation, quantite: 1, prix_unitaire: prix, remise_pct: 0, total_ligne: prix, type_produit: 'NF', is_libre: true, tva_taux: 0 })
             setUnknownBarcode(null)
             showNotif('Vente libre ajoutée')
             refocusScanner()

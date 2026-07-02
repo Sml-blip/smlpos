@@ -10,9 +10,19 @@ export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | '58mm' | '80mm
     @media print{
       html,body{height:auto!important;overflow:visible!important}
       body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .invoice-page{page-break-after:always;break-after:page}
+      .invoice-page{
+        page-break-after:always;
+        break-after:page;
+        min-height:260mm;
+        max-width:100%;
+        border:none!important;
+        margin:0!important;
+        padding:8mm!important;
+      }
       .invoice-page:last-child{page-break-after:auto;break-after:auto}
       .invoice-totals{page-break-inside:avoid;break-inside:avoid}
+      table{page-break-inside:auto}
+      tr{page-break-inside:avoid;break-inside:avoid}
     }
   </style></head><body>${innerHTML}</body></html>`
 }

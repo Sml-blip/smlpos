@@ -86,9 +86,9 @@ const STATUT_PAYMENT_LABELS: Record<string, string> = {
   EN_RETARD: 'En retard',
 }
 
-const FIRST_PAGE_LINES = 14
-const NEXT_PAGE_LINES = 20
-const MIN_FILLER_ROWS = 6
+const FIRST_PAGE_LINES = 10
+const NEXT_PAGE_LINES = 16
+const MIN_FILLER_ROWS = 3
 
 const fmt3 = (n: number) => n.toLocaleString('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 
@@ -127,10 +127,25 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
   })
   const tvaRows = Array.from(tvaMap.entries()).sort((a, b) => a[0] - b[0])
 
-  const totalBrutHT = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0)
-  const computedRemise = Math.max(0, totalBrutHT - doc.total_ht)
+  const lineTotals = lignes.reduce(
+    (acc, l) => ({
+      ht: acc.ht + l.total_ht,
+      tva: acc.tva + l.total_tva,
+      ttc: acc.ttc + l.total_ttc,
+    }),
+    { ht: 0, tva: 0, ttc: 0 },
+  )
+  const totalHT = lineTotals.ht || doc.total_ht
+  const totalTVA = lineTotals.tva || doc.total_tva
+  const totalTTC = lineTotals.ttc || doc.total_ttc
+
+  const totalBrutHT = lignes.reduce((s, l) => {
+    const puTtc = l.prix_unitaire * (1 + (l.tva_taux || 0) / 100)
+    return s + l.quantite * puTtc
+  }, 0)
+  const computedRemise = Math.max(0, totalBrutHT - totalTTC)
   const totalRemises = doc.total_remise ?? computedRemise
-  const displayedTotal = doc.net_a_payer ?? (doc.total_ttc + (isVenteFacture ? timbre : 0) - totalRemises)
+  const displayedTotal = doc.net_a_payer ?? (totalTTC + (isVenteFacture ? timbre : 0) - totalRemises)
 
   const dateFormatted = new Date(doc.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   const docLabel = DOC_LABELS[doc.type_document] || doc.type_document
@@ -249,8 +264,8 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
           ) : null}
           {[
             ['Total Remise', totalRemises > 0 ? fmt3(totalRemises) : fmt3(0)],
-            ...(showTva ? [['Total TVA', fmt3(doc.total_tva)]] : []),
-            ['Total HT', fmt3(doc.total_ht)],
+            ...(showTva ? [['Total TVA', fmt3(totalTVA)]] : []),
+            ['Total HT', fmt3(totalHT)],
             ...(timbre > 0 ? [['Timbre Fiscal', fmt3(timbre)]] : []),
           ].map(([label, value], i) => (
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', background: i % 2 ? C.surface : C.white, borderBottom: `1px solid ${C.borderLight}`, fontSize: 10 }}>
@@ -275,6 +290,15 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
       <div style={{ marginTop: 10, fontSize: 9, color: C.textLight, textAlign: 'center' }}>
         {companyRib ? `RIB : ${companyRib}` : footer}
       </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14 }}>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, minHeight: 72, padding: '8px 10px', background: C.white }}>
+          <div style={{ fontSize: 8, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Signature</div>
+        </div>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, minHeight: 72, padding: '8px 10px', background: C.white }}>
+          <div style={{ fontSize: 8, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Cachet</div>
+        </div>
+      </div>
     </>
   )
 
@@ -295,21 +319,23 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
       {pages.map((pageLines, pageIdx) => {
         const isFirst = pageIdx === 0
         const isLast = pageIdx === pageCount - 1
-        const fillerCount = isLast ? Math.max(0, MIN_FILLER_ROWS - pageLines.length) : 0
+        const fillerCount = isLast && pageCount === 1 ? Math.max(0, MIN_FILLER_ROWS - pageLines.length) : 0
 
         return (
           <div
             key={pageIdx}
             className="invoice-page"
             style={{
-              minHeight: '980px',
+              minHeight: pageCount === 1 ? '980px' : 'auto',
               margin: '0 auto 12px',
-              padding: '24px',
+              padding: '20px 16px',
               border: `1px solid ${C.border}`,
               borderRadius: '12px',
               display: 'flex',
               flexDirection: 'column',
               boxSizing: 'border-box',
+              width: '100%',
+              maxWidth: '780px',
               pageBreakAfter: isLast ? 'auto' : 'always',
               breakAfter: isLast ? 'auto' : 'page',
             }}

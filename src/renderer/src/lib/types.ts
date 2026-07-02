@@ -87,6 +87,7 @@ export interface CartItem {
   remise_pct: number
   total_ligne: number
   type_produit: TypeFacturation
+  tva_taux?: number
   is_service?: boolean
   is_libre?: boolean
 }
