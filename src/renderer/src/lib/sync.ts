@@ -5,6 +5,7 @@
  */
 import { supabase, isSupabaseEnabled } from './supabase'
 import { invalidateProduitsCache } from './produitsCache'
+import { stripPayloadForRemote } from './syncColumns'
 
 const api = window.api
 
@@ -41,6 +42,8 @@ const PULL_TABLES = Object.keys(TABLE_PRIORITY).sort(
 
 const PULL_PAGE_SIZE = 500
 const PULL_EVERY_N_POLLS = 3
+const QUEUE_BATCH_SIZE = 500
+const UPSERT_BATCH_SIZE = 150
 
 const BOOTSTRAP_TABLES: { table: string; onlyActive?: boolean }[] = [
   { table: 'categories' },
@@ -117,8 +120,9 @@ async function performRemoteSync(
     lignes_vente: ['vente_id'],
   }
   const nullableOverrides = NOT_NULL_TEXT[table_name] ?? []
+  const stripped = stripPayloadForRemote(table_name, payload)
   const clean = Object.fromEntries(
-    Object.entries(payload)
+    Object.entries(stripped)
       .filter(([, v]) => v !== undefined)
       .map(([k, v]) => [k, (v === null && nullableOverrides.includes(k)) ? '' : v])
   )
@@ -193,12 +197,72 @@ async function syncOneRow(row: {
 
   if (isDeferSyncError(errorMsg!)) {
     console.warn(`[sync] Deferred ${row.table_name}#${pkValue}:`, errorMsg)
+    await api.syncQueueMarkFailed(row.id, `[deferred] ${errorMsg!}`)
     return false
   }
 
   console.warn(`[sync] Failed ${row.table_name}#${pkValue}:`, errorMsg)
   await api.syncQueueMarkFailed(row.id, errorMsg!)
   return false
+}
+
+async function syncBatchUpsert(
+  table_name: string,
+  rows: { id: string; operation: string; payload: string }[],
+): Promise<number> {
+  if (!rows.length) return 0
+  const pk = table_name === 'app_settings' ? 'key' : 'id'
+  let synced = 0
+
+  const deleteRows = rows.filter(r => r.operation === 'DELETE')
+  const upsertEntries: { row: typeof rows[0]; clean: Record<string, unknown> }[] = []
+  for (const row of rows) {
+    if (row.operation === 'DELETE') continue
+    try {
+      const parsed = JSON.parse(row.payload) as Record<string, unknown>
+      const clean = stripPayloadForRemote(table_name, parsed)
+      if (clean[pk] == null) continue
+      upsertEntries.push({ row, clean })
+    } catch { /* skip malformed payload */ }
+  }
+
+  for (let i = 0; i < upsertEntries.length; i += UPSERT_BATCH_SIZE) {
+    const slice = upsertEntries.slice(i, i + UPSERT_BATCH_SIZE)
+    const batch = slice.map(s => s.clean)
+    let batchError: string | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await sleep(800 * attempt)
+      try {
+        const { error } = await supabase!.from(table_name).upsert(batch, { onConflict: pk })
+        batchError = error?.message ?? null
+      } catch (e) {
+        batchError = String(e)
+      }
+      if (!batchError || !isTransientSyncError(batchError)) break
+    }
+
+    if (batchError) {
+      const errLower = batchError.toLowerCase()
+      if (errLower.includes('duplicate key') || errLower.includes('23505')) {
+        for (const { row } of slice) await api.syncQueueMarkSynced(row.id)
+        synced += slice.length
+        continue
+      }
+      for (const { row } of slice) {
+        if (await syncOneRow(row)) synced++
+      }
+      continue
+    }
+
+    for (const { row } of slice) await api.syncQueueMarkSynced(row.id)
+    synced += slice.length
+  }
+
+  for (const row of deleteRows) {
+    if (await syncOneRow(row)) synced++
+  }
+
+  return synced
 }
 
 export async function processSyncQueue(): Promise<number> {
@@ -211,18 +275,36 @@ export async function processSyncQueue(): Promise<number> {
   let synced = 0
   try {
     let batchCount = 0
-    while (batchCount < 20) {
+    while (batchCount < 30) {
       const rows = await api.syncQueueGetPending() as {
         id: string; table_name: string; operation: string; payload: string
       }[]
       if (!rows.length) break
 
-      for (const row of sortRowsByPriority(rows)) {
-        if (await syncOneRow(row)) synced++
+      const sorted = sortRowsByPriority(rows)
+      const byTable = new Map<string, typeof sorted>()
+      for (const row of sorted) {
+        const list = byTable.get(row.table_name) ?? []
+        list.push(row)
+        byTable.set(row.table_name, list)
       }
+
+      for (const table of [...byTable.keys()].sort(
+        (a, b) => (TABLE_PRIORITY[a] ?? 45) - (TABLE_PRIORITY[b] ?? 45),
+      )) {
+        const tableRows = byTable.get(table)!
+        if (tableRows.length >= 5 && tableRows.every(r => r.operation !== 'DELETE')) {
+          synced += await syncBatchUpsert(table, tableRows)
+        } else {
+          for (const row of tableRows) {
+            if (await syncOneRow(row)) synced++
+          }
+        }
+      }
+
       await api.syncQueueCleanup()
       batchCount++
-      if (rows.length < 100) break
+      if (rows.length < QUEUE_BATCH_SIZE) break
     }
   } catch (e) {
     console.warn('[sync] processSyncQueue error:', e)
@@ -337,10 +419,22 @@ export async function pullSyncFromRemote(_opts?: { full?: boolean }): Promise<{ 
   return { applied, errors }
 }
 
+export async function dedupeSyncQueue(): Promise<number> {
+  try {
+    const res = await api.syncQueueDedupe?.() as { deleted?: number } | undefined
+    return res?.deleted ?? 0
+  } catch {
+    return 0
+  }
+}
+
 export async function bootstrapSync(): Promise<void> {
   if (!isSupabaseEnabled || !supabase) return
   if (!navigator.onLine) return
   if (!(await checkSupabaseReachable())) return
+
+  const deduped = await dedupeSyncQueue()
+  if (deduped > 0) console.info(`[sync] Removed ${deduped} duplicate queue item(s)`)
 
   try {
     const settings = await api.settingsGetAll() as Record<string, string>
@@ -401,6 +495,12 @@ export async function bootstrapSync(): Promise<void> {
     if (errors.length === 0) {
       const now = new Date().toISOString()
       await api.settingsSet('bootstrap_completed_at', now)
+      if (api.syncQueuePurgeTables) {
+        const purged = await api.syncQueuePurgeTables(BOOTSTRAP_TABLES.map(t => t.table)) as { deleted?: number }
+        if ((purged.deleted ?? 0) > 0) {
+          console.info(`[sync] Cleared ${purged.deleted} redundant queue item(s) after bootstrap upload`)
+        }
+      }
       console.info('[sync] Bootstrap upload complete ✓')
     } else {
       console.warn('[sync] Bootstrap completed with errors:', errors.join('; '))
@@ -411,7 +511,7 @@ export async function bootstrapSync(): Promise<void> {
   }
 }
 
-export function startSyncPolling(intervalMs = 10_000) {
+export function startSyncPolling(intervalMs = 5_000) {
   if (_running || !isSupabaseEnabled) return
   _running = true
 

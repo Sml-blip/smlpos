@@ -213,6 +213,8 @@ interface Window {
     syncQueueMarkFailed: (id: string, errorMsg: string) => Promise<unknown>
     syncQueueCleanup: () => Promise<unknown>
     syncQueuePendingCount: () => Promise<number>
+    syncQueuePurgeTables?: (tables: string[]) => Promise<{ deleted?: number }>
+    syncQueueDedupe?: () => Promise<{ deleted?: number }>
     syncBootstrapTableData: (tableName: string, onlyActive?: boolean) => Promise<unknown[]>
     syncPullApplyRows: (tableName: string, rows: Record<string, unknown>[]) => Promise<{ applied: number; skipped: number; error: string | null }>
     syncLocalTableCount: (tableName: string) => Promise<number>

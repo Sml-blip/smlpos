@@ -81,6 +81,12 @@ function addActivityLog(log: {
 
 function enqueueSync(table: string, operation: 'INSERT' | 'UPDATE' | 'DELETE', payload: Record<string, unknown>) {
   try {
+    const recordId = String(payload.id ?? payload.key ?? '')
+    if (recordId) {
+      db.prepare(
+        `DELETE FROM sync_queue WHERE synced_at IS NULL AND table_name = ? AND record_id = ?`,
+      ).run(table, recordId)
+    }
     db.prepare(`
       INSERT INTO sync_queue (id, table_name, operation, payload, record_id, created_at)
       VALUES (@id, @table_name, @operation, @payload, @record_id, @created_at)
@@ -89,7 +95,7 @@ function enqueueSync(table: string, operation: 'INSERT' | 'UPDATE' | 'DELETE', p
       table_name: table,
       operation,
       payload: JSON.stringify(payload),
-      record_id: String(payload.id ?? payload.key ?? ''),
+      record_id: recordId,
       created_at: new Date().toISOString(),
     })
   } catch { /* never crash a write because sync queueing failed */ }
@@ -2322,13 +2328,14 @@ function setupIpcHandlers() {
   })
 
   const SYNC_MAX_ATTEMPTS = 10 // give up after 10 consecutive failures
+  const SYNC_QUEUE_BATCH = 500
 
   ipcMain.handle('sync:queue:getPending', () => {
     // Only return items that haven't exceeded max attempts
     return db.prepare(
       `SELECT id, table_name, operation, payload FROM sync_queue
        WHERE synced_at IS NULL AND attempts < ${SYNC_MAX_ATTEMPTS}
-       ORDER BY created_at ASC LIMIT 100`
+       ORDER BY created_at ASC LIMIT ${SYNC_QUEUE_BATCH}`
     ).all()
   })
 
@@ -2395,6 +2402,35 @@ function setupIpcHandlers() {
   ipcMain.handle('sync:queue:purgeAll', () => {
     // Nuclear option: delete all pending sync items (data stays local)
     const { changes } = db.prepare(`DELETE FROM sync_queue WHERE synced_at IS NULL`).run()
+    return { deleted: changes }
+  })
+
+  ipcMain.handle('sync:queue:purgeTables', (_e, tables: string[]) => {
+    if (!Array.isArray(tables) || !tables.length) return { deleted: 0 }
+    const placeholders = tables.map(() => '?').join(',')
+    const { changes } = db.prepare(
+      `DELETE FROM sync_queue WHERE synced_at IS NULL AND table_name IN (${placeholders})`,
+    ).run(...tables)
+    return { deleted: changes }
+  })
+
+  ipcMain.handle('sync:queue:dedupe', () => {
+    const { changes } = db.prepare(`
+      DELETE FROM sync_queue
+      WHERE synced_at IS NULL AND id NOT IN (
+        SELECT q1.id FROM sync_queue q1
+        INNER JOIN (
+          SELECT table_name, record_id, MAX(created_at) AS max_created
+          FROM sync_queue
+          WHERE synced_at IS NULL AND record_id != ''
+          GROUP BY table_name, record_id
+        ) latest
+        ON q1.table_name = latest.table_name
+        AND q1.record_id = latest.record_id
+        AND q1.created_at = latest.max_created
+        WHERE q1.synced_at IS NULL
+      )
+    `).run()
     return { deleted: changes }
   })
 
