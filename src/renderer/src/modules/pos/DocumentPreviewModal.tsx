@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
 import { generateId } from '../../lib/utils'
@@ -48,7 +48,10 @@ export default function DocumentPreviewModal({
 
   const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
   // FACTURE: F items only. BL_VENTE: all items
-  const lignesItems = typeVente === 'FACTURE' ? items.filter(i => i.type_produit === 'F') : items
+  const lignesItems = useMemo(
+    () => (typeVente === 'FACTURE' ? items.filter(i => i.type_produit === 'F') : items),
+    [items, typeVente],
+  )
 
   const docLignes: InvoiceLineData[] = (docId || editLinesMode)
     ? editableLignes
@@ -90,15 +93,19 @@ export default function DocumentPreviewModal({
 
   useEffect(() => {
     const loadSerials = async () => {
+      const qtyByProduit = new Map<string, number>()
+      for (const item of lignesItems) {
+        if (!item.produit_id) continue
+        qtyByProduit.set(item.produit_id, (qtyByProduit.get(item.produit_id) ?? 0) + item.quantite)
+      }
+
       const entries = await Promise.all(
-        lignesItems
-          .filter(i => i.produit_id)
-          .map(async item => {
-            const sold = await api.serialNumbersGetByProduit(item.produit_id!) as { numero_serie: string; statut: string; vente_id?: string }[]
+        Array.from(qtyByProduit.entries()).map(async ([produitId, qty]) => {
+            const sold = await api.serialNumbersGetByProduit(produitId) as { numero_serie: string; statut: string; vente_id?: string }[]
             const forVente = sold.filter(s => s.statut === 'VENDU' && s.vente_id === vente.id).map(s => s.numero_serie)
-            const pending = sold.filter(s => s.statut === 'EN_STOCK').slice(0, item.quantite).map(s => s.numero_serie)
+            const pending = sold.filter(s => s.statut === 'EN_STOCK').slice(0, qty).map(s => s.numero_serie)
             const sns = forVente.length ? forVente : pending
-            return [item.produit_id!, sns.join(', ')] as const
+            return [produitId, sns.join(', ')] as const
           }),
       )
       setSerialByProduit(Object.fromEntries(entries.filter(([, v]) => v)))
@@ -173,6 +180,7 @@ export default function DocumentPreviewModal({
       total_ht: item.total_ligne,
       total_tva: 0,
       total_ttc: item.total_ligne,
+      numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
     })))
     return numero
   }
@@ -193,6 +201,7 @@ export default function DocumentPreviewModal({
         total_tva: l.total_tva,
         total_ttc: l.total_ttc,
         type_produit: 'F',
+        numero_serie: l.numero_serie ?? null,
       }))
       await api.documentsReplaceLignes?.(docId, lignes, { total_ht: totalHT, total_tva: 0, total_ttc: totalTTC })
       setEditLinesMode(false)

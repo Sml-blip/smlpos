@@ -27,6 +27,12 @@ function normalizeCell(value: unknown): unknown {
   return value
 }
 
+function asIsoTime(v: unknown): number | null {
+  if (typeof v !== 'string' || !v.trim()) return null
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : null
+}
+
 export function applyRemoteRows(
   db: Database.Database,
   tableName: string,
@@ -55,8 +61,30 @@ export function applyRemoteRows(
     ON CONFLICT(${pk}) DO UPDATE SET ${updates}
   `
   const stmt = db.prepare(sql)
+  const selectLocalUpdatedAt = columns.includes('updated_at')
+    ? db.prepare(`SELECT updated_at FROM "${tableName}" WHERE ${pk} = ? LIMIT 1`)
+    : null
   let applied = 0
   let skipped = 0
+
+  // If local device has unsynced changes for a row, remote pull must not override it.
+  const pendingPks = new Set<string>()
+  try {
+    const pending = db.prepare(
+      `SELECT payload FROM sync_queue WHERE table_name = ? AND synced_at IS NULL`,
+    ).all(tableName) as { payload: string }[]
+    for (const p of pending) {
+      try {
+        const parsed = JSON.parse(p.payload) as Record<string, unknown>
+        const val = parsed[pk]
+        if (val != null) pendingPks.add(String(val))
+      } catch {
+        // Ignore malformed queue payloads and continue safely.
+      }
+    }
+  } catch {
+    // sync_queue may be unavailable in rare migration states; continue without this guard.
+  }
 
   const run = db.transaction((items: Record<string, unknown>[]) => {
     for (const raw of items) {
@@ -81,6 +109,23 @@ export function applyRemoteRows(
         skipped++
         continue
       }
+
+      const pkVal = String(bound[pk])
+      if (pendingPks.has(pkVal)) {
+        skipped++
+        continue
+      }
+
+      if (selectLocalUpdatedAt && columns.includes('updated_at')) {
+        const remoteTs = asIsoTime(raw.updated_at)
+        const localRow = selectLocalUpdatedAt.get(pkVal) as { updated_at?: string } | undefined
+        const localTs = asIsoTime(localRow?.updated_at)
+        if (remoteTs != null && localTs != null && remoteTs < localTs) {
+          skipped++
+          continue
+        }
+      }
+
       stmt.run(bound)
       applied++
     }
