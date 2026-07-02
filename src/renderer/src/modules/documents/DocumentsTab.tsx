@@ -7,6 +7,7 @@ import { usePrint } from '../../lib/usePrint'
 import { printLabelHtml } from '../../lib/nativePrint'
 import { loadData, runAction } from '../../lib/apiCall'
 import DocumentPrintModal from '../historique/DocumentPrintModal'
+import FactureAchatPrintModal from '../achats/FactureAchatPrintModal'
 import type { Document } from '../../lib/types'
 import {
   FileText, Search, Download, Printer, Eye, X, CheckCircle, Clock,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react'
 
 const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F'])
+const ACHAT_PRINT_TYPES = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
 
 const api = window.api
 
@@ -228,6 +230,7 @@ export default function DocumentsTab() {
   const [excelModal, setExcelModal] = useState<{ rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<DocRow | null>(null)
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
+  const [printAchatId, setPrintAchatId] = useState<string | null>(null)
   const [revoquerDoc, setRevoquerDoc] = useState<DocRow | null>(null)
 
   const load = useCallback(async () => {
@@ -305,6 +308,10 @@ export default function DocumentsTab() {
   }
 
   const printDoc = (d: DocRow) => {
+    if (d._source === 'ff' && ACHAT_PRINT_TYPES.has(d.type_document)) {
+      setPrintAchatId(d.id)
+      return
+    }
     if (d._source !== 'ff' && INVOICE_PRINT_TYPES.has(d.type_document)) {
       setPrintInvoiceDoc(d as unknown as Document)
       return
@@ -572,6 +579,10 @@ export default function DocumentsTab() {
 
       {printInvoiceDoc && (
         <DocumentPrintModal doc={printInvoiceDoc} onClose={() => setPrintInvoiceDoc(null)} />
+      )}
+
+      {printAchatId && (
+        <FactureAchatPrintModal factureId={printAchatId} onClose={() => setPrintAchatId(null)} />
       )}
     </div>
   )

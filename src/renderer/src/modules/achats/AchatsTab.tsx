@@ -4,8 +4,10 @@ import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
-import { printLabelHtml } from '../../lib/nativePrint'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
+import FactureAchatPrintModal from './FactureAchatPrintModal'
+import { buildAchatInvoiceDoc, mapFactureAchatLignes } from '../../lib/invoiceAchatMapper'
+import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
   emptyFactureLigne,
   ligneBarcodeInfo,
@@ -1258,6 +1260,7 @@ function FactureFournisseurModal({
   const [savingQC, setSavingQC] = useState(false)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
+  const [printPreview, setPrintPreview] = useState<{ doc: InvoiceDocData; lignes: InvoiceLineData[] } | null>(null)
 
   const hasDraftContent = useMemo(
     () => lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || !!fournisseurId || !!numeroFacture,
@@ -1918,27 +1921,27 @@ function FactureFournisseurModal({
             type="button"
             onClick={() => {
               const fourn = fournisseurs.find(f => f.id === fournisseurId)
-              const html = `<!DOCTYPE html><html><head><title>Facture ${numeroFacture}</title>
-              <style>@page{size:A4;margin:15mm}body{font-family:Arial,sans-serif;font-size:11px}
-              h2{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:12px}
-              table{width:100%;border-collapse:collapse;margin-top:10px}
-              th{background:#f5f5f5;border:1px solid #ccc;padding:5px 8px;text-align:left;font-size:10px}
-              td{border:1px solid #ddd;padding:5px 8px;font-size:10px}
-              .total{font-weight:bold;background:#fffde7}</style></head><body>
-              <h2>${isBL ? 'Bon de Livraison' : 'Facture Fournisseur'} — ${numeroFacture}</h2>
-              <div class="sub">Date : ${dateFacture} | Fournisseur : ${fourn?.nom ?? fournisseurId}</div>
-              ${exoFlag ? `<div style="background:#fff3cd;padding:6px;border-radius:4px;margin-bottom:8px">EXO : ${exoText || 'Exonéré'}</div>` : ''}
-              <table><thead><tr><th>Désignation</th><th>Qté</th><th>Prix HT</th><th>TVA%</th><th>Total HT</th></tr></thead>
-              <tbody>${lignes.filter(l => l.designation.trim()).map(l =>
-                `<tr><td>${l.designation}</td><td>${l.quantite}</td><td>${l.nouveau_prix_achat.toFixed(3)}</td><td>${l.tva_taux}%</td><td>${(l.quantite * l.nouveau_prix_achat).toFixed(3)}</td></tr>`
-              ).join('')}
-              <tr class="total"><td colspan="4">Total HT</td><td>${montantHT.toFixed(3)}</td></tr>
-              <tr><td colspan="4">TVA</td><td>${(montantTTC - montantHT).toFixed(3)}</td></tr>
-              <tr class="total"><td colspan="4">Total TTC</td><td>${montantTTC.toFixed(3)}</td></tr>
-              ${parseFloat(remiseGlobale) > 0 ? `<tr><td colspan="4">Remise</td><td>- ${parseFloat(remiseGlobale).toFixed(3)}</td></tr>` : ''}
-              ${parseFloat(timbre) > 0 ? `<tr><td colspan="4">Timbre fiscal</td><td>${parseFloat(timbre).toFixed(3)}</td></tr>` : ''}
-              </tbody></table></body></html>`
-              void printLabelHtml(html)
+              const remise = parseFloat(remiseGlobale) || 0
+              const timbreVal = parseFloat(timbre) || 0
+              setPrintPreview({
+                doc: buildAchatInvoiceDoc({
+                  numero: numeroFacture || 'BROUILLON',
+                  type: isBL ? 'FACTURE_ACHAT_BL' : 'FACTURE_ACHAT',
+                  fournisseurNom: fourn?.nom ?? 'Fournisseur',
+                  fournisseurTel: fourn?.telephone,
+                  fournisseurAdresse: fourn?.adresse,
+                  fournisseurMatricule: fourn?.matricule_fiscal,
+                  dateFacture,
+                  montantHT,
+                  montantTVA: montantTTC - montantHT,
+                  montantTTC,
+                  exoFlag,
+                  exoText,
+                  remiseGlobale: remise,
+                  timbre: timbreVal,
+                }),
+                lignes: mapFactureAchatLignes(lignes, produits, exoFlag),
+              })
             }}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-muted hover:bg-border border border-border text-text-primary font-semibold rounded-xl text-sm transition-colors"
           >
@@ -1983,6 +1986,13 @@ function FactureFournisseurModal({
           prix={barcodePrint.prix}
           productRef={barcodePrint.ref}
           onClose={() => setBarcodePrint(null)}
+        />
+      )}
+
+      {printPreview && (
+        <FactureAchatPrintModal
+          preview={printPreview}
+          onClose={() => setPrintPreview(null)}
         />
       )}
 

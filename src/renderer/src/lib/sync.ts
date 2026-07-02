@@ -1,15 +1,18 @@
 /**
  * SMLPOS Offline Sync Engine
- * bootstrapSync() bulk-uploads local data to Supabase when remote tables are empty.
- * processSyncQueue() handles ongoing incremental sync via sync_queue table.
+ * push: local SQLite → Supabase via sync_queue
+ * pull: Supabase → local SQLite (multi-PC sync)
  */
 import { supabase, isSupabaseEnabled } from './supabase'
+import { invalidateProduitsCache } from './produitsCache'
 
 const api = window.api
 
 let _running = false
 let _intervalId: ReturnType<typeof setInterval> | null = null
 let _processing = false
+let _pulling = false
+let _pullTick = 0
 let _circuitOpenUntil = 0
 let _lastReachCheck = 0
 let _lastReachResult = false
@@ -31,6 +34,13 @@ const TABLE_PRIORITY: Record<string, number> = {
   mouvements_caisse_interne: 50, mouvements_personnels: 50, retours: 50,
   activity_logs: 60,
 }
+
+const PULL_TABLES = Object.keys(TABLE_PRIORITY).sort(
+  (a, b) => (TABLE_PRIORITY[a] ?? 45) - (TABLE_PRIORITY[b] ?? 45),
+)
+
+const PULL_PAGE_SIZE = 500
+const PULL_EVERY_N_POLLS = 3
 
 const BOOTSTRAP_TABLES: { table: string; onlyActive?: boolean }[] = [
   { table: 'categories' },
@@ -121,10 +131,6 @@ async function performRemoteSync(
     } catch { /* ignore */ }
   }
 
-  if (operation === 'UPDATE') {
-    const { error } = await supabase!.from(table_name).update(clean).eq(pk, pkValue)
-    return error?.message ?? null
-  }
   const { error } = await supabase!.from(table_name).upsert(clean, { onConflict: pk })
   return error?.message ?? null
 }
@@ -263,10 +269,72 @@ export async function purgeFailedItems(): Promise<number> {
 async function isRemoteTableEmpty(table: string): Promise<boolean> {
   const { count, error } = await supabase!.from(table).select('*', { count: 'exact', head: true })
   if (error) {
-    console.warn(`[sync] Bootstrap check ${table}:`, error.message)
-    return false
+    console.warn(`[sync] Remote check ${table}:`, error.message)
+    return true
   }
   return (count ?? 0) === 0
+}
+
+async function fetchRemoteTable(table: string): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase!
+      .from(table)
+      .select('*')
+      .range(from, from + PULL_PAGE_SIZE - 1)
+    if (error) throw new Error(error.message)
+    if (!data?.length) break
+    all.push(...(data as Record<string, unknown>[]))
+    if (data.length < PULL_PAGE_SIZE) break
+    from += PULL_PAGE_SIZE
+  }
+  return all
+}
+
+/** Download remote Supabase rows into local SQLite (multi-PC sync). */
+export async function pullSyncFromRemote(_opts?: { full?: boolean }): Promise<{ applied: number; errors: string[] }> {
+  if (!isSupabaseEnabled || !supabase) return { applied: 0, errors: [] }
+  if (!navigator.onLine) return { applied: 0, errors: [] }
+  if (_pulling) return { applied: 0, errors: [] }
+  if (!(await checkSupabaseReachable())) return { applied: 0, errors: [] }
+
+  _pulling = true
+  let applied = 0
+  const errors: string[] = []
+  try {
+    for (const table of PULL_TABLES) {
+      try {
+        const rows = await fetchRemoteTable(table)
+        if (!rows.length) continue
+        const result = await api.syncPullApplyRows(table, rows) as {
+          applied?: number; error?: string | null
+        }
+        if (result.error) {
+          errors.push(`${table}: ${result.error}`)
+          console.warn(`[sync] Pull ${table}:`, result.error)
+        } else {
+          applied += result.applied ?? 0
+          if ((result.applied ?? 0) > 0) {
+            console.info(`[sync] Pulled ${table}: ${result.applied} row(s)`)
+          }
+        }
+      } catch (e) {
+        const msg = String(e)
+        errors.push(`${table}: ${msg}`)
+        console.warn(`[sync] Pull ${table} failed:`, msg)
+      }
+    }
+
+    await api.settingsSet('pull_last_at', new Date().toISOString())
+    if (applied > 0) {
+      invalidateProduitsCache()
+      window.dispatchEvent(new CustomEvent('smlpos:sync-pull-complete', { detail: { applied } }))
+    }
+  } finally {
+    _pulling = false
+  }
+  return { applied, errors }
 }
 
 export async function bootstrapSync(): Promise<void> {
@@ -276,20 +344,35 @@ export async function bootstrapSync(): Promise<void> {
 
   try {
     const settings = await api.settingsGetAll() as Record<string, string>
+    const remoteHasData =
+      !(await isRemoteTableEmpty('produits')) ||
+      !(await isRemoteTableEmpty('ventes')) ||
+      !(await isRemoteTableEmpty('clients'))
+
+    if (remoteHasData) {
+      console.info('[sync] Remote data found — pulling into local database...')
+      const pull = await pullSyncFromRemote({ full: true })
+      if (pull.errors.length) {
+        await api.settingsSet('bootstrap_last_errors', pull.errors.slice(0, 5).join(' | '))
+      } else {
+        await api.settingsSet('bootstrap_last_errors', '')
+      }
+      if (!settings.bootstrap_completed_at) {
+        await api.settingsSet('bootstrap_completed_at', new Date().toISOString())
+      }
+      console.info(`[sync] Bootstrap pull complete — ${pull.applied} row(s) applied`)
+      return
+    }
+
     if (settings.bootstrap_completed_at) {
       console.info('[sync] Bootstrap already completed at', settings.bootstrap_completed_at)
       return
     }
 
-    console.info('[sync] Starting per-table bootstrap sync...')
+    console.info('[sync] Remote empty — uploading local data...')
     const errors: string[] = []
 
     const upload = async (table: string, onlyActive = false) => {
-      const empty = await isRemoteTableEmpty(table)
-      if (!empty) {
-        console.info(`[sync] Bootstrap skip ${table} — remote not empty`)
-        return
-      }
       const rows = await api.syncBootstrapTableData(table, onlyActive) as Record<string, unknown>[]
       if (!rows.length) return
       const BATCH = 200
@@ -318,7 +401,7 @@ export async function bootstrapSync(): Promise<void> {
     if (errors.length === 0) {
       const now = new Date().toISOString()
       await api.settingsSet('bootstrap_completed_at', now)
-      console.info('[sync] Bootstrap sync complete ✓')
+      console.info('[sync] Bootstrap upload complete ✓')
     } else {
       console.warn('[sync] Bootstrap completed with errors:', errors.join('; '))
       await api.settingsSet('bootstrap_last_errors', errors.slice(0, 5).join(' | '))
@@ -332,18 +415,29 @@ export function startSyncPolling(intervalMs = 10_000) {
   if (_running || !isSupabaseEnabled) return
   _running = true
 
-  processSyncQueue().then(n => { if (n > 0) console.info(`[sync] Flushed ${n} records on startup`) })
+  const runCycle = async () => {
+    const pushed = await processSyncQueue()
+    if (pushed > 0) console.info(`[sync] Pushed ${pushed} record(s)`)
+    _pullTick++
+    if (_pullTick >= PULL_EVERY_N_POLLS) {
+      _pullTick = 0
+      const pulled = await pullSyncFromRemote({ full: false })
+      if (pulled.applied > 0) console.info(`[sync] Pulled ${pulled.applied} record(s) from remote`)
+    }
+  }
 
-  _intervalId = setInterval(() => { processSyncQueue() }, intervalMs)
+  runCycle()
+
+  _intervalId = setInterval(() => { runCycle() }, intervalMs)
 
   window.addEventListener('online', () => {
     _circuitOpenUntil = 0
     _lastReachCheck = 0
-    processSyncQueue().then(n => { if (n > 0) console.info(`[sync] Flushed ${n} on reconnect`) })
+    runCycle()
   })
 
   window.addEventListener('focus', () => {
-    processSyncQueue()
+    runCycle()
   })
 }
 

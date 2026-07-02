@@ -104,6 +104,8 @@ const api = {
   facturesFournisseursList: (filters?: unknown) => ipcRenderer.invoke('facturesFournisseurs:list', filters),
   facturesFournisseursCreate: (facture: unknown, lignes: unknown[]) => ipcRenderer.invoke('facturesFournisseurs:create', facture, lignes),
   facturesFournisseursGetLastNumber: (fournisseurId: string) => ipcRenderer.invoke('facturesFournisseurs:getLastNumber', fournisseurId),
+  facturesFournisseursGet: (factureId: string) => ipcRenderer.invoke('facturesFournisseurs:get', factureId),
+  facturesFournisseursGetLignes: (factureId: string) => ipcRenderer.invoke('facturesFournisseurs:getLignes', factureId),
   facturesFournisseursListDrafts: () => ipcRenderer.invoke('facturesFournisseurs:listDrafts'),
   facturesFournisseursGetDraft: (draftId: string) => ipcRenderer.invoke('facturesFournisseurs:getDraft', draftId),
   facturesFournisseursSaveDraft: (payload: unknown) => ipcRenderer.invoke('facturesFournisseurs:saveDraft', payload),
@@ -197,6 +199,8 @@ const api = {
   syncQueueGetErrors: () => ipcRenderer.invoke('sync:queue:getErrors'),
   syncQueuePurgeAll: () => ipcRenderer.invoke('sync:queue:purgeAll'),
   syncBootstrapTableData: (tableName: string, onlyActive?: boolean) => ipcRenderer.invoke('sync:bootstrap:tableData', tableName, onlyActive),
+  syncPullApplyRows: (tableName: string, rows: Record<string, unknown>[]) => ipcRenderer.invoke('sync:pull:applyRows', tableName, rows),
+  syncLocalTableCount: (tableName: string) => ipcRenderer.invoke('sync:local:tableCount', tableName),
   syncShiftsGetFondDeCaisse: (shiftId: string) => ipcRenderer.invoke('sync:shifts:getFondDeCaisse', shiftId),
 
   // Window

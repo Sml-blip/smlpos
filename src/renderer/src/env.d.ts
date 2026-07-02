@@ -92,6 +92,8 @@ interface Window {
     facturesFournisseursList: (filters?: unknown) => Promise<unknown[]>
     facturesFournisseursCreate: (facture: unknown, lignes: unknown[]) => Promise<unknown>
     facturesFournisseursGetLastNumber: (fournisseurId: string) => Promise<number>
+    facturesFournisseursGet?: (factureId: string) => Promise<Record<string, unknown>>
+    facturesFournisseursGetLignes?: (factureId: string) => Promise<Record<string, unknown>[]>
     facturesFournisseursListDrafts: () => Promise<unknown[]>
     facturesFournisseursGetDraft: (draftId: string) => Promise<unknown>
     facturesFournisseursSaveDraft: (payload: unknown) => Promise<{ success?: boolean; draftId?: string; updated_at?: string }>
@@ -188,6 +190,8 @@ interface Window {
     syncQueueCleanup: () => Promise<unknown>
     syncQueuePendingCount: () => Promise<number>
     syncBootstrapTableData: (tableName: string, onlyActive?: boolean) => Promise<unknown[]>
+    syncPullApplyRows: (tableName: string, rows: Record<string, unknown>[]) => Promise<{ applied: number; skipped: number; error: string | null }>
+    syncLocalTableCount: (tableName: string) => Promise<number>
 
     // Print
     printLabel?: (html: string) => Promise<boolean>

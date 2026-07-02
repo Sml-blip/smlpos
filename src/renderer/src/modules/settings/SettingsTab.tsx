@@ -11,7 +11,7 @@ import { printTestPage, printLabelTestPage } from '../../components/PrintDialog'
 import { invalidateProduitsCache } from '../../lib/produitsCache'
 import { loadData, runAction } from '../../lib/apiCall'
 import { isSupabaseEnabled } from '../../lib/supabase'
-import { getPendingCount, getFailedCount, getBootstrapStatus, processSyncQueue, resetFailedItems } from '../../lib/sync'
+import { getPendingCount, getFailedCount, getBootstrapStatus, processSyncQueue, pullSyncFromRemote, resetFailedItems } from '../../lib/sync'
 import { showToast } from '../../lib/toast'
 
 const api = window.api
@@ -731,9 +731,10 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
 
   const handleForceSyncNow = async () => {
     await runAction('Synchronisation', async () => {
+      await pullSyncFromRemote({ full: false })
       await processSyncQueue()
       await refreshSync()
-    }, { setLoading: setSyncing, successMessage: 'Synchronisation terminée' })
+    }, { setLoading: setSyncing, successMessage: 'Synchronisation terminée (envoi + réception)' })
   }
 
   const loadStats = useCallback(async () => {

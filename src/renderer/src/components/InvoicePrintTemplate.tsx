@@ -32,6 +32,10 @@ export interface InvoiceDocData {
   statut_paiement: string
   date_echeance?: string | null
   created_at: string
+  timbre?: number
+  total_remise?: number
+  exo?: string | null
+  net_a_payer?: number
 }
 
 export interface InvoiceLineData {
@@ -45,6 +49,7 @@ export interface InvoiceLineData {
   total_tva: number
   total_ttc: number
   reference?: string | null
+  numero_serie?: string | null
 }
 
 interface Props {
@@ -81,13 +86,30 @@ const STATUT_PAYMENT_LABELS: Record<string, string> = {
   EN_RETARD: 'En retard',
 }
 
+const FIRST_PAGE_LINES = 14
+const NEXT_PAGE_LINES = 20
+const MIN_FILLER_ROWS = 6
+
 const fmt3 = (n: number) => n.toLocaleString('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+
+function paginateLines(lines: InvoiceLineData[]): InvoiceLineData[][] {
+  if (!lines.length) return [[]]
+  const pages: InvoiceLineData[][] = []
+  pages.push(lines.slice(0, FIRST_PAGE_LINES))
+  let i = FIRST_PAGE_LINES
+  while (i < lines.length) {
+    pages.push(lines.slice(i, i + NEXT_PAGE_LINES))
+    i += NEXT_PAGE_LINES
+  }
+  return pages
+}
 
 const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, settings }, ref) => {
   const palette = DOC_PALETTES[doc.type_document] ?? DOC_PALETTES.FACTURE_VENTE
   const showTva = settings.invoice_show_tva !== 'false'
-  const isFacture = doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F'
-  const timbre = isFacture ? 1.0 : 0
+  const isVenteFacture = doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F'
+  const isAchat = doc.type_document === 'FACTURE_ACHAT' || doc.type_document === 'FACTURE_ACHAT_BL'
+  const timbre = doc.timbre ?? (isVenteFacture ? 1.0 : isAchat ? 0 : 0)
 
   const companyName = INVOICE_COMPANY.name
   const companySubtitle = INVOICE_COMPANY.subtitle
@@ -106,26 +128,24 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
   const tvaRows = Array.from(tvaMap.entries()).sort((a, b) => a[0] - b[0])
 
   const totalBrutHT = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0)
-  const totalRemises = Math.max(0, totalBrutHT - doc.total_ht)
-  const displayedTotal = doc.total_ttc + timbre
+  const computedRemise = Math.max(0, totalBrutHT - doc.total_ht)
+  const totalRemises = doc.total_remise ?? computedRemise
+  const displayedTotal = doc.net_a_payer ?? (doc.total_ttc + (isVenteFacture ? timbre : 0) - totalRemises)
 
   const dateFormatted = new Date(doc.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   const docLabel = DOC_LABELS[doc.type_document] || doc.type_document
   const amountWords = amountToWordsDT(displayedTotal)
   const statutLabel = STATUT_PAYMENT_LABELS[doc.statut_paiement] || doc.statut_paiement
-
-  const density = lignes.length >= 12 ? 'ultra' : lignes.length >= 8 ? 'dense' : lignes.length >= 5 ? 'compact' : 'normal'
-  const isCompact = density !== 'normal'
-  const isUltra = density === 'ultra'
-  const fillerCount = isUltra ? 0 : Math.max(0, 12 - lignes.length)
   const totalQty = lignes.reduce((s, l) => s + l.quantite, 0)
+  const pages = paginateLines(lignes)
+  const pageCount = pages.length
 
   const colWidths = showTva
     ? ['6%', '42%', '4%', '10%', '4%', '4%', '14%', '16%']
     : ['7%', '46%', '5%', '11%', '5%', '13%', '13%']
 
-  const cellPad = isUltra ? '2px 3px' : '5px 4px'
-  const numCell: CSSProperties = { padding: cellPad, textAlign: 'right', whiteSpace: 'nowrap', fontSize: isUltra ? 7 : 9 }
+  const cellPad = '5px 4px'
+  const numCell: CSSProperties = { padding: cellPad, textAlign: 'right', whiteSpace: 'nowrap', fontSize: 9 }
   const centerCell: CSSProperties = { ...numCell, textAlign: 'center' }
 
   const C = {
@@ -138,121 +158,64 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
     ...palette,
   }
 
-  return (
-    <div
-      ref={ref}
-      style={{
-        fontFamily: "'Montserrat', 'Inter', system-ui, sans-serif",
-        fontSize: isUltra ? '8px' : isCompact ? '9px' : '11px',
-        color: C.text,
-        background: C.white,
-        width: '100%',
-        maxWidth: '780px',
-        minHeight: isUltra ? 'auto' : '980px',
-        margin: '0 auto',
-        padding: isUltra ? '8px' : '24px',
-        boxSizing: 'border-box',
-        border: `1px solid ${C.border}`,
-        borderRadius: '12px',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: isUltra ? 8 : 20 }}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', maxWidth: '42%' }}>
-          {companyLogo ? (
-            <img src={companyLogo} alt="" style={{ width: isUltra ? 48 : 72, height: 'auto', objectFit: 'contain' }} />
-          ) : (
-            <div style={{ width: 48, height: 48, background: C.primary, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 18 }}>
-              {companyName.charAt(0)}
-            </div>
-          )}
-          {!isUltra && (
-            <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.4, color: C.textLight }}>{companySubtitle || companyName}</div>
-          )}
-        </div>
-        <div style={{ fontSize: isUltra ? 22 : 36, fontWeight: 700, color: C.titleColor, letterSpacing: '-0.5px' }}>{docLabel}</div>
-        <div style={{ textAlign: 'right', fontSize: 11, color: C.textLight, lineHeight: 1.5 }}>
-          <div style={{ fontWeight: 700, color: C.text }}>N° {doc.numero}</div>
-          <div>Créée le : {dateFormatted}</div>
-          <div>{statutLabel}</div>
-        </div>
-      </div>
+  const tierLabel = isAchat ? 'Fournisseur' : 'Client'
 
-      {/* Seller / Client */}
-      <div style={{ display: 'flex', gap: isUltra ? 6 : 14, marginBottom: isUltra ? 6 : 18 }}>
-        <div style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 14, padding: isUltra ? 6 : 14, background: C.secondarySoft, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>{companyName}</div>
-          {companyAddress && <div><span style={{ color: C.textLight }}>Siège :</span> {companyAddress}</div>}
-          {companyMatricule && <div><span style={{ color: C.textLight }}>MF :</span> {companyMatricule}</div>}
-          {companyPhone && <div><span style={{ color: C.textLight }}>Tél :</span> {companyPhone}</div>}
-        </div>
-        <div style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 14, padding: isUltra ? 6 : 14, background: C.primarySoft, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>{doc.client_nom || 'Client Passager'}</div>
-          {doc.client_adresse && <div><span style={{ color: C.textLight }}>Adresse :</span> {doc.client_adresse}</div>}
-          {doc.client_tel && <div><span style={{ color: C.textLight }}>Tél :</span> {doc.client_tel}</div>}
-          {doc.client_matricule && <div><span style={{ color: C.textLight }}>MF :</span> {doc.client_matricule}</div>}
-        </div>
-      </div>
+  const renderLineRow = (l: InvoiceLineData, idx: number) => (
+    <tr key={l.id} style={{ background: idx % 2 === 0 ? C.white : C.surface }}>
+      <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, fontSize: 9, verticalAlign: 'top' }}>
+        {l.reference || '—'}
+      </td>
+      <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>
+        <div style={{ fontSize: 10, lineHeight: 1.3 }}>{l.designation}</div>
+        {l.numero_serie ? (
+          <div style={{ fontSize: 8, color: C.textLight, marginTop: 2, fontStyle: 'italic' }}>
+            S/N : {l.numero_serie}
+          </div>
+        ) : null}
+      </td>
+      <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>{l.quantite}</td>
+      <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>{fmt3(l.prix_unitaire)}</td>
+      <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>{l.remise_pct ? `${l.remise_pct}%` : '0%'}</td>
+      {showTva && (
+        <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>{l.tva_taux}%</td>
+      )}
+      <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, verticalAlign: 'top' }}>{fmt3(l.total_ht)}</td>
+      <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, background: C.primarySoft, fontWeight: 600, verticalAlign: 'top' }}>{fmt3(l.total_ttc)}</td>
+    </tr>
+  )
 
-      {/* Lines table */}
-      <div style={{ flex: 1 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', border: `1px solid ${C.border}`, borderRadius: '12px 12px 0 0', overflow: 'hidden' }}>
-          <colgroup>
-            {colWidths.map((w, i) => (
-              <col key={i} style={{ width: w }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr style={{ background: C.primary, color: '#fff' }}>
-              {['Code', 'Désignation', 'Qté', 'PU HT', 'Rem.', showTva ? 'TVA' : null, 'HT', 'TTC'].filter(Boolean).map((h, i) => (
-                <th key={h!} style={{
-                  padding: isUltra ? '3px 3px' : '6px 4px',
-                  textAlign: i >= 2 ? (i === 2 || (showTva && i === 5) ? 'center' : 'right') : 'left',
-                  fontWeight: 600,
-                  fontSize: isUltra ? 7 : 8,
-                  whiteSpace: 'nowrap',
-                  borderRight: i < 7 ? '1px solid rgba(255,255,255,0.15)' : undefined,
-                }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {lignes.map((l, idx) => (
-              <tr key={l.id} style={{ background: idx % 2 === 0 ? C.white : C.surface }}>
-                <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: isUltra ? 7 : 9 }}>{l.reference || '—'}</td>
-                <td style={{ padding: cellPad, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.designation}>{l.designation}</td>
-                <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.quantite}</td>
-                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.prix_unitaire)}</td>
-                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.remise_pct ? `${l.remise_pct}%` : '0%'}</td>
-                {showTva && (
-                  <td style={{ ...centerCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{l.tva_taux}%</td>
-                )}
-                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.borderLight}` }}>{fmt3(l.total_ht)}</td>
-                <td style={{ ...numCell, borderBottom: `1px solid ${C.borderLight}`, background: C.primarySoft, fontWeight: 600 }}>{fmt3(l.total_ttc)}</td>
-              </tr>
-            ))}
-            {!isUltra && Array.from({ length: fillerCount }).map((_, i) => (
-              <tr key={`f-${i}`} style={{ background: (lignes.length + i) % 2 === 0 ? C.white : C.surface }}>
-                <td colSpan={showTva ? 8 : 7} style={{ height: 22, borderBottom: `1px solid ${C.borderLight}` }} />
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr style={{ background: C.secondarySoft, fontWeight: 600 }}>
-              <td colSpan={2} style={{ padding: '6px 8px', borderTop: `1px solid ${C.border}` }}>{lignes.length} article(s)</td>
-              <td style={{ textAlign: 'center', borderTop: `1px solid ${C.border}` }}>{totalQty}</td>
-              <td colSpan={showTva ? 4 : 3} style={{ borderTop: `1px solid ${C.border}` }} />
-              <td style={{ textAlign: 'right', padding: '6px 8px', borderTop: `1px solid ${C.border}`, background: C.primarySoft, fontWeight: 700 }}>{fmt3(displayedTotal)} DT</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+  const renderTableHead = () => (
+    <thead>
+      <tr style={{ background: C.primary, color: '#fff' }}>
+        {['Code', 'Désignation', 'Qté', 'PU HT', 'Rem.', showTva ? 'TVA' : null, 'HT', 'TTC'].filter(Boolean).map((h, i) => (
+          <th key={h!} style={{
+            padding: '6px 4px',
+            textAlign: i >= 2 ? (i === 2 || (showTva && i === 5) ? 'center' : 'right') : 'left',
+            fontWeight: 600,
+            fontSize: 8,
+            whiteSpace: 'nowrap',
+            borderRight: i < 7 ? '1px solid rgba(255,255,255,0.15)' : undefined,
+          }}>{h}</th>
+        ))}
+      </tr>
+    </thead>
+  )
 
-      {/* Footer blocks */}
-      <div style={{ display: 'grid', gridTemplateColumns: showTva && !isUltra ? '1fr 1fr' : '1fr', border: `1px solid ${C.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden', marginTop: -1 }}>
-        {showTva && !isUltra && (
+  const renderSummaryFoot = () => (
+    <tfoot>
+      <tr style={{ background: C.secondarySoft, fontWeight: 600 }}>
+        <td colSpan={2} style={{ padding: '6px 8px', borderTop: `1px solid ${C.border}` }}>{lignes.length} article(s)</td>
+        <td style={{ textAlign: 'center', borderTop: `1px solid ${C.border}` }}>{totalQty}</td>
+        <td colSpan={showTva ? 4 : 3} style={{ borderTop: `1px solid ${C.border}` }} />
+        <td style={{ textAlign: 'right', padding: '6px 8px', borderTop: `1px solid ${C.border}`, background: C.primarySoft, fontWeight: 700 }}>{fmt3(displayedTotal)} DT</td>
+      </tr>
+    </tfoot>
+  )
+
+  const renderTotalsBlock = () => (
+    <>
+      <div className="invoice-totals" style={{ display: 'grid', gridTemplateColumns: showTva ? '1fr 1fr' : '1fr', border: `1px solid ${C.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden', marginTop: -1 }}>
+        {showTva && (
           <div style={{ borderRight: `1px solid ${C.border}` }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}>
               <thead>
@@ -279,6 +242,11 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
           </div>
         )}
         <div>
+          {doc.exo ? (
+            <div style={{ padding: '6px 10px', background: '#FEF3C7', borderBottom: `1px solid ${C.borderLight}`, fontSize: 10 }}>
+              EXO : {doc.exo}
+            </div>
+          ) : null}
           {[
             ['Total Remise', totalRemises > 0 ? fmt3(totalRemises) : fmt3(0)],
             ...(showTva ? [['Total TVA', fmt3(doc.total_tva)]] : []),
@@ -292,13 +260,13 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
           ))}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: C.primarySoft }}>
             <span style={{ fontWeight: 700 }}>Net à payer</span>
-            <span style={{ fontWeight: 800, fontSize: isCompact ? 14 : 16 }}>{fmt3(displayedTotal)} DT</span>
+            <span style={{ fontWeight: 800, fontSize: 16 }}>{fmt3(displayedTotal)} DT</span>
           </div>
         </div>
       </div>
 
-      {(isUltra || !showTva) && (
-        <div style={{ marginTop: 8, padding: 8, background: C.primarySoft, borderRadius: 8, fontSize: isUltra ? 8 : 10 }}>
+      {!showTva && (
+        <div style={{ marginTop: 8, padding: 8, background: C.primarySoft, borderRadius: 8, fontSize: 10 }}>
           <span style={{ color: C.textLight }}>Arrêtée à : </span>
           <span style={{ fontStyle: 'italic', fontWeight: 600 }}>{amountWords}</span>
         </div>
@@ -307,6 +275,119 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
       <div style={{ marginTop: 10, fontSize: 9, color: C.textLight, textAlign: 'center' }}>
         {companyRib ? `RIB : ${companyRib}` : footer}
       </div>
+    </>
+  )
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        fontFamily: "'Montserrat', 'Inter', system-ui, sans-serif",
+        fontSize: '11px',
+        color: C.text,
+        background: C.white,
+        width: '100%',
+        maxWidth: '780px',
+        margin: '0 auto',
+        boxSizing: 'border-box',
+      }}
+    >
+      {pages.map((pageLines, pageIdx) => {
+        const isFirst = pageIdx === 0
+        const isLast = pageIdx === pageCount - 1
+        const fillerCount = isLast ? Math.max(0, MIN_FILLER_ROWS - pageLines.length) : 0
+
+        return (
+          <div
+            key={pageIdx}
+            className="invoice-page"
+            style={{
+              minHeight: '980px',
+              margin: '0 auto 12px',
+              padding: '24px',
+              border: `1px solid ${C.border}`,
+              borderRadius: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+              pageBreakAfter: isLast ? 'auto' : 'always',
+              breakAfter: isLast ? 'auto' : 'page',
+            }}
+          >
+            {isFirst ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', maxWidth: '42%' }}>
+                    {companyLogo ? (
+                      <img src={companyLogo} alt="" style={{ width: 72, height: 'auto', objectFit: 'contain' }} />
+                    ) : (
+                      <div style={{ width: 48, height: 48, background: C.primary, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 18 }}>
+                        {companyName.charAt(0)}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.4, color: C.textLight }}>{companySubtitle || companyName}</div>
+                  </div>
+                  <div style={{ fontSize: 36, fontWeight: 700, color: C.titleColor, letterSpacing: '-0.5px' }}>{docLabel}</div>
+                  <div style={{ textAlign: 'right', fontSize: 11, color: C.textLight, lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 700, color: C.text }}>N° {doc.numero}</div>
+                    <div>Créée le : {dateFormatted}</div>
+                    <div>{statutLabel}</div>
+                    <div>Page : {pageIdx + 1}/{pageCount}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 14, marginBottom: 18 }}>
+                  <div style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, background: C.secondarySoft, lineHeight: 1.6 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>{companyName}</div>
+                    {companyAddress && <div><span style={{ color: C.textLight }}>Siège :</span> {companyAddress}</div>}
+                    {companyMatricule && <div><span style={{ color: C.textLight }}>MF :</span> {companyMatricule}</div>}
+                    {companyPhone && <div><span style={{ color: C.textLight }}>Tél :</span> {companyPhone}</div>}
+                  </div>
+                  <div style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, background: C.primarySoft, lineHeight: 1.6 }}>
+                    <div style={{ fontSize: 9, color: C.textLight, marginBottom: 2 }}>{tierLabel}</div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>{doc.client_nom || (isAchat ? 'Fournisseur' : 'Client Passager')}</div>
+                    {doc.client_adresse && <div><span style={{ color: C.textLight }}>Adresse :</span> {doc.client_adresse}</div>}
+                    {doc.client_tel && <div><span style={{ color: C.textLight }}>Tél :</span> {doc.client_tel}</div>}
+                    {doc.client_matricule && <div><span style={{ color: C.textLight }}>MF :</span> {doc.client_matricule}</div>}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ fontWeight: 700, color: C.titleColor }}>{docLabel} — N° {doc.numero}</div>
+                <div style={{ fontSize: 10, color: C.textLight }}>Suite · Page {pageIdx + 1}/{pageCount}</div>
+              </div>
+            )}
+
+            <div style={{ flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', border: `1px solid ${C.border}`, borderRadius: isLast ? '12px 12px 0 0' : '12px', overflow: 'hidden' }}>
+                <colgroup>
+                  {colWidths.map((w, i) => (
+                    <col key={i} style={{ width: w }} />
+                  ))}
+                </colgroup>
+                {renderTableHead()}
+                <tbody>
+                  {pageLines.map((l, idx) => renderLineRow(l, idx))}
+                  {isLast && Array.from({ length: fillerCount }).map((_, i) => (
+                    <tr key={`f-${i}`} style={{ background: (pageLines.length + i) % 2 === 0 ? C.white : C.surface }}>
+                      <td colSpan={showTva ? 8 : 7} style={{ height: 22, borderBottom: `1px solid ${C.borderLight}` }} />
+                    </tr>
+                  ))}
+                </tbody>
+                {isLast ? renderSummaryFoot() : null}
+              </table>
+              {isLast ? renderTotalsBlock() : null}
+            </div>
+
+            {!isLast && (
+              <div style={{ marginTop: 'auto', paddingTop: 12, fontSize: 9, color: C.textLight, textAlign: 'right' }}>
+                Suite page suivante…
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 })

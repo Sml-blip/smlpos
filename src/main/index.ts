@@ -9,6 +9,7 @@ import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
 import { discoverRecoverableDatabases } from './userDataWipe'
+import { applyRemoteRows, getLocalTableCount, isPullTableAllowed, LOCAL_SETTINGS_KEYS } from './syncPull'
 import { bootstrapCanonicalUserDataPath, getArchiveDir } from './dataPaths'
 import { createProtectedBackup, copyToExternalFolder, getBackupDir } from './backupService'
 import { importDefaultProductCatalog } from './seedProducts'
@@ -762,15 +763,27 @@ function setupIpcHandlers() {
       VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit)
     `)
     const updateStock = db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?')
+    const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?`)
+    const nextSn = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1`)
 
     const transaction = db.transaction(() => {
       insertVente.run({
         client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
         ...vente
       })
+      const now = new Date().toISOString()
       for (const ligne of lignes) {
         insertLigne.run(ligne)
-        if (ligne.produit_id) updateStock.run(ligne.quantite, ligne.produit_id)
+        if (ligne.produit_id) {
+          updateStock.run(ligne.quantite, ligne.produit_id)
+          const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(ligne.produit_id) as { has_serial_number?: number } | undefined
+          if (prod?.has_serial_number) {
+            for (let q = 0; q < (ligne.quantite as number); q++) {
+              const sn = nextSn.get(ligne.produit_id) as { id: string } | undefined
+              if (sn) markSnSold.run(vente.id, now, sn.id)
+            }
+          }
+        }
       }
     })
     transaction()
@@ -1285,9 +1298,11 @@ function setupIpcHandlers() {
   ipcMain.handle('facturesFournisseurs:create', (_e, facture, lignes) => {
     const insertFacture = db.prepare(`
       INSERT INTO factures_fournisseurs (id, numero_facture, fournisseur_id, date_facture, date_echeance,
-        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception, created_at)
+        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception,
+        exo, timbre, total_remise, ht_7, tva_7, ht_19, tva_19, created_at)
       VALUES (@id, @numero_facture, @fournisseur_id, @date_facture, @date_echeance,
-        @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception, @created_at)
+        @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception,
+        @exo, @timbre, @total_remise, @ht_7, @tva_7, @ht_19, @tva_19, @created_at)
     `)
     const insertLigne = db.prepare(`
       INSERT INTO lignes_facture_fournisseur (id, facture_id, produit_id, designation, quantite,
@@ -1303,6 +1318,7 @@ function setupIpcHandlers() {
     const f = facture as Record<string, unknown>
     const isBL = f.type === 'FACTURE_ACHAT_BL'
     const factureWithDefaults = {
+      exo: null, timbre: 1, total_remise: null, ht_7: null, tva_7: null, ht_19: null, tva_19: null,
       ...f,
       type: f.type ?? 'FACTURE_ACHAT',
       statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
@@ -1362,6 +1378,25 @@ function setupIpcHandlers() {
     enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_reception: 'ARRIVE' })
     for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
     return { success: true }
+  })
+
+  ipcMain.handle('facturesFournisseurs:get', (_e, id: string) => {
+    return db.prepare(`
+      SELECT ff.*, f.nom AS fournisseur_nom, f.telephone, f.adresse, f.matricule_fiscal
+      FROM factures_fournisseurs ff
+      LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
+      WHERE ff.id = ?
+    `).get(id)
+  })
+
+  ipcMain.handle('facturesFournisseurs:getLignes', (_e, factureId: string) => {
+    return db.prepare(`
+      SELECT l.*, p.reference
+      FROM lignes_facture_fournisseur l
+      LEFT JOIN produits p ON p.id = l.produit_id
+      WHERE l.facture_id = ?
+      ORDER BY l.id ASC
+    `).all(factureId)
   })
 
   ipcMain.handle('facturesFournisseurs:getLastNumber', (_e, fournisseurId: string) => {
@@ -1863,7 +1898,9 @@ function setupIpcHandlers() {
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
     db.prepare(`INSERT OR REPLACE INTO app_settings (key,value,updated_at) VALUES (?,?,?)`).run(key, value, new Date().toISOString())
     addActivityLog({ action: 'SETTING_UPDATED', details: { key, value } })
-    enqueueSync('app_settings', 'UPDATE', { key, value })
+    if (!LOCAL_SETTINGS_KEYS.has(key)) {
+      enqueueSync('app_settings', 'UPDATE', { key, value })
+    }
     return { success: true }
   })
 
@@ -1872,7 +1909,11 @@ function setupIpcHandlers() {
     const now = new Date().toISOString()
     db.transaction(() => { for (const [k, v] of Object.entries(data)) stmt.run(k, v, now) })()
     addActivityLog({ action: 'SETTINGS_UPDATED', details: data })
-    for (const [k, v] of Object.entries(data)) enqueueSync('app_settings', 'UPDATE', { key: k, value: v })
+    for (const [k, v] of Object.entries(data)) {
+      if (!LOCAL_SETTINGS_KEYS.has(k)) {
+        enqueueSync('app_settings', 'UPDATE', { key: k, value: v })
+      }
+    }
     return { success: true }
   })
 
@@ -2097,8 +2138,8 @@ function setupIpcHandlers() {
     db.transaction(() => {
       db.prepare(`INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at) VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)`).run(normalizedDoc)
       for (const l of docLignes) {
-        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
-        db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)`).run(nl)
+        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l }
+        db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)`).run(nl)
       }
     })()
     addActivityLog({ shift_id: doc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: doc.type_document, numero: doc.numero, client: doc.client_nom }, montant: doc.total_ttc as number })
@@ -2118,18 +2159,49 @@ function setupIpcHandlers() {
     return { success: true }
   })
   ipcMain.handle('documents:getLignes', (_e, documentId: string) => {
-    return db.prepare(`SELECT * FROM lignes_document WHERE document_id = ?`).all(documentId)
+    const docRow = db.prepare(`SELECT vente_id FROM documents WHERE id = ?`).get(documentId) as { vente_id?: string } | undefined
+    const venteId = docRow?.vente_id
+    const rows = db.prepare(`
+      SELECT ld.*, p.reference AS produit_reference, p.numero_serie AS produit_numero_serie, p.has_serial_number
+      FROM lignes_document ld
+      LEFT JOIN produits p ON p.id = ld.produit_id
+      WHERE ld.document_id = ?
+    `).all(documentId) as Record<string, unknown>[]
+
+    const snByVenteProduit = venteId
+      ? db.prepare(`
+          SELECT produit_id, numero_serie FROM serial_numbers
+          WHERE vente_id = ? AND statut = 'VENDU'
+          ORDER BY created_at ASC
+        `).all(venteId) as { produit_id: string; numero_serie: string }[]
+      : []
+
+    return rows.map(row => {
+      let numero_serie = row.numero_serie as string | null | undefined
+      if (!numero_serie && row.produit_id) {
+        const sns = snByVenteProduit.filter(s => s.produit_id === row.produit_id).map(s => s.numero_serie)
+        if (sns.length) numero_serie = sns.join(', ')
+      }
+      if (!numero_serie && row.has_serial_number && row.produit_numero_serie) {
+        numero_serie = row.produit_numero_serie as string
+      }
+      return {
+        ...row,
+        reference: row.produit_reference ?? null,
+        numero_serie: numero_serie ?? null,
+      }
+    })
   })
 
   ipcMain.handle('documents:replaceLignes', (_e, documentId: string, lignes: Record<string, unknown>[], totals: { total_ht: number; total_tva: number; total_ttc: number }) => {
     const insertLigne = db.prepare(`
-      INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit)
-      VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)
+      INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie)
+      VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)
     `)
     db.transaction(() => {
       db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
       for (const l of lignes) {
-        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l, document_id: documentId }
+        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l, document_id: documentId }
         insertLigne.run(nl)
       }
       db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, updated_at=datetime('now') WHERE id=?`).run(
@@ -2325,6 +2397,20 @@ function setupIpcHandlers() {
     } catch {
       return []
     }
+  })
+
+  ipcMain.handle('sync:pull:applyRows', (_e, tableName: string, rows: Record<string, unknown>[]) => {
+    if (!isPullTableAllowed(tableName)) return { applied: 0, skipped: 0, error: 'table not allowed' }
+    try {
+      const result = applyRemoteRows(db, tableName, rows ?? [])
+      return { ...result, error: null }
+    } catch (e) {
+      return { applied: 0, skipped: 0, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('sync:local:tableCount', (_e, tableName: string) => {
+    return getLocalTableCount(db, tableName)
   })
 
   // Window controls

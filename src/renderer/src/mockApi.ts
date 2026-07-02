@@ -163,6 +163,8 @@ const mockApi = {
   syncQueueGetErrors: async () => [],
   syncQueuePurgeAll: async () => ({ deleted: 0 }),
   syncBootstrapTableData: async () => [],
+  syncPullApplyRows: async () => ({ applied: 0, skipped: 0, error: null }),
+  syncLocalTableCount: async () => 0,
   syncShiftsGetFondDeCaisse: async () => 100,
 
   operateursList: async () => OPERATEURS,
@@ -323,6 +325,8 @@ const mockApi = {
     return out
   },
   facturesFournisseursGetLastNumber: async () => nextFacFourn,
+  facturesFournisseursGet: async () => ({}),
+  facturesFournisseursGetLignes: async () => [],
   facturesFournisseursListDrafts: async () => [],
   facturesFournisseursGetDraft: async () => null,
   facturesFournisseursSaveDraft: async (payload: { draftId?: string }) => ({

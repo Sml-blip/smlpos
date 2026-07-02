@@ -46,7 +46,23 @@ export default function DocumentPrintModal({ doc, onClose }: Props) {
       getPrintHtml={() => printRef.current?.innerHTML ?? ''}
       preview={
         <div ref={printRef}>
-          <InvoicePrintTemplate doc={doc} lignes={lignes} settings={settings} />
+          <InvoicePrintTemplate
+            doc={doc}
+            lignes={lignes.map(l => ({
+              id: l.id,
+              designation: l.designation,
+              quantite: l.quantite,
+              prix_unitaire: l.prix_unitaire,
+              remise_pct: l.remise_pct,
+              tva_taux: l.tva_taux,
+              total_ht: l.total_ht,
+              total_tva: l.total_tva,
+              total_ttc: l.total_ttc,
+              reference: l.reference ?? null,
+              numero_serie: l.numero_serie ?? null,
+            }))}
+            settings={settings}
+          />
         </div>
       }
       pageSize="A4"

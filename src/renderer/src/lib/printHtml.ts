@@ -10,6 +10,9 @@ export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | '58mm' | '80mm
     @media print{
       html,body{height:auto!important;overflow:visible!important}
       body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .invoice-page{page-break-after:always;break-after:page}
+      .invoice-page:last-child{page-break-after:auto;break-after:auto}
+      .invoice-totals{page-break-inside:avoid;break-inside:avoid}
     }
   </style></head><body>${innerHTML}</body></html>`
 }

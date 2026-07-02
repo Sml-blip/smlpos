@@ -3,7 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
-import { getPendingCount, getFailedCount, processSyncQueue, resetFailedItems, purgeFailedItems } from '../lib/sync'
+import { getPendingCount, getFailedCount, processSyncQueue, pullSyncFromRemote, resetFailedItems, purgeFailedItems } from '../lib/sync'
 import { isSupabaseEnabled } from '../lib/supabase'
 import { runAction } from '../lib/apiCall'
 
@@ -68,9 +68,13 @@ export default function StatusBar() {
     if (syncing) return
     setSyncMsg(null)
     await runAction('Synchronisation', async () => {
-      const n = await processSyncQueue()
+      const pulled = await pullSyncFromRemote({ full: false })
+      const pushed = await processSyncQueue()
       await refreshCounts()
-      setSyncMsg(n > 0 ? `${n} synchronisé(s)` : 'À jour')
+      const parts: string[] = []
+      if (pulled.applied > 0) parts.push(`${pulled.applied} reçu(s)`)
+      if (pushed > 0) parts.push(`${pushed} envoyé(s)`)
+      setSyncMsg(parts.length ? parts.join(', ') : 'À jour')
       setTimeout(() => setSyncMsg(null), 3000)
     }, { setLoading: setSyncing })
   }

@@ -374,6 +374,8 @@ export interface LigneDocument {
   total_tva: number
   total_ttc: number
   type_produit: TypeFacturation
+  numero_serie?: string | null
+  reference?: string | null
 }
 
 // ── Retours ──────────────────────────────────────────────────────────────────

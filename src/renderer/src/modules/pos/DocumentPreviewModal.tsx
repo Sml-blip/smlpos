@@ -43,6 +43,7 @@ export default function DocumentPreviewModal({
   const [editLinesMode, setEditLinesMode] = useState(false)
   const [editableLignes, setEditableLignes] = useState<InvoiceLineData[]>([])
   const [showPrintDialog, setShowPrintDialog] = useState(false)
+  const [serialByProduit, setSerialByProduit] = useState<Record<string, string>>({})
   const previewRef = useRef<HTMLDivElement>(null)
 
   const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
@@ -61,6 +62,7 @@ export default function DocumentPreviewModal({
     total_ht: item.total_ligne,
     total_tva: 0,
     total_ttc: item.total_ligne,
+    numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
   }))
 
   const totalHT = docLignes.reduce((s, l) => s + l.total_ht, 0)
@@ -85,6 +87,24 @@ export default function DocumentPreviewModal({
       if (s) setSettings((s as InvoiceCompanySettings) || {})
     })
   }, [])
+
+  useEffect(() => {
+    const loadSerials = async () => {
+      const entries = await Promise.all(
+        lignesItems
+          .filter(i => i.produit_id)
+          .map(async item => {
+            const sold = await api.serialNumbersGetByProduit(item.produit_id!) as { numero_serie: string; statut: string; vente_id?: string }[]
+            const forVente = sold.filter(s => s.statut === 'VENDU' && s.vente_id === vente.id).map(s => s.numero_serie)
+            const pending = sold.filter(s => s.statut === 'EN_STOCK').slice(0, item.quantite).map(s => s.numero_serie)
+            const sns = forVente.length ? forVente : pending
+            return [item.produit_id!, sns.join(', ')] as const
+          }),
+      )
+      setSerialByProduit(Object.fromEntries(entries.filter(([, v]) => v)))
+    }
+    void loadSerials()
+  }, [lignesItems, vente.id])
 
   const getNextNumero = async (): Promise<string> => {
     const year = new Date().getFullYear()
@@ -138,6 +158,7 @@ export default function DocumentPreviewModal({
       total_tva: 0,
       total_ttc: item.total_ligne,
       type_produit: item.type_produit,
+      numero_serie: item.produit_id ? serialByProduit[item.produit_id] ?? null : null,
     }))
 
     await api.documentsCreate(doc, lignes)
