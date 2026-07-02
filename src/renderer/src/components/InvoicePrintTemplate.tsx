@@ -14,6 +14,7 @@ export interface InvoiceCompanySettings {
   invoice_show_tva?: string
   invoice_primary_color?: string
   invoice_timbre_fiscal?: string
+  invoice_template_json?: string
   boutique_rib?: string
   boutique_banque?: string
   [key: string]: string | undefined
@@ -118,7 +119,40 @@ function paginateLines(lines: InvoiceLineData[]): InvoiceLineData[][] {
   return pages
 }
 
+export interface InvoiceTemplateConfig {
+  primaryColor?: string
+  showTva?: boolean
+  showFooter?: boolean
+  showTimbre?: boolean
+  showWatermark?: boolean
+  watermarkText?: string
+  watermarkOpacity?: number
+  watermarkAngle?: number
+}
+
+const DEFAULT_TEMPLATE_CONFIG: InvoiceTemplateConfig = {
+  showWatermark: true,
+  watermarkText: 'SML',
+  watermarkOpacity: 7,
+  watermarkAngle: -32,
+}
+
+export function parseInvoiceTemplateConfig(settings: InvoiceCompanySettings): InvoiceTemplateConfig {
+  if (settings.invoice_template_json && settings.invoice_template_json !== '{}') {
+    try {
+      return { ...DEFAULT_TEMPLATE_CONFIG, ...JSON.parse(settings.invoice_template_json) as InvoiceTemplateConfig }
+    } catch { /* ignore invalid json */ }
+  }
+  return { ...DEFAULT_TEMPLATE_CONFIG }
+}
+
 const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, settings }, ref) => {
+  const templateConfig = parseInvoiceTemplateConfig(settings)
+  const showWatermark = templateConfig.showWatermark !== false
+  const watermarkText = (templateConfig.watermarkText || 'SML').toUpperCase()
+  const watermarkOpacity = Math.min(30, Math.max(2, templateConfig.watermarkOpacity ?? 7)) / 100
+  const watermarkAngle = templateConfig.watermarkAngle ?? -32
+
   const palette = DOC_PALETTES[doc.type_document] ?? DOC_PALETTES.FACTURE_VENTE
   const showTva = settings.invoice_show_tva !== 'false'
   const isVenteFacture = doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F'
@@ -241,6 +275,41 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
     </tfoot>
   )
 
+  const renderWatermark = () => (
+    <div
+      className="invoice-watermark"
+      aria-hidden
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+        zIndex: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 'clamp(96px, 24vw, 210px)',
+          fontWeight: 900,
+          fontStyle: 'italic',
+          textTransform: 'uppercase',
+          letterSpacing: '0.14em',
+          lineHeight: 1,
+          color: C.titleColor,
+          opacity: watermarkOpacity,
+          transform: `rotate(${watermarkAngle}deg) skewX(-14deg)`,
+          whiteSpace: 'nowrap',
+          userSelect: 'none',
+        }}
+      >
+        {watermarkText}
+      </div>
+    </div>
+  )
+
   const renderTotalsBlock = () => (
     <>
       <div className="invoice-totals" style={{ display: 'grid', gridTemplateColumns: showTva ? '1fr 1fr' : '1fr', border: `1px solid ${C.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden', marginTop: -1 }}>
@@ -339,7 +408,9 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
             key={pageIdx}
             className="invoice-page"
             style={{
-              minHeight: isLast ? '980px' : 'auto',
+              position: 'relative',
+              overflow: 'hidden',
+              minHeight: isLast ? '980px' : '980px',
               margin: '0 auto 12px',
               padding: '20px 16px',
               border: `1px solid ${C.border}`,
@@ -353,6 +424,8 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
               breakAfter: isLast ? 'auto' : 'page',
             }}
           >
+            {showWatermark ? renderWatermark() : null}
+            <div className="invoice-page-body" style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
             {isFirst ? (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
@@ -424,6 +497,7 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
                 Suite page suivante…
               </div>
             )}
+            </div>
           </div>
         )
       })}

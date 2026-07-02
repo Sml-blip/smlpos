@@ -54,6 +54,10 @@ interface TemplateConfig {
   showTva: boolean
   showFooter: boolean
   showTimbre: boolean
+  showWatermark: boolean
+  watermarkText: string
+  watermarkOpacity: number
+  watermarkAngle: number
 }
 
 const DEFAULT_CONFIG: TemplateConfig = {
@@ -61,6 +65,10 @@ const DEFAULT_CONFIG: TemplateConfig = {
   showTva: true,
   showFooter: true,
   showTimbre: true,
+  showWatermark: true,
+  watermarkText: 'SML',
+  watermarkOpacity: 7,
+  watermarkAngle: -32,
 }
 
 interface Props {
@@ -122,6 +130,7 @@ export default function InvoiceTemplateEditor({ onClose }: Props) {
     invoice_primary_color: config.primaryColor,
     invoice_show_tva: config.showTva ? 'true' : 'false',
     invoice_timbre_fiscal: config.showTimbre ? 'true' : 'false',
+    invoice_template_json: JSON.stringify(config),
   }
 
   return (
@@ -214,6 +223,65 @@ export default function InvoiceTemplateEditor({ onClose }: Props) {
                     </button>
                   </label>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-text-primary mb-2 uppercase tracking-wider">Filigrane</label>
+              <div className="space-y-3">
+                <label className="flex items-center justify-between gap-2 cursor-pointer group">
+                  <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">Afficher filigrane</span>
+                  <button
+                    type="button"
+                    onClick={() => set('showWatermark', !config.showWatermark)}
+                    className={cn(
+                      'w-10 h-5 rounded-full transition-colors relative flex-shrink-0',
+                      config.showWatermark ? 'bg-accent-500' : 'bg-gray-200',
+                    )}
+                  >
+                    <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform', config.showWatermark ? 'translate-x-5' : 'translate-x-0.5')} />
+                  </button>
+                </label>
+                {config.showWatermark && (
+                  <>
+                    <div>
+                      <label className="block text-[11px] font-medium text-text-secondary mb-1">Texte (majuscules)</label>
+                      <input
+                        type="text"
+                        value={config.watermarkText}
+                        onChange={e => set('watermarkText', e.target.value.toUpperCase().slice(0, 12))}
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm font-bold uppercase outline-none focus:border-accent-500"
+                        placeholder="SML"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-text-secondary mb-1">
+                        Opacité — {config.watermarkOpacity}%
+                      </label>
+                      <input
+                        type="range"
+                        min={2}
+                        max={20}
+                        value={config.watermarkOpacity}
+                        onChange={e => set('watermarkOpacity', parseInt(e.target.value, 10))}
+                        className="w-full accent-accent-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-text-secondary mb-1">
+                        Inclinaison — {config.watermarkAngle}°
+                      </label>
+                      <input
+                        type="range"
+                        min={-55}
+                        max={-15}
+                        value={config.watermarkAngle}
+                        onChange={e => set('watermarkAngle', parseInt(e.target.value, 10))}
+                        className="w-full accent-accent-500"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 

@@ -18,8 +18,12 @@ export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | '58mm' | '80mm
         border:none!important;
         margin:0!important;
         padding:8mm!important;
+        position:relative;
+        overflow:hidden;
       }
       .invoice-page:last-child{page-break-after:auto;break-after:auto}
+      .invoice-watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:0;overflow:hidden;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .invoice-page-body{position:relative;z-index:1;display:flex;flex-direction:column;flex:1;min-height:0}
       .invoice-totals{page-break-inside:avoid;break-inside:avoid}
       .invoice-footer-block{page-break-inside:avoid;break-inside:avoid;margin-top:auto}
       table{page-break-inside:auto}
