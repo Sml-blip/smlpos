@@ -15,6 +15,8 @@ export const LOCAL_SETTINGS_KEYS = new Set([
   'r2_last_upload_at',
   'r2_last_upload_key',
   'r2_last_upload_error',
+  'supabase_keepalive_at',
+  'supabase_keepalive_error',
 ])
 
 const SYNC_PULL_ALLOWED = new Set([

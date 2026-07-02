@@ -14,6 +14,7 @@ let _intervalId: ReturnType<typeof setInterval> | null = null
 let _processing = false
 let _pulling = false
 let _pullTick = 0
+let _lastKeepAliveAt = 0
 let _circuitOpenUntil = 0
 let _lastReachCheck = 0
 let _lastReachResult = false
@@ -44,6 +45,8 @@ const PULL_PAGE_SIZE = 500
 const PULL_EVERY_N_POLLS = 3
 const QUEUE_BATCH_SIZE = 500
 const UPSERT_BATCH_SIZE = 150
+/** Explicit keep-alive when sync queue is idle (Supabase free tier pauses after 7 days). */
+const SUPABASE_KEEPALIVE_MS = 12 * 60 * 60 * 1000
 
 const BOOTSTRAP_TABLES: { table: string; onlyActive?: boolean }[] = [
   { table: 'categories' },
@@ -161,6 +164,25 @@ async function checkSupabaseReachable(): Promise<boolean> {
     console.warn(`[sync] Supabase unreachable — pausing queue ${CIRCUIT_PAUSE_MS / 1000}s`)
   }
   return _lastReachResult
+}
+
+/** Lightweight ping so Supabase free tier stays active while the app runs. */
+export async function pingSupabaseKeepAlive(): Promise<boolean> {
+  if (!isSupabaseEnabled || !supabase || !navigator.onLine) return false
+  const now = Date.now()
+  if (now - _lastKeepAliveAt < SUPABASE_KEEPALIVE_MS) return true
+  try {
+    const { error } = await supabase.from('app_settings').select('key').limit(1).maybeSingle()
+    if (error && isTransientSyncError(error.message)) return false
+    _lastKeepAliveAt = now
+    await api.settingsSet('supabase_keepalive_at', new Date().toISOString())
+    await api.settingsSet('supabase_keepalive_error', '')
+    console.info('[sync] Supabase keep-alive OK')
+    return true
+  } catch (e) {
+    await api.settingsSet('supabase_keepalive_error', String(e).slice(0, 500)).catch(() => {})
+    return false
+  }
 }
 
 async function syncOneRow(row: {
@@ -436,6 +458,8 @@ export async function bootstrapSync(): Promise<void> {
   const deduped = await dedupeSyncQueue()
   if (deduped > 0) console.info(`[sync] Removed ${deduped} duplicate queue item(s)`)
 
+  await pingSupabaseKeepAlive()
+
   try {
     const settings = await api.settingsGetAll() as Record<string, string>
     const remoteHasData =
@@ -516,6 +540,7 @@ export function startSyncPolling(intervalMs = 5_000) {
   _running = true
 
   const runCycle = async () => {
+    await pingSupabaseKeepAlive()
     const pushed = await processSyncQueue()
     if (pushed > 0) console.info(`[sync] Pushed ${pushed} record(s)`)
     _pullTick++

@@ -1,0 +1,7 @@
+name = "smlpos-supabase-keepalive"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+# Daily ping — keeps Supabase free project active even when all POS PCs are off
+[triggers]
+crons = ["0 9 * * *"]

@@ -918,6 +918,28 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
               {bootstrapErrors && (
                 <p className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2 font-mono break-all">{bootstrapErrors}</p>
               )}
+              {(() => {
+                const lastAt = values.supabase_keepalive_at
+                const lastTs = lastAt ? Date.parse(lastAt) : NaN
+                const daysSince = Number.isFinite(lastTs) ? (Date.now() - lastTs) / (86400 * 1000) : null
+                const stale = daysSince != null && daysSince > 6
+                return (
+                  <div className={`rounded-xl px-4 py-3 text-xs mb-3 border ${stale ? 'bg-orange-50 border-orange-200 text-orange-900' : 'bg-green-50 border-green-200 text-green-900'}`}>
+                    <p className="font-bold mb-1">Anti-pause Supabase (gratuit)</p>
+                    <p>
+                      Dernière activité cloud : <strong>{lastAt ? fmtTime(lastTs) : '—'}</strong>
+                      {stale && ' — risque de pause Supabase si aucun PC ne tourne !'}
+                    </p>
+                    <p className="mt-1 text-[10px] opacity-90">
+                      SMLPOS envoie un ping toutes les 12h quand l&apos;app tourne. Pour les vacances (&gt;7 jours sans PC),
+                      déployez le Worker Cloudflare : <code className="bg-white/60 px-1 rounded">cloudflare/supabase-keepalive</code>
+                    </p>
+                    {values.supabase_keepalive_error && (
+                      <p className="mt-1 text-[10px] font-mono text-red-700 break-all">{values.supabase_keepalive_error}</p>
+                    )}
+                  </div>
+                )
+              })()}
               <div className="flex gap-2 flex-wrap">
                 <button onClick={handleForceSyncNow} disabled={syncing}
                   className="flex items-center gap-1.5 px-3 py-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 rounded-lg text-xs font-bold">

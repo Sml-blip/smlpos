@@ -20,6 +20,7 @@ import {
   testR2Connection,
   uploadR2Snapshot,
 } from './r2BackupService'
+import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
@@ -221,6 +222,7 @@ app.whenReady().then(() => {
 
   startAutoBackup()
   startR2BackupScheduler()
+  startSupabaseKeepAlive()
   setupIpcHandlers()
   createWindow()
   setupAutoUpdater(() => mainWindow)
