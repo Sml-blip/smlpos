@@ -87,19 +87,33 @@ const STATUT_PAYMENT_LABELS: Record<string, string> = {
 }
 
 const FIRST_PAGE_LINES = 10
-const NEXT_PAGE_LINES = 16
-const MIN_FILLER_ROWS = 3
+const FIRST_PAGE_MULTI_LINES = 14
+const NEXT_PAGE_LINES = 18
+const LAST_PAGE_LINES = 11
 
 const fmt3 = (n: number) => n.toLocaleString('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 
 function paginateLines(lines: InvoiceLineData[]): InvoiceLineData[][] {
   if (!lines.length) return [[]]
+  if (lines.length <= FIRST_PAGE_LINES) return [lines]
+
   const pages: InvoiceLineData[][] = []
-  pages.push(lines.slice(0, FIRST_PAGE_LINES))
-  let i = FIRST_PAGE_LINES
+  pages.push(lines.slice(0, FIRST_PAGE_MULTI_LINES))
+  let i = FIRST_PAGE_MULTI_LINES
+
   while (i < lines.length) {
-    pages.push(lines.slice(i, i + NEXT_PAGE_LINES))
-    i += NEXT_PAGE_LINES
+    const remaining = lines.length - i
+    if (remaining <= LAST_PAGE_LINES) {
+      pages.push(lines.slice(i))
+      break
+    }
+    const take = Math.min(NEXT_PAGE_LINES, remaining - LAST_PAGE_LINES)
+    if (take <= 0) {
+      pages.push(lines.slice(i))
+      break
+    }
+    pages.push(lines.slice(i, i + take))
+    i += take
   }
   return pages
 }
@@ -319,14 +333,13 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
       {pages.map((pageLines, pageIdx) => {
         const isFirst = pageIdx === 0
         const isLast = pageIdx === pageCount - 1
-        const fillerCount = isLast && pageCount === 1 ? Math.max(0, MIN_FILLER_ROWS - pageLines.length) : 0
 
         return (
           <div
             key={pageIdx}
             className="invoice-page"
             style={{
-              minHeight: pageCount === 1 ? '980px' : 'auto',
+              minHeight: isLast ? '980px' : 'auto',
               margin: '0 auto 12px',
               padding: '20px 16px',
               border: `1px solid ${C.border}`,
@@ -368,6 +381,7 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
                     {companyAddress && <div><span style={{ color: C.textLight }}>Siège :</span> {companyAddress}</div>}
                     {companyMatricule && <div><span style={{ color: C.textLight }}>MF :</span> {companyMatricule}</div>}
                     {companyPhone && <div><span style={{ color: C.textLight }}>Tél :</span> {companyPhone}</div>}
+                    {companyRib && <div><span style={{ color: C.textLight }}>RIB :</span> {companyRib}</div>}
                   </div>
                   <div style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, background: C.primarySoft, lineHeight: 1.6 }}>
                     <div style={{ fontSize: 9, color: C.textLight, marginBottom: 2 }}>{tierLabel}</div>
@@ -385,7 +399,7 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
               </div>
             )}
 
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: isLast ? '1 1 auto' : undefined, display: 'flex', flexDirection: 'column', minHeight: isLast ? 0 : undefined }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', border: `1px solid ${C.border}`, borderRadius: isLast ? '12px 12px 0 0' : '12px', overflow: 'hidden' }}>
                 <colgroup>
                   {colWidths.map((w, i) => (
@@ -395,15 +409,14 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
                 {renderTableHead()}
                 <tbody>
                   {pageLines.map((l, idx) => renderLineRow(l, idx))}
-                  {isLast && Array.from({ length: fillerCount }).map((_, i) => (
-                    <tr key={`f-${i}`} style={{ background: (pageLines.length + i) % 2 === 0 ? C.white : C.surface }}>
-                      <td colSpan={showTva ? 8 : 7} style={{ height: 22, borderBottom: `1px solid ${C.borderLight}` }} />
-                    </tr>
-                  ))}
                 </tbody>
                 {isLast ? renderSummaryFoot() : null}
               </table>
-              {isLast ? renderTotalsBlock() : null}
+              {isLast ? (
+                <div className="invoice-footer-block" style={{ marginTop: 'auto', paddingTop: 8 }}>
+                  {renderTotalsBlock()}
+                </div>
+              ) : null}
             </div>
 
             {!isLast && (

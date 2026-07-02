@@ -21,6 +21,7 @@ export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | '58mm' | '80mm
       }
       .invoice-page:last-child{page-break-after:auto;break-after:auto}
       .invoice-totals{page-break-inside:avoid;break-inside:avoid}
+      .invoice-footer-block{page-break-inside:avoid;break-inside:avoid;margin-top:auto}
       table{page-break-inside:auto}
       tr{page-break-inside:avoid;break-inside:avoid}
     }
