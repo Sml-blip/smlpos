@@ -21,8 +21,14 @@ function loadEnvFile(name) {
 }
 
 const local = loadEnvFile('.env.local')
+for (const [k, v] of Object.entries(local)) {
+  if (v) process.env[k] = v
+}
 if (local.GH_TOKEN) process.env.GH_TOKEN = local.GH_TOKEN
 if (local.GITHUB_TOKEN) process.env.GH_TOKEN = process.env.GH_TOKEN || local.GITHUB_TOKEN
+if (!process.env.SKIP_SUPABASE_CHECK && !local.VITE_SUPABASE_URL) {
+  process.env.SKIP_SUPABASE_CHECK = '1'
+}
 
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: true, env: process.env })
