@@ -1,6 +1,5 @@
 /**
  * Barcode SVG — JsBarcode vector output for 40×20mm scannable labels.
- * Module width is computed in mm so bars are never CSS-stretched.
  */
 
 import JsBarcode from 'jsbarcode'
@@ -21,7 +20,6 @@ function eanCheckDigit(digits: string): string {
   return mod === 0 ? '0' : String(10 - mod)
 }
 
-/** Pick EAN for pure numeric retail codes; alphanum → CODE128. */
 export function resolveBarcodeFormat(text: string): { value: string; format: string } {
   const trimmed = text.trim()
   const digitsOnly = trimmed.replace(/\D/g, '')
@@ -42,7 +40,6 @@ export function resolveBarcodeFormat(text: string): { value: string; format: str
   return { value: trimmed.toUpperCase(), format: 'CODE128' }
 }
 
-/** Prefer EAN when possible; otherwise shortest scannable token. */
 export function pickBarcodeValue(code: string, productRef = ''): string {
   const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
   for (const c of candidates) {
@@ -59,11 +56,10 @@ export function estimateModuleCount(text: string): number {
   return 35 + value.length * 11
 }
 
-/** Single-module width in mm — sized to fill label width without CSS scaling. */
 export function moduleWidthMmForLabel(text: string, maxBarWidthMm: number): number {
-  const modules = estimateModuleCount(text) + 16
-  const fit = maxBarWidthMm / modules
-  return Math.max(0.21, Math.min(0.42, fit))
+  const modules = estimateModuleCount(text) + 12
+  const fit = (maxBarWidthMm - 1) / modules
+  return Math.max(0.2, Math.min(0.38, fit))
 }
 
 function applyCrispEdges(svg: SVGSVGElement): void {
@@ -77,7 +73,35 @@ export interface LabelBarcodeSvgOptions {
   showText?: boolean
 }
 
-/** Label barcode SVG — intrinsic size in mm, no post-scale distortion. */
+function renderBarcodeSvg(
+  value: string,
+  format: string,
+  modulePx: number,
+  barHeightPx: number,
+  showText: boolean,
+): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  const jsOpts = {
+    format,
+    width: modulePx,
+    height: barHeightPx,
+    displayValue: showText,
+    fontSize: 7,
+    fontOptions: 'bold' as const,
+    textMargin: 1,
+    margin: 4,
+    background: '#ffffff',
+    lineColor: '#000000',
+  }
+  try {
+    JsBarcode(svg, value, jsOpts)
+  } catch {
+    JsBarcode(svg, value, { ...jsOpts, format: 'CODE128' })
+  }
+  return svg
+}
+
+/** Label barcode SVG — fits inside maxWidthMm, centered via CSS in template. */
 export function labelBarcodeSvg(
   text: string,
   opts: LabelBarcodeSvgOptions = {},
@@ -89,39 +113,23 @@ export function labelBarcodeSvg(
     return '<svg xmlns="http://www.w3.org/2000/svg" class="label-barcode"></svg>'
   }
 
-  const maxWidthMm = opts.maxWidthMm ?? 36
-  const barHeightMm = opts.barHeightMm ?? 7.5
-  const moduleMm = moduleWidthMmForLabel(raw, maxWidthMm)
-  const modulePx = moduleMm * MM_TO_PX
+  const maxWidthMm = opts.maxWidthMm ?? 34
+  const barHeightMm = opts.barHeightMm ?? 6.5
+  const maxWidthPx = maxWidthMm * MM_TO_PX
   const barHeightPx = barHeightMm * MM_TO_PX
   const { value, format } = resolveBarcodeFormat(raw)
 
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  const jsOpts = {
-    format,
-    width: modulePx,
-    height: barHeightPx,
-    displayValue: opts.showText ?? true,
-    fontSize: 8,
-    fontOptions: 'bold' as const,
-    textMargin: 1,
-    margin: 6,
-    background: '#ffffff',
-    lineColor: '#000000',
-  }
+  let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm)
+  let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
 
-  try {
-    JsBarcode(svg, value, jsOpts)
-  } catch {
-    JsBarcode(svg, value, { ...jsOpts, format: 'CODE128' })
+  const svgW = parseFloat(svg.getAttribute('width') ?? '0')
+  if (svgW > maxWidthPx && svgW > 0) {
+    moduleMm = moduleMm * (maxWidthPx / svgW) * 0.98
+    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
   }
 
   svg.setAttribute('class', 'label-barcode')
-  svg.removeAttribute('width')
-  svg.removeAttribute('height')
-  svg.style.maxWidth = `${maxWidthMm}mm`
-  svg.style.height = 'auto'
-  svg.style.display = 'block'
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
   applyCrispEdges(svg)
   return svg.outerHTML
 }
@@ -139,16 +147,11 @@ export function moduleWidthForLabel(text: string, maxBarWidthMm: number): number
 /** @deprecated */
 export function code128Svg(
   text: string,
-  opts: {
-    moduleWidthMm?: number
-    barHeightMm?: number
-    quietZoneModules?: number
-    showText?: boolean
-  } = {},
+  opts: { barHeightMm?: number; showText?: boolean } = {},
 ): string {
   return labelBarcodeSvg(text, {
-    maxWidthMm: 36,
-    barHeightMm: opts.barHeightMm ?? 7.5,
+    maxWidthMm: 34,
+    barHeightMm: opts.barHeightMm ?? 6.5,
     showText: opts.showText ?? true,
   })
 }
