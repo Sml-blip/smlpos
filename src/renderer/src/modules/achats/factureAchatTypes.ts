@@ -30,6 +30,17 @@ export type FactureLigneState = {
   tva_taux: number
   produit_id: string
   pendingProduct?: PendingProduct
+  /** Cached when a serial-tracked product is linked */
+  tracks_serial?: boolean
+  /** One S/N per unit for serial-tracked products */
+  numeros_serie?: string[]
+}
+
+export function productTracksSerial(prod: {
+  has_serial_number?: number | boolean | null
+  numero_serie?: string | null
+}): boolean {
+  return !!prod.has_serial_number || !!(prod.numero_serie?.trim())
 }
 
 export function emptyFactureLigne(): FactureLigneState {
@@ -40,6 +51,114 @@ export function emptyFactureLigne(): FactureLigneState {
     nouveau_prix_achat: 0,
     tva_taux: 0,
     produit_id: '',
+  }
+}
+
+export function syncSerialNumsForQty(numeros_serie: string[] | undefined, quantite: number): string[] {
+  const qty = Math.max(1, quantite)
+  const prev = numeros_serie ?? []
+  return Array.from({ length: qty }, (_, i) => prev[i] ?? '')
+}
+
+export function lineTracksSerial(
+  l: FactureLigneState,
+  produits: { id: string; has_serial_number?: number; numero_serie?: string | null }[],
+): boolean {
+  if (l.tracks_serial) return true
+  if (!l.produit_id) return false
+  const p = produits.find(x => x.id === l.produit_id)
+  return p ? productTracksSerial(p) : false
+}
+
+export function lineRequiresSerialValidation(l: FactureLigneState): boolean {
+  return !!l.tracks_serial
+}
+
+export function serialNumsForLine(
+  l: FactureLigneState,
+  produits: { id: string; has_serial_number?: number; numero_serie?: string | null }[],
+): string[] | undefined {
+  if (!lineTracksSerial(l, produits)) return undefined
+  return syncSerialNumsForQty(l.numeros_serie, l.quantite)
+}
+
+export function validateSerialLines(
+  lignes: FactureLigneState[],
+  produits: { id: string; has_serial_number?: number; numero_serie?: string | null; nom?: string }[],
+): string | null {
+  for (const l of lignes) {
+    if (!lineRequiresSerialValidation(l)) continue
+    if (!l.produit_id) {
+      return `Ligne « ${l.designation || 'sans nom'} » : liez un produit inventaire pour les numéros de série`
+    }
+    const nums = syncSerialNumsForQty(l.numeros_serie, l.quantite)
+    const filled = nums.map(s => s.trim()).filter(Boolean)
+    const name = produits.find(p => p.id === l.produit_id)?.nom ?? l.designation
+    if (filled.length !== l.quantite) {
+      return `"${name}" : renseignez ${l.quantite} numéro(s) de série (${filled.length}/${l.quantite})`
+    }
+    if (new Set(filled.map(s => s.toLowerCase())).size !== filled.length) {
+      return `"${name}" : numéros de série en double sur la même ligne`
+    }
+  }
+  const allFilled: string[] = []
+  for (const l of lignes) {
+    if (!lineRequiresSerialValidation(l)) continue
+    allFilled.push(...syncSerialNumsForQty(l.numeros_serie, l.quantite).map(s => s.trim()).filter(Boolean))
+  }
+  if (new Set(allFilled.map(s => s.toLowerCase())).size !== allFilled.length) {
+    return 'Numéros de série en double entre plusieurs lignes'
+  }
+  return null
+}
+
+export function mergeProductIntoLine(
+  l: FactureLigneState,
+  p: {
+    id: string
+    nom: string
+    prix_achat?: number | null
+    prix_vente: number
+    tva_taux?: number
+    has_serial_number?: number
+    numero_serie?: string | null
+  },
+): FactureLigneState {
+  const tracks = productTracksSerial(p)
+  return {
+    ...l,
+    produit_id: p.id,
+    designation: p.nom,
+    nouveau_prix_achat: p.prix_achat ?? p.prix_vente,
+    tva_taux: p.tva_taux ?? l.tva_taux,
+    pendingProduct: undefined,
+    tracks_serial: tracks,
+    numeros_serie: tracks ? syncSerialNumsForQty(l.numeros_serie, l.quantite) : undefined,
+  }
+}
+
+export function newLineFromProduct(
+  p: {
+    id: string
+    nom: string
+    prix_achat?: number | null
+    prix_vente: number
+    tva_taux?: number
+    has_serial_number?: number
+    numero_serie?: string | null
+  },
+  quantite = 1,
+): FactureLigneState {
+  const tracks = productTracksSerial(p)
+  return {
+    id: generateId(),
+    designation: p.nom,
+    quantite,
+    nouveau_prix_achat: p.prix_achat ?? p.prix_vente,
+    tva_taux: p.tva_taux ?? 0,
+    produit_id: p.id,
+    tracks_serial: tracks,
+    numeros_serie: tracks ? syncSerialNumsForQty([], quantite) : undefined,
   }
 }
 

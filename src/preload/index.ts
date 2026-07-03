@@ -112,6 +112,9 @@ const api = {
   facturesFournisseursDeleteDraft: (draftId: string) => ipcRenderer.invoke('facturesFournisseurs:deleteDraft', draftId),
   facturesFournisseursMarquerRecu: (factureId: string) => ipcRenderer.invoke('facturesFournisseurs:marquerRecu', factureId),
   facturesFournisseursAnnuler: (factureId: string) => ipcRenderer.invoke('facturesFournisseurs:annuler', factureId),
+  facturesFournisseursUpdate: (id: string, data: unknown) => ipcRenderer.invoke('facturesFournisseurs:update', id, data),
+  facturesFournisseursReplaceLignes: (factureId: string, lignes: unknown[], totals: unknown) =>
+    ipcRenderer.invoke('facturesFournisseurs:replaceLignes', factureId, lignes, totals),
   paiementsFournisseursCreate: (p: unknown) => ipcRenderer.invoke('paiementsFournisseurs:create', p),
 
   // Caisse interne
@@ -170,10 +173,12 @@ const api = {
   // Documents (Facture/Devis/BL)
   documentsList: (filters?: unknown) => ipcRenderer.invoke('documents:list', filters),
   documentsListAll: (filters?: unknown) => ipcRenderer.invoke('documents:listAll', filters),
+  documentsGet: (id: string) => ipcRenderer.invoke('documents:get', id),
   documentsCreate: (doc: unknown, lignes: unknown[]) => ipcRenderer.invoke('documents:create', doc, lignes),
   documentsCreateDailyFactureF: () => ipcRenderer.invoke('documents:createDailyFactureF'),
   documentsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('documents:update', id, data),
   documentsRevoquer: (id: string, motif: string, par: string) => ipcRenderer.invoke('documents:revoquer', id, motif, par),
+  documentsAnnulerAvecAvoir: (id: string, motif?: string) => ipcRenderer.invoke('documents:annulerAvecAvoir', id, motif),
   documentsGetLignes: (documentId: string) => ipcRenderer.invoke('documents:getLignes', documentId),
   documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
     ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),
@@ -186,6 +191,7 @@ const api = {
   settingsGet: (key: string) => ipcRenderer.invoke('settings:get', key),
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   settingsSetMany: (data: Record<string, string>) => ipcRenderer.invoke('settings:setMany', data),
+  authVerifyCaissePin: (pin: string) => ipcRenderer.invoke('auth:verifyCaissePin', pin),
 
   // Sync Queue (production-safe — no raw SQL)
   syncQueueGetPending: () => ipcRenderer.invoke('sync:queue:getPending'),

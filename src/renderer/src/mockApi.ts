@@ -443,11 +443,20 @@ const mockApi = {
 
   // Documents
   documentsList: async () => [],
+  documentsListAll: async () => [],
+  documentsGet: async (id: string) => ({ id, numero: 'FAC-MOCK-001', type_document: 'FACTURE_VENTE', statut: 'ACTIF', total_ht: 0, total_tva: 0, total_ttc: 0, created_at: new Date().toISOString() }),
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
   documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  documentsRevoquer: async () => ({ success: true }),
+  documentsAnnulerAvecAvoir: async (_id: string, _motif?: string) => ({ success: true, avoir: { id: `av${Date.now()}`, numero: 'AVO-MOCK-001' } }),
   documentsReplaceLignes: async (_documentId: string, _lignes: unknown[], _totals: unknown) => ({ success: true }),
   documentsGetLignes: async () => [],
   documentsGetLastNumber: async () => 0,
+
+  authVerifyCaissePin: async (pin: string) => ({ valid: pin === 'sml2023' }),
+
+  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  facturesFournisseursReplaceLignes: async () => ({ success: true }),
 
   // Factures fournisseurs marquer reçu
   facturesFournisseursMarquerRecu: async () => ({ success: true }),

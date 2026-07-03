@@ -12,6 +12,7 @@ export interface PrintWindowOptions {
   color?: boolean
   copies?: number
   scaleFactor?: number
+  dpi?: { horizontal: number; vertical: number }
 }
 
 /** Load HTML from a temp file (reliable for large invoices) and invoke OS print dialog. */
@@ -59,6 +60,10 @@ export function printHtmlInHiddenWindow(
       }
       if (typeof options.scaleFactor === 'number') {
         printOpts.scaleFactor = options.scaleFactor
+      }
+      if (options.dpi) {
+        ;(printOpts as Electron.WebContentsPrintOptions & { dpi?: { horizontal: number; vertical: number } }).dpi =
+          options.dpi
       }
       win.webContents.print(printOpts, (success, failureReason) => {
         cleanup()

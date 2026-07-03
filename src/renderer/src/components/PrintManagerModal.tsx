@@ -200,7 +200,7 @@ export default function PrintManagerModal({
   const [labelCfg, setLabelCfg] = useState<LabelPrintConfig>(() => mergeLabelConfig(labelConfig))
   const [ticketWidthMm, setTicketWidthMm] = useState<58 | 80>(80)
 
-  const [zoom, setZoom] = useState(75)
+  const [zoom, setZoom] = useState(() => (kind === 'label' ? 300 : 75))
   const [printing, setPrinting] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Prêt')
   const [statusOk, setStatusOk] = useState(true)
@@ -377,6 +377,7 @@ export default function PrintManagerModal({
           ...printOptions,
           widthMm: labelCfg.widthMm,
           heightMm: labelCfg.heightMm,
+          dpi: { horizontal: 300, vertical: 300 },
         }
       } else if (kind === 'document') {
         printOptions = {

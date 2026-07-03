@@ -4,14 +4,22 @@ import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
+import { showToast } from '../../lib/toast'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import FactureAchatPrintModal from './FactureAchatPrintModal'
+import FactureSerialModal from './FactureSerialModal'
 import { buildAchatInvoiceDoc, mapFactureAchatLignes } from '../../lib/invoiceAchatMapper'
 import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
   emptyFactureLigne,
   ligneBarcodeInfo,
+  lineTracksSerial,
+  mergeProductIntoLine,
+  newLineFromProduct,
   pendingFromQuickCreate,
+  productTracksSerial,
+  syncSerialNumsForQty,
+  validateSerialLines,
   type FactureLigneState,
   type PendingProduct,
 } from './factureAchatTypes'
@@ -19,7 +27,7 @@ import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
   RefreshCw, Edit2, PackageCheck, Inbox, InboxIcon, Printer,
-  Barcode, Tag, BarChart2
+  Barcode, Tag, BarChart2, Hash
 } from 'lucide-react'
 
 const api = window.api
@@ -612,12 +620,36 @@ const emptyFullForm = (): FullProductFormData => ({
   numero_serie: '',
 })
 
-function NewProductModal({ onClose, onCreated, deferCreate = false }: {
+function NewProductModal({ onClose, onCreated, deferCreate = false, initialProduct, onUpdated }: {
   onClose: () => void
   onCreated: (p: Produit | PendingProduct) => Promise<void>
   deferCreate?: boolean
+  initialProduct?: Produit
+  onUpdated?: (p: Produit) => void
 }) {
-  const [formData, setFormData] = useState<FullProductFormData>(emptyFullForm())
+  const isEdit = !!initialProduct
+  const [formData, setFormData] = useState<FullProductFormData>(() => {
+    if (!initialProduct) return emptyFullForm()
+    return {
+      code_barre: initialProduct.code_barre ?? '',
+      reference: initialProduct.reference ?? '',
+      nom: initialProduct.nom ?? '',
+      description: initialProduct.description ?? '',
+      categorie: initialProduct.categorie ?? 'Général',
+      type: initialProduct.type ?? 'F',
+      prix_achat: initialProduct.prix_achat != null ? String(initialProduct.prix_achat) : '',
+      cout_supplementaire: String(initialProduct.cout_supplementaire ?? 0),
+      tva_achat_pct: String(initialProduct.tva_achat_pct ?? 0),
+      marge_pct: initialProduct.marge_pct != null ? String(initialProduct.marge_pct) : '',
+      coef_av: initialProduct.coef_av != null ? String(initialProduct.coef_av) : '',
+      prix_vente: String(initialProduct.prix_vente ?? ''),
+      tva_taux: String(initialProduct.tva_taux ?? 0),
+      stock_actuel: String(initialProduct.stock_actuel ?? 0),
+      stock_minimum: String(initialProduct.stock_minimum ?? 5),
+      fournisseur: initialProduct.fournisseur ?? '',
+      numero_serie: initialProduct.numero_serie ?? '',
+    }
+  })
   const [formErrors, setFormErrors] = useState<Partial<FullProductFormData>>({})
   const [saving, setSaving] = useState(false)
   const [categories, setCategories] = useState<string[]>(['Général', 'Électronique', 'Informatique', 'Accessoires', 'Pièces', 'Consommables', 'Autre'])
@@ -733,7 +765,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
     setFormErrors(errors)
     if (Object.keys(errors).length > 0) return
 
-    const ok = await runAction('Création produit', async () => {
+    const ok = await runAction(isEdit ? 'Modification produit' : 'Création produit', async () => {
       const now = new Date().toISOString()
       const prixAchatHT = parseFloat(formData.prix_achat) || 0
       const coutSupp = parseFloat(formData.cout_supplementaire) || 0
@@ -745,7 +777,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
       const prixVente = parseFloat(formData.prix_vente) || 0
       const prixVenteHT = tvaTaux > 0 ? prixVente / (1 + tvaTaux / 100) : prixVente
       const p = {
-        id: generateId(),
+        id: initialProduct?.id ?? generateId(),
         code_barre: formData.code_barre.trim() || null,
         reference: formData.reference.trim(),
         nom: formData.nom.trim(),
@@ -766,12 +798,15 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
         stock_minimum: parseInt(formData.stock_minimum) || 5,
         fournisseur: formData.fournisseur.trim() || null,
         numero_serie: formData.numero_serie.trim() || null,
-        has_serial_number: 0,
-        actif: 1,
-        created_at: now,
+        has_serial_number: initialProduct?.has_serial_number ?? 0,
+        actif: initialProduct?.actif ?? 1,
+        created_at: initialProduct?.created_at ?? now,
         updated_at: now,
       }
-      if (deferCreate) {
+      if (isEdit) {
+        await api.produitsUpdate(p.id, p)
+        onUpdated?.(p as Produit)
+      } else if (deferCreate) {
         const pending: PendingProduct = {
           nom: p.nom,
           reference: p.reference,
@@ -798,7 +833,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
         await api.produitsCreate(p)
         await onCreated(p as Produit)
       }
-    }, { setSaving, successMessage: 'Produit créé' })
+    }, { setSaving, successMessage: isEdit ? 'Produit modifié' : 'Produit créé' })
     if (ok) onClose()
   }
 
@@ -809,7 +844,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
           <h2 className="font-bold flex items-center gap-2">
-            <Package size={16} /> Nouveau produit
+            <Package size={16} /> {isEdit ? 'Modifier le produit' : 'Nouveau produit'}
           </h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
             <X size={18} />
@@ -1083,16 +1118,21 @@ function NewProductModal({ onClose, onCreated, deferCreate = false }: {
 }
 
 // ── Product Search Popup (full-screen, multi-add) ────────────────────────────
-function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
+function ProductSearchPopup({ produits: initialProduits, onAddProduct, onNewProduct, onProductUpdated, onClose }: {
   produits: Produit[]
   onAddProduct: (p: Produit) => void
   onNewProduct: (p: PendingProduct) => void
+  onProductUpdated?: (p: Produit) => void
   onClose: () => void
 }) {
+  const [produits, setProduits] = useState(initialProduits)
   const [q, setQ] = useState('')
   const [filterType, setFilterType] = useState<'all' | 'F' | 'NF' | 'rupture'>('all')
   const [showNewModal, setShowNewModal] = useState(false)
+  const [editProduct, setEditProduct] = useState<Produit | null>(null)
   const [addedIds, setAddedIds] = useState<string[]>([])
+
+  useEffect(() => { setProduits(initialProduits) }, [initialProduits])
 
   const fuseIndex = useMemo(() => new Fuse(produits, {
     keys: ['nom', 'reference', 'code_barre'],
@@ -1152,7 +1192,7 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
                   <th className="text-center px-3 py-2 font-semibold text-text-secondary">Stock</th>
                   <th className="text-right px-4 py-2 font-semibold text-text-secondary">Prix Achat</th>
                   <th className="text-right px-4 py-2 font-semibold text-text-secondary">Prix Vente</th>
-                  <th className="w-20 px-3 py-2" />
+                  <th className="w-28 px-3 py-2" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -1165,15 +1205,21 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
                     <td className="px-4 py-2 text-right font-price text-text-muted">{formatPrice(p.prix_achat ?? 0)}</td>
                     <td className="px-4 py-2 text-right font-price font-semibold">{formatPrice(p.prix_vente)}</td>
                     <td className="px-3 py-2">
-                      {addedIds.includes(p.id) ? (
-                        <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-[11px] font-bold w-full justify-center">
-                          ✓ Ajouté
-                        </span>
-                      ) : (
-                        <button onClick={() => { onAddProduct(p); setAddedIds(prev => [...prev, p.id]) }} className="flex items-center gap-1 px-2 py-1 bg-accent-500 hover:bg-accent-600 rounded-lg text-[11px] font-bold transition-colors w-full justify-center">
-                          <Plus size={10} /> Ajouter
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => setEditProduct(p)} title="Modifier catalogue"
+                          className="flex items-center gap-0.5 px-1.5 py-1 border border-border hover:bg-muted rounded-lg text-[10px] font-semibold transition-colors">
+                          <Edit2 size={10} /> Mod.
                         </button>
-                      )}
+                        {addedIds.includes(p.id) ? (
+                          <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-[10px] font-bold flex-1 justify-center">
+                            ✓ Ajouté
+                          </span>
+                        ) : (
+                          <button onClick={() => { onAddProduct(p); setAddedIds(prev => [...prev, p.id]) }} className="flex items-center gap-1 px-2 py-1 bg-accent-500 hover:bg-accent-600 rounded-lg text-[10px] font-bold transition-colors flex-1 justify-center">
+                            <Plus size={10} /> Ajouter
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1204,6 +1250,19 @@ function ProductSearchPopup({ produits, onAddProduct, onNewProduct, onClose }: {
           onCreated={async (p) => {
             onNewProduct(p as PendingProduct)
             setAddedIds(prev => [...prev, generateId()])
+          }}
+        />
+      )}
+
+      {editProduct && (
+        <NewProductModal
+          initialProduct={editProduct}
+          onClose={() => setEditProduct(null)}
+          onCreated={async () => {}}
+          onUpdated={(updated) => {
+            setProduits(prev => prev.map(x => x.id === updated.id ? updated : x))
+            onProductUpdated?.(updated)
+            setEditProduct(null)
           }}
         />
       )}
@@ -1261,6 +1320,7 @@ function FactureFournisseurModal({
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
   const [printPreview, setPrintPreview] = useState<{ doc: InvoiceDocData; lignes: InvoiceLineData[] } | null>(null)
+  const [serialModalLineId, setSerialModalLineId] = useState<string | null>(null)
 
   const hasDraftContent = useMemo(
     () => lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || !!fournisseurId || !!numeroFacture,
@@ -1280,6 +1340,20 @@ function FactureFournisseurModal({
       setProduits(p)
     })
   }, [])
+
+  useEffect(() => {
+    if (!produits.length) return
+    setLignes(prev => prev.map(l => {
+      if (!l.produit_id || l.tracks_serial) return l
+      const p = produits.find(x => x.id === l.produit_id)
+      if (!p || !productTracksSerial(p)) return l
+      return {
+        ...l,
+        tracks_serial: true,
+        numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite),
+      }
+    }))
+  }, [produits])
 
   useEffect(() => {
     if (!initialDraftId || !api.facturesFournisseursGetDraft) return
@@ -1312,6 +1386,10 @@ function FactureFournisseurModal({
         pendingProduct: l.pending_product_json
           ? JSON.parse(String(l.pending_product_json)) as PendingProduct
           : undefined,
+        numeros_serie: l.numeros_serie_json
+          ? JSON.parse(String(l.numeros_serie_json)) as string[]
+          : undefined,
+        tracks_serial: !!l.numeros_serie_json,
       }))
       setLignes(loaded.length > 0 ? loaded : [emptyFactureLigne()])
     }, { silent: true })
@@ -1351,6 +1429,9 @@ function FactureFournisseurModal({
           nouveau_prix_achat: l.nouveau_prix_achat,
           tva_taux: l.tva_taux,
           pending_product_json: l.pendingProduct ? JSON.stringify(l.pendingProduct) : null,
+          numeros_serie_json: l.tracks_serial
+            ? JSON.stringify(syncSerialNumsForQty(l.numeros_serie, l.quantite))
+            : null,
         })),
     }
   }, [draftId, fournisseurId, numeroFacture, dateFacture, dateEcheance, notes, isBL, lignes, exoFlag, exoText, timbre, remiseGlobale])
@@ -1383,6 +1464,8 @@ function FactureFournisseurModal({
       tva_taux: pending.tva_taux ?? 0,
       produit_id: '',
       pendingProduct: pending,
+      tracks_serial: false,
+      numeros_serie: undefined,
     } : l))
   }
 
@@ -1470,6 +1553,7 @@ function FactureFournisseurModal({
       const exactCache = produits.find(p => p.code_barre === trimmed)
       if (exactCache) {
         setLineResults(prev => ({ ...prev, [lineId]: [exactCache] }))
+        selectProduct(lineId, exactCache)
         return
       }
       if (/^\d{6,}$/.test(trimmed) && api.produitsFindByBarcode) {
@@ -1477,6 +1561,7 @@ function FactureFournisseurModal({
           const hit = p as Produit | null
           if (hit?.code_barre === trimmed) {
             setLineResults(prev => ({ ...prev, [lineId]: [hit] }))
+            selectProduct(lineId, hit)
           }
         }).catch(() => {})
       }
@@ -1490,13 +1575,7 @@ function FactureFournisseurModal({
   }
 
   const selectProduct = (lineId: string, p: Produit) => {
-    setLignes(prev => prev.map(l => l.id === lineId ? {
-      ...l,
-      produit_id: p.id,
-      designation: p.nom,
-      nouveau_prix_achat: p.prix_achat ?? p.prix_vente,
-      pendingProduct: undefined,
-    } : l))
+    setLignes(prev => prev.map(l => l.id === lineId ? mergeProductIntoLine(l, p) : l))
     setLineSearches(prev => ({ ...prev, [lineId]: '' }))
     setLineResults(prev => ({ ...prev, [lineId]: [] }))
   }
@@ -1531,17 +1610,63 @@ function FactureFournisseurModal({
       if (field === 'produit_id' && value) {
         const p = produits.find(p => p.id === value)
         if (p) {
-          updated.designation = p.nom
-          updated.nouveau_prix_achat = p.prix_achat ?? p.prix_vente
-          updated.pendingProduct = undefined
+          return mergeProductIntoLine(updated, p)
         }
       }
       if (field === 'produit_id' && !value) {
         updated.pendingProduct = undefined
+        updated.tracks_serial = false
+        updated.numeros_serie = undefined
+      }
+      if (field === 'quantite') {
+        const qty = Math.max(1, Number(value) || 1)
+        updated.quantite = qty
+        if (updated.tracks_serial || lineTracksSerial(updated, produits)) {
+          updated.tracks_serial = true
+          updated.numeros_serie = syncSerialNumsForQty(updated.numeros_serie, qty)
+        }
       }
       return updated
     }))
   }
+
+  const setLineSerialEnabled = (lineId: string, enabled: boolean, openModal = false) => {
+    setLignes(prev => prev.map(l => {
+      if (l.id !== lineId) return l
+      return {
+        ...l,
+        tracks_serial: enabled,
+        numeros_serie: enabled ? syncSerialNumsForQty(l.numeros_serie, l.quantite) : undefined,
+      }
+    }))
+    if (enabled && openModal) setSerialModalLineId(lineId)
+    if (!enabled) setSerialModalLineId(cur => (cur === lineId ? null : cur))
+  }
+
+  const toggleLineSerial = (lineId: string) => {
+    const l = lignes.find(x => x.id === lineId)
+    if (!l) return
+    setLineSerialEnabled(lineId, !l.tracks_serial, !l.tracks_serial)
+  }
+
+  const openSerialModal = (lineId: string) => {
+    const l = lignes.find(x => x.id === lineId)
+    if (!l) return
+    if (!l.tracks_serial) setLineSerialEnabled(lineId, true, true)
+    else setSerialModalLineId(lineId)
+  }
+
+  const saveLineSerials = (lineId: string, nums: string[]) => {
+    setLignes(prev => prev.map(l => l.id === lineId ? {
+      ...l,
+      tracks_serial: true,
+      numeros_serie: syncSerialNumsForQty(nums, l.quantite),
+    } : l))
+    setSerialModalLineId(null)
+  }
+
+  const serialFilledCount = (l: FactureLigneState) =>
+    syncSerialNumsForQty(l.numeros_serie, l.quantite).filter(s => s.trim()).length
 
   const montantHT = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
   const montantTTC = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
@@ -1550,6 +1675,11 @@ function FactureFournisseurModal({
     if (!fournisseurId || !numeroFacture) return
     const filledLignes = lignes.filter(l => l.designation.trim())
     if (filledLignes.length === 0) return
+    const serialErr = validateSerialLines(filledLignes, produits)
+    if (serialErr) {
+      showToast('error', serialErr)
+      return
+    }
     const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
       const resolvedLignes: FactureLigneState[] = []
       let produitsSnapshot = [...produits]
@@ -1563,6 +1693,9 @@ function FactureFournisseurModal({
         }
       }
       setProduits(produitsSnapshot)
+
+      const postCreateErr = validateSerialLines(resolvedLignes, produitsSnapshot)
+      if (postCreateErr) throw new Error(postCreateErr)
 
       const factureId = generateId()
       const now = new Date().toISOString()
@@ -1591,6 +1724,7 @@ function FactureFournisseurModal({
       }
       const lignesData = resolvedLignes.map(l => {
         const p = produitsSnapshot.find(p => p.id === l.produit_id)
+        const tracksSerial = !!l.tracks_serial
         return {
           id: generateId(), facture_id: factureId, produit_id: l.produit_id || null,
           designation: l.designation, quantite: l.quantite,
@@ -1598,6 +1732,9 @@ function FactureFournisseurModal({
           nouveau_prix_achat: l.nouveau_prix_achat,
           prix_vente_suggere: +(l.nouveau_prix_achat * (1 + margePct / 100)).toFixed(3),
           prix_vente_applique: null, tva_taux: l.tva_taux,
+          numeros_serie_json: tracksSerial
+            ? JSON.stringify(syncSerialNumsForQty(l.numeros_serie, l.quantite).map(s => s.trim()))
+            : null,
         }
       })
       await api.facturesFournisseursCreate(facture, lignesData)
@@ -1794,6 +1931,39 @@ function FactureFournisseurModal({
                       </div>
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0 pt-1">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleLineSerial(l.id)}
+                          title={l.tracks_serial ? 'Désactiver S/N' : 'Activer S/N par unité'}
+                          className={cn(
+                            'px-1.5 py-1 rounded-lg border text-[9px] font-bold transition-colors',
+                            l.tracks_serial
+                              ? 'bg-amber-100 border-amber-400 text-amber-900'
+                              : 'bg-white border-border text-text-muted hover:border-amber-300',
+                          )}
+                        >
+                          S/N
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openSerialModal(l.id)}
+                          title="Saisir numéros de série"
+                          className={cn(
+                            'p-2 rounded-lg border transition-colors relative',
+                            l.tracks_serial
+                              ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+                              : 'bg-white border-border text-text-muted hover:border-amber-300 hover:text-amber-800',
+                          )}
+                        >
+                          <Hash size={14} />
+                          {l.tracks_serial && (
+                            <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-600 text-white text-[8px] font-bold flex items-center justify-center">
+                              {serialFilledCount(l)}/{l.quantite}
+                            </span>
+                          )}
+                        </button>
+                      </div>
                       {bc ? (
                         <button
                           type="button"
@@ -1952,15 +2122,27 @@ function FactureFournisseurModal({
           </button>
         </div>
       </div>
+      {serialModalLineId && (() => {
+        const l = lignes.find(x => x.id === serialModalLineId)
+        if (!l) return null
+        return (
+          <FactureSerialModal
+            designation={l.designation}
+            quantite={l.quantite}
+            numeros_serie={l.numeros_serie}
+            onSave={nums => saveLineSerials(l.id, nums)}
+            onClose={() => setSerialModalLineId(null)}
+          />
+        )
+      })()}
       {/* Product Search Popup — multi-add mode (stays open until user closes) */}
       {showProductPopup && (
         <ProductSearchPopup
           produits={produits}
           onAddProduct={(p) => {
-            // Add a new ligne with this product
-            const newId = generateId()
-            setLignes(prev => [...prev, { id: newId, designation: p.nom, quantite: 1, nouveau_prix_achat: p.prix_achat ?? p.prix_vente, tva_taux: p.tva_taux ?? 0, produit_id: p.id }])
-            setPopupLineId(newId)
+            const newLine = newLineFromProduct(p, 1)
+            setLignes(prev => [...prev, newLine])
+            setPopupLineId(newLine.id)
           }}
           onNewProduct={(pending) => {
             const newId = generateId()
@@ -1974,6 +2156,14 @@ function FactureFournisseurModal({
               pendingProduct: pending,
             }])
             setPopupLineId(newId)
+          }}
+          onProductUpdated={(updated) => {
+            setProduits(prev => prev.map(p => p.id === updated.id ? updated : p))
+            setLignes(prev => prev.map(l =>
+              l.produit_id === updated.id
+                ? mergeProductIntoLine(l, updated)
+                : l
+            ))
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
         />

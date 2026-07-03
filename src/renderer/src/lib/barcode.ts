@@ -1,8 +1,11 @@
 /**
- * Barcode SVG generation — JsBarcode (EAN-8/13 + Code128) for scannable retail labels.
+ * Barcode SVG — JsBarcode vector output for 40×20mm scannable labels.
+ * Module width is computed in mm so bars are never CSS-stretched.
  */
 
 import JsBarcode from 'jsbarcode'
+
+const MM_TO_PX = 3.7795275591
 
 export function normalizeBarcodeText(raw: string): string {
   return String(raw ?? '').trim()
@@ -18,7 +21,8 @@ function eanCheckDigit(digits: string): string {
   return mod === 0 ? '0' : String(10 - mod)
 }
 
-function resolveBarcodeFormat(text: string): { value: string; format: string } {
+/** Pick EAN for pure numeric retail codes; alphanum → CODE128. */
+export function resolveBarcodeFormat(text: string): { value: string; format: string } {
   const trimmed = text.trim()
   const digitsOnly = trimmed.replace(/\D/g, '')
 
@@ -38,15 +42,101 @@ function resolveBarcodeFormat(text: string): { value: string; format: string } {
   return { value: trimmed.toUpperCase(), format: 'CODE128' }
 }
 
-export function moduleWidthForLabel(text: string, maxBarWidthMm: number): number {
-  const { value, format } = resolveBarcodeFormat(text)
-  const estModules = format.startsWith('EAN') ? 95 : Math.max(60, value.length * 11)
-  const ideal = 0.38
-  const min = 0.33
-  const computed = maxBarWidthMm / estModules
-  return Math.max(min, Math.min(ideal, computed))
+/** Prefer EAN when possible; otherwise shortest scannable token. */
+export function pickBarcodeValue(code: string, productRef = ''): string {
+  const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
+  for (const c of candidates) {
+    const { format } = resolveBarcodeFormat(c)
+    if (format.startsWith('EAN')) return c
+  }
+  return candidates.sort((a, b) => a.length - b.length)[0] ?? normalizeBarcodeText(code)
 }
 
+export function estimateModuleCount(text: string): number {
+  const { value, format } = resolveBarcodeFormat(text)
+  if (format === 'EAN13') return 95
+  if (format === 'EAN8') return 67
+  return 35 + value.length * 11
+}
+
+/** Single-module width in mm — sized to fill label width without CSS scaling. */
+export function moduleWidthMmForLabel(text: string, maxBarWidthMm: number): number {
+  const modules = estimateModuleCount(text) + 16
+  const fit = maxBarWidthMm / modules
+  return Math.max(0.21, Math.min(0.42, fit))
+}
+
+function applyCrispEdges(svg: SVGSVGElement): void {
+  svg.setAttribute('shape-rendering', 'crispEdges')
+  svg.querySelectorAll('rect').forEach(el => el.setAttribute('shape-rendering', 'crispEdges'))
+}
+
+export interface LabelBarcodeSvgOptions {
+  maxWidthMm?: number
+  barHeightMm?: number
+  showText?: boolean
+}
+
+/** Label barcode SVG — intrinsic size in mm, no post-scale distortion. */
+export function labelBarcodeSvg(
+  text: string,
+  opts: LabelBarcodeSvgOptions = {},
+): string {
+  const raw = normalizeBarcodeText(text)
+  if (!raw) return ''
+
+  if (typeof document === 'undefined') {
+    return '<svg xmlns="http://www.w3.org/2000/svg" class="label-barcode"></svg>'
+  }
+
+  const maxWidthMm = opts.maxWidthMm ?? 36
+  const barHeightMm = opts.barHeightMm ?? 7.5
+  const moduleMm = moduleWidthMmForLabel(raw, maxWidthMm)
+  const modulePx = moduleMm * MM_TO_PX
+  const barHeightPx = barHeightMm * MM_TO_PX
+  const { value, format } = resolveBarcodeFormat(raw)
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  const jsOpts = {
+    format,
+    width: modulePx,
+    height: barHeightPx,
+    displayValue: opts.showText ?? true,
+    fontSize: 8,
+    fontOptions: 'bold' as const,
+    textMargin: 1,
+    margin: 6,
+    background: '#ffffff',
+    lineColor: '#000000',
+  }
+
+  try {
+    JsBarcode(svg, value, jsOpts)
+  } catch {
+    JsBarcode(svg, value, { ...jsOpts, format: 'CODE128' })
+  }
+
+  svg.setAttribute('class', 'label-barcode')
+  svg.removeAttribute('width')
+  svg.removeAttribute('height')
+  svg.style.maxWidth = `${maxWidthMm}mm`
+  svg.style.height = 'auto'
+  svg.style.display = 'block'
+  applyCrispEdges(svg)
+  return svg.outerHTML
+}
+
+/** @deprecated */
+export function barWidthPxForLabel(text: string, maxBarWidthMm: number): number {
+  return moduleWidthMmForLabel(text, maxBarWidthMm) * MM_TO_PX
+}
+
+/** @deprecated */
+export function moduleWidthForLabel(text: string, maxBarWidthMm: number): number {
+  return moduleWidthMmForLabel(text, maxBarWidthMm)
+}
+
+/** @deprecated */
 export function code128Svg(
   text: string,
   opts: {
@@ -54,47 +144,11 @@ export function code128Svg(
     barHeightMm?: number
     quietZoneModules?: number
     showText?: boolean
-    bgColor?: string
-    barColor?: string
   } = {},
 ): string {
-  const raw = normalizeBarcodeText(text)
-  if (!raw) return ''
-
-  const { value, format } = resolveBarcodeFormat(raw)
-  const moduleMm = opts.moduleWidthMm ?? 0.38
-  const barHeightMm = opts.barHeightMm ?? 9
-  const quiet = opts.quietZoneModules ?? 10
-  const bg = opts.bgColor ?? '#ffffff'
-  const fg = opts.barColor ?? '#000000'
-
-  if (typeof document === 'undefined') {
-    return `<svg xmlns="http://www.w3.org/2000/svg"></svg>`
-  }
-
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  try {
-    JsBarcode(svg, value, {
-      format,
-      width: moduleMm * 3.7795275591,
-      height: barHeightMm * 3.7795275591,
-      displayValue: opts.showText ?? false,
-      margin: quiet,
-      background: bg,
-      lineColor: fg,
-      fontSize: 10,
-    })
-  } catch {
-    JsBarcode(svg, value, {
-      format: 'CODE128',
-      width: moduleMm * 3.7795275591,
-      height: barHeightMm * 3.7795275591,
-      displayValue: false,
-      margin: quiet,
-      background: bg,
-      lineColor: fg,
-    })
-  }
-
-  return svg.outerHTML
+  return labelBarcodeSvg(text, {
+    maxWidthMm: 36,
+    barHeightMm: opts.barHeightMm ?? 7.5,
+    showText: opts.showText ?? true,
+  })
 }

@@ -352,13 +352,13 @@ export interface MouvementPersonnel {
 
 // ── Documents (Facture/Devis/BL) ─────────────────────────────────────────────
 
-export type TypeDocument = 'FACTURE_VENTE' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_JOURNALIERE_F' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'TICKET'
+export type TypeDocument = 'FACTURE_VENTE' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_JOURNALIERE_F' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'TICKET' | 'AVOIR'
 
 export interface Document {
   id: string
   numero: string
   type_document: TypeDocument
-  statut: 'ACTIF' | 'ANNULE' | 'CONVERTI' | 'NON_ARRIVE' | 'ARRIVE'
+  statut: 'ACTIF' | 'ANNULE' | 'CONVERTI' | 'NON_ARRIVE' | 'ARRIVE' | 'REVOQUE'
   shift_id?: string
   vente_id?: string
   fournisseur_id?: string
@@ -378,6 +378,11 @@ export interface Document {
   contenu_json?: string
   created_at: string
   updated_at: string
+  avoir_id?: string | null
+  document_origine_id?: string | null
+  facture_origine_numero?: string | null
+  annule_motif?: string | null
+  avoir_numero?: string | null
 }
 
 export interface LigneDocument {

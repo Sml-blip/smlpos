@@ -1,4 +1,4 @@
-import { code128Svg, moduleWidthForLabel, normalizeBarcodeText } from './barcode'
+import { labelBarcodeSvg, pickBarcodeValue } from './barcode'
 import type { LabelPrintConfig } from './printManager'
 import { DEFAULT_LABEL_CONFIG } from './printManager'
 
@@ -21,7 +21,11 @@ function mergeConfig(partial?: Partial<LabelPrintConfig>): LabelPrintConfig {
   return cfg
 }
 
-/** Scannable label HTML with configurable size, strips, and rotation (Gainscha-style). */
+function escapeHtml(s: string): string {
+  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** Scannable 40×20mm label — price always visible, barcode never CSS-stretched. */
 export function buildBarcodeLabelHtml(
   code: string,
   nom: string,
@@ -31,44 +35,38 @@ export function buildBarcodeLabelHtml(
   copies = 1,
 ): string {
   const cfg = mergeConfig(configPartial)
-  const barcodeText = normalizeBarcodeText(code)
-  const displayName = (nom || productRef || 'Produit').trim().slice(0, 28)
-  const safeName = displayName.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const safeRef = (productRef || code).replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const safeCode = barcodeText.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const barcodeValue = pickBarcodeValue(code, productRef)
+  const displayName = (nom || productRef || 'Produit').trim()
+  const safeName = escapeHtml(displayName)
+  const safeRef = escapeHtml(productRef || code)
   const priceNum = parseLabelPrice(prix)
   const priceStr = `${priceNum.toFixed(3)} DT`
 
   const contentW = Math.max(1, cfg.widthMm - cfg.stripLeftMm - cfg.stripRightMm)
-  const maxBarWidthMm = Math.min(36, contentW - 2)
-  const moduleMm = moduleWidthForLabel(barcodeText, maxBarWidthMm)
+  const maxBarWidthMm = Math.min(36, contentW - 1)
 
-  const svg = code128Svg(barcodeText, {
-    moduleWidthMm: moduleMm,
-    barHeightMm: Math.min(9, cfg.heightMm * 0.42),
-    quietZoneModules: 10,
-    showText: false,
-    bgColor: '#ffffff',
-    barColor: '#000000',
+  const svg = labelBarcodeSvg(barcodeValue, {
+    maxWidthMm: maxBarWidthMm,
+    barHeightMm: 7,
+    showText: true,
   })
 
-  const rotateStyle = cfg.rotationDeg === 180
+  const sheetRotate = cfg.rotationDeg === 180
     ? 'transform: rotate(180deg); transform-origin: center center;'
     : ''
 
   const labelInner = `
         <div class="label">
-        <div class="header">
-          <div class="name" title="${safeName}">${safeName}</div>
-          <div class="price">${priceStr}</div>
-        </div>
-        <div class="barcode-wrap">${svg}</div>
-        <div class="code-line">${safeCode}</div>
-      </div>`
+          <div class="header">
+            <div class="name" title="${safeName}">${safeName}</div>
+            <div class="price">${priceStr}</div>
+          </div>
+          <div class="barcode-wrap">${svg}</div>
+        </div>`
 
   const count = Math.min(99, Math.max(1, copies))
   const sheets = Array.from({ length: count }, (_, i) =>
-    `<div class="sheet${i < count - 1 ? ' page-break' : ''}">${labelInner}</div>`,
+    `<div class="sheet${i < count - 1 ? ' page-break' : ''}" style="${sheetRotate}">${labelInner}</div>`,
   ).join('')
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Étiquette ${safeRef}</title><style>
@@ -85,44 +83,48 @@ export function buildBarcodeLabelHtml(
     .sheet {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
-      padding: 0 ${cfg.stripRightMm}mm 0 ${cfg.stripLeftMm}mm;
+      padding: 0.3mm ${cfg.stripRightMm}mm 0.3mm ${cfg.stripLeftMm}mm;
       display: flex;
       align-items: center;
       justify-content: center;
-      overflow: hidden;
+      overflow: visible;
     }
     .sheet.page-break { page-break-after: always; break-after: page; }
     .label {
       width: ${contentW}mm;
-      height: 100%;
+      height: ${cfg.heightMm - 0.6}mm;
       display: flex;
       flex-direction: column;
-      padding: 0.4mm 0.5mm 0.3mm;
-      gap: 0.2mm;
-      ${rotateStyle}
+      gap: 0.3mm;
     }
     .header {
       display: flex;
-      align-items: baseline;
+      align-items: flex-start;
       justify-content: space-between;
       gap: 1mm;
       flex-shrink: 0;
+      min-height: 3.5mm;
+      max-height: 5mm;
     }
     .name {
       flex: 1;
       min-width: 0;
       font-size: 5.5pt;
       font-weight: 700;
-      line-height: 1.1;
+      line-height: 1.15;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
     }
     .price {
       flex-shrink: 0;
       font-size: 8pt;
       font-weight: 900;
       white-space: nowrap;
+      line-height: 1.1;
+      padding-left: 0.5mm;
     }
     .barcode-wrap {
       flex: 1;
@@ -130,29 +132,23 @@ export function buildBarcodeLabelHtml(
       align-items: center;
       justify-content: center;
       min-height: 0;
-      padding: 0 0.5mm;
+      overflow: visible;
     }
+    .label-barcode,
     .barcode-wrap svg {
       display: block;
       max-width: ${maxBarWidthMm}mm;
-      height: auto;
-      max-height: ${Math.min(9, cfg.heightMm * 0.42)}mm;
-      width: auto;
+      width: auto !important;
+      height: auto !important;
     }
-    .code-line {
-      flex-shrink: 0;
-      font-size: 5pt;
-      font-family: monospace;
-      text-align: center;
-      letter-spacing: 0.02em;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .label-barcode rect,
+    .barcode-wrap svg rect {
+      shape-rendering: crispEdges;
     }
   </style></head><body>${sheets}</body></html>`
 }
 
 /** Sample label for Settings → Test étiquette */
 export function buildSampleLabelHtml(config?: Partial<LabelPrintConfig>): string {
-  return buildBarcodeLabelHtml('1234567890123', 'Produit test', 12.5, 'REF-TEST', config)
+  return buildBarcodeLabelHtml('1234567890123', 'Produit test scanner', 12.5, 'REF-TEST', config)
 }

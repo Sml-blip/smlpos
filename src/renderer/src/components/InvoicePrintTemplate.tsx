@@ -37,6 +37,7 @@ export interface InvoiceDocData {
   total_remise?: number
   exo?: string | null
   net_a_payer?: number
+  facture_origine_numero?: string | null
 }
 
 export interface InvoiceLineData {
@@ -67,6 +68,7 @@ const DOC_LABELS: Record<string, string> = {
   FACTURE_ACHAT: 'Facture Achat',
   FACTURE_ACHAT_BL: 'Bon de Livraison Achat',
   TICKET: 'Ticket',
+  AVOIR: 'Avoir',
 }
 
 type DocPalette = { primary: string; primarySoft: string; secondarySoft: string; titleColor: string }
@@ -78,6 +80,7 @@ const DOC_PALETTES: Record<string, DocPalette> = {
   FACTURE_JOURNALIERE_F: { primary: '#D6B05E', primarySoft: '#FBF7EE', secondarySoft: '#F8FAFC', titleColor: '#1E293B' },
   FACTURE_ACHAT: { primary: '#FB923C', primarySoft: '#FFEDD5', secondarySoft: '#FFF7ED', titleColor: '#9A3412' },
   FACTURE_ACHAT_BL: { primary: '#FB923C', primarySoft: '#FFEDD5', secondarySoft: '#FFF7ED', titleColor: '#9A3412' },
+  AVOIR: { primary: '#F87171', primarySoft: '#FEE2E2', secondarySoft: '#FEF2F2', titleColor: '#991B1B' },
 }
 
 const STATUT_PAYMENT_LABELS: Record<string, string> = {
@@ -156,6 +159,7 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
   const palette = DOC_PALETTES[doc.type_document] ?? DOC_PALETTES.FACTURE_VENTE
   const showTva = settings.invoice_show_tva !== 'false'
   const isVenteFacture = doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F'
+  const isAvoir = doc.type_document === 'AVOIR'
   const isAchat = doc.type_document === 'FACTURE_ACHAT' || doc.type_document === 'FACTURE_ACHAT_BL'
   const timbre = doc.timbre ?? (isVenteFacture ? 1.0 : isAchat ? 0 : 0)
 
@@ -442,6 +446,9 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
                   <div style={{ fontSize: 36, fontWeight: 700, color: C.titleColor, letterSpacing: '-0.5px' }}>{docLabel}</div>
                   <div style={{ textAlign: 'right', fontSize: 11, color: C.textLight, lineHeight: 1.5 }}>
                     <div style={{ fontWeight: 700, color: C.text }}>N° {doc.numero}</div>
+                    {isAvoir && doc.facture_origine_numero ? (
+                      <div style={{ color: '#991B1B', fontWeight: 600 }}>Facture d&apos;origine : {doc.facture_origine_numero}</div>
+                    ) : null}
                     <div>Créée le : {dateFormatted}</div>
                     <div>{statutLabel}</div>
                     <div>Page : {pageIdx + 1}/{pageCount}</div>

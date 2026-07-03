@@ -3,17 +3,18 @@ import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
 import { generateId } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
-import { X, Printer, CheckCircle, FileText, Edit2, Plus, Trash2 } from 'lucide-react'
+import { X, Printer, CheckCircle, FileText, Edit2 } from 'lucide-react'
 import InvoicePrintTemplate from '../../components/InvoicePrintTemplate'
 import PrintDialog from '../../components/PrintDialog'
 import type { InvoiceCompanySettings, InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
   applyTotalsToDoc,
   buildInvoiceLineFromCart,
-  recalcInvoiceLineFromHtUnit,
   sumInvoiceLines,
 } from '../../lib/invoiceLineCalc'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
+import PinUnlockModal from '../../components/PinUnlockModal'
+import InvoiceEditModal from '../../components/InvoiceEditModal'
 
 const api = window.api
 
@@ -52,8 +53,8 @@ export default function DocumentPreviewModal({
   const [docCreated, setDocCreated] = useState(false)
   const [docId, setDocId] = useState('')
   const [docNumero, setDocNumero] = useState('')
-  const [editLinesMode, setEditLinesMode] = useState(false)
-  const [editableLignes, setEditableLignes] = useState<InvoiceLineData[]>([])
+  const [showPinForEdit, setShowPinForEdit] = useState(false)
+  const [showInvoiceEdit, setShowInvoiceEdit] = useState(false)
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
@@ -82,9 +83,8 @@ export default function DocumentPreviewModal({
   }, [defaultTva])
 
   const docLignes: InvoiceLineData[] = useMemo(() => {
-    if (docId || editLinesMode) return editableLignes
     return lignesItems.map((item, idx) => buildLineFromCart(item, idx))
-  }, [docId, editLinesMode, editableLignes, lignesItems, buildLineFromCart])
+  }, [lignesItems, buildLineFromCart])
 
   const lineSums = useMemo(() => sumInvoiceLines(docLignes), [docLignes])
 
@@ -174,44 +174,12 @@ export default function DocumentPreviewModal({
 
     await api.documentsCreate(docPayload, lignes)
     setDocId(docId)
-    setEditableLignes(builtLines)
     return numero
   }
 
-  const saveLineEdits = async () => {
+  const reloadDocLines = async () => {
     if (!docId) return
-    const sums = sumInvoiceLines(editableLignes)
-    await runAction('Mise à jour lignes', async () => {
-      const lignes = editableLignes.map(l => ({
-        id: l.id.startsWith('line-') ? generateId() : l.id,
-        document_id: docId,
-        produit_id: null,
-        designation: l.designation,
-        quantite: l.quantite,
-        prix_unitaire: l.prix_unitaire,
-        remise_pct: l.remise_pct,
-        tva_taux: l.tva_taux,
-        total_ht: l.total_ht,
-        total_tva: l.total_tva,
-        total_ttc: l.total_ttc,
-        type_produit: 'F',
-        numero_serie: l.numero_serie ?? null,
-      }))
-      await api.documentsReplaceLignes?.(docId, lignes, {
-        total_ht: sums.total_ht,
-        total_tva: sums.total_tva,
-        total_ttc: sums.total_ttc,
-      })
-      setEditLinesMode(false)
-      setDocCreated(true)
-    }, { successMessage: 'Lignes mises à jour' })
-  }
-
-  const updateLine = (idx: number, patch: Partial<InvoiceLineData>) => {
-    setEditableLignes(prev => prev.map((l, i) => {
-      if (i !== idx) return l
-      return recalcInvoiceLineFromHtUnit({ ...l, ...patch })
-    }))
+    await api.documentsGetLignes(docId)
   }
 
   const handleConfirm = async () => {
@@ -254,7 +222,28 @@ export default function DocumentPreviewModal({
     )
   }
 
-  if (docCreated && !editLinesMode) {
+  if (showInvoiceEdit && docId) {
+    return (
+      <InvoiceEditModal
+        mode="vente"
+        documentId={docId}
+        onClose={() => { setShowInvoiceEdit(false); setDocCreated(true) }}
+        onSaved={() => { void reloadDocLines(); setShowInvoiceEdit(false); setDocCreated(true) }}
+      />
+    )
+  }
+
+  if (showPinForEdit) {
+    return (
+      <PinUnlockModal
+        title={`Modifier ${docNumero}`}
+        onCancel={() => { setShowPinForEdit(false); setDocCreated(true) }}
+        onUnlocked={() => { setShowPinForEdit(false); setShowInvoiceEdit(true) }}
+      />
+    )
+  }
+
+  if (docCreated && !showInvoiceEdit) {
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-8 text-center animate-slide-in">
@@ -265,9 +254,9 @@ export default function DocumentPreviewModal({
           <p className="text-sm text-text-secondary mb-1">N° :</p>
           <p className="font-bold text-lg text-text-primary mb-6">{docNumero}</p>
           <div className="flex flex-col gap-2">
-            <button type="button" onClick={() => { setEditLinesMode(true); setDocCreated(false) }}
+            <button type="button" onClick={() => { setShowPinForEdit(true); setDocCreated(false) }}
               className="w-full flex items-center justify-center gap-2 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl text-sm">
-              <Edit2 size={14} /> Modifier les produits
+              <Edit2 size={14} /> Modifier
             </button>
             <button type="button" onClick={() => setShowPrintDialog(true)}
               className="w-full flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 font-bold py-2.5 rounded-xl text-sm">
@@ -277,40 +266,6 @@ export default function DocumentPreviewModal({
               className="w-full text-text-secondary hover:text-text-primary py-2 text-sm">
               Fermer
             </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (editLinesMode) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-in">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-            <h2 className="font-bold text-sm">Modifier produits — {docNumero}</h2>
-            <button type="button" onClick={() => { setEditLinesMode(false); setDocCreated(true) }}><X size={18} /></button>
-          </div>
-          <div className="p-5 space-y-2">
-            {editableLignes.map((l, i) => (
-              <div key={l.id} className="flex gap-2 items-center">
-                <input value={l.designation} onChange={e => updateLine(i, { designation: e.target.value })}
-                  className="flex-1 border border-border rounded-lg px-2 py-1.5 text-sm" />
-                <input type="text" inputMode="numeric" value={l.quantite} onChange={e => updateLine(i, { quantite: parseInt(e.target.value) || 1 })}
-                  className="w-14 border border-border rounded-lg px-2 py-1.5 text-sm text-center" />
-                <input type="text" inputMode="decimal" value={l.prix_unitaire} onChange={e => updateLine(i, { prix_unitaire: parseFloat(e.target.value.replace(',', '.')) || 0 })}
-                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" />
-                <button type="button" onClick={() => setEditableLignes(prev => prev.filter((_, j) => j !== i))} className="text-danger"><Trash2 size={14} /></button>
-              </div>
-            ))}
-            <button type="button" onClick={() => setEditableLignes(prev => [...prev, {
-              id: generateId(), designation: '', quantite: 1, prix_unitaire: 0, remise_pct: 0, tva_taux: 0, total_ht: 0, total_tva: 0, total_ttc: 0,
-            }])} className="text-xs font-semibold text-accent-600 flex items-center gap-1"><Plus size={12} /> Ajouter ligne</button>
-            <div className="text-right font-price font-bold pt-2">Total : {totalTTC.toFixed(3)} DT</div>
-          </div>
-          <div className="flex gap-2 px-5 py-4 border-t border-border">
-            <button type="button" onClick={() => { setEditLinesMode(false); setDocCreated(true) }} className="flex-1 py-2.5 bg-muted rounded-xl text-sm font-semibold">Annuler</button>
-            <button type="button" onClick={() => void saveLineEdits()} className="flex-1 py-2.5 bg-accent-500 rounded-xl text-sm font-bold">Enregistrer</button>
           </div>
         </div>
       </div>

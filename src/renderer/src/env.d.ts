@@ -99,6 +99,9 @@ interface Window {
     facturesFournisseursSaveDraft: (payload: unknown) => Promise<{ success?: boolean; draftId?: string; updated_at?: string }>
     facturesFournisseursDeleteDraft: (draftId: string) => Promise<{ success?: boolean }>
     facturesFournisseursMarquerRecu: (factureId: string) => Promise<unknown>
+    facturesFournisseursAnnuler?: (factureId: string) => Promise<{ success?: boolean }>
+    facturesFournisseursUpdate?: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
+    facturesFournisseursReplaceLignes?: (factureId: string, lignes: unknown[], totals: unknown) => Promise<{ success?: boolean; error?: string }>
     paiementsFournisseursCreate: (p: unknown) => Promise<unknown>
 
     // Caisse interne
@@ -156,11 +159,15 @@ interface Window {
 
     // Documents (Facture/Devis/BL)
     documentsList: (filters?: unknown) => Promise<unknown[]>
+    documentsListAll?: (filters?: unknown) => Promise<unknown[]>
+    documentsGet?: (id: string) => Promise<Record<string, unknown> | null | undefined>
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
     documentsCreateDailyFactureF?: () => Promise<{ success?: boolean; skipped?: boolean; numero?: string; lineCount?: number; reason?: string; error?: string }>
-    documentsUpdate: (id: string, data: unknown) => Promise<unknown>
+    documentsUpdate: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
+    documentsRevoquer?: (id: string, motif: string, par: string) => Promise<{ success?: boolean }>
+    documentsAnnulerAvecAvoir?: (id: string, motif?: string) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
-    documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: { total_ht: number; total_tva: number; total_ttc: number }) => Promise<{ success?: boolean }>
+    documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: Record<string, unknown>) => Promise<{ success?: boolean; error?: string }>
     documentsGetLastNumber: (prefix: string) => Promise<number>
 
     // Paramètres App
@@ -168,6 +175,7 @@ interface Window {
     settingsGet: (key: string) => Promise<string | null>
     settingsSet: (key: string, value: string) => Promise<unknown>
     settingsSetMany: (data: Record<string, string>) => Promise<unknown>
+    authVerifyCaissePin?: (pin: string) => Promise<{ valid?: boolean }>
 
     backupDiscover?: () => Promise<{
       success?: boolean

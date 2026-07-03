@@ -8,19 +8,21 @@ import { printLabelHtml } from '../../lib/nativePrint'
 import { loadData, runAction } from '../../lib/apiCall'
 import DocumentPrintModal from '../historique/DocumentPrintModal'
 import FactureAchatPrintModal from '../achats/FactureAchatPrintModal'
+import PinUnlockModal from '../../components/PinUnlockModal'
+import InvoiceEditModal from '../../components/InvoiceEditModal'
 import type { Document } from '../../lib/types'
 import {
   FileText, Search, Download, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
-  Ban, PackageCheck
+  Ban, PackageCheck, Edit2
 } from 'lucide-react'
 
-const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F'])
+const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F', 'AVOIR'])
 const ACHAT_PRINT_TYPES = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
 
 const api = window.api
 
-type SubTab = 'TOUS' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL'
+type SubTab = 'TOUS' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'AVOIR'
 
 interface DocRow {
   id: string
@@ -39,6 +41,10 @@ interface DocRow {
   ht_7?: number; tva_7?: number; ht_19?: number; tva_19?: number
   total_remise?: number
   created_at: string
+  avoir_id?: string | null
+  avoir_numero?: string | null
+  document_origine_id?: string | null
+  facture_origine_numero?: string | null
 }
 
 const STATUT_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -58,6 +64,7 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'BON_LIVRAISON', label: 'BL Vente' },
   { id: 'FACTURE_ACHAT', label: 'Factures Achat' },
   { id: 'FACTURE_ACHAT_BL', label: 'BL Fournisseurs' },
+  { id: 'AVOIR', label: 'Avoirs' },
 ]
 
 // ── Excel Export Preview Modal ─────────────────────────────────────────────────
@@ -232,6 +239,8 @@ export default function DocumentsTab() {
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
   const [printAchatId, setPrintAchatId] = useState<string | null>(null)
   const [revoquerDoc, setRevoquerDoc] = useState<DocRow | null>(null)
+  const [editTarget, setEditTarget] = useState<{ mode: 'vente' | 'achat'; id: string } | null>(null)
+  const [showPinForEdit, setShowPinForEdit] = useState<{ mode: 'vente' | 'achat'; id: string; numero: string } | null>(null)
 
   const load = useCallback(async () => {
     const filters: Record<string, unknown> = {}
@@ -257,15 +266,37 @@ export default function DocumentsTab() {
   const tiers = (d: DocRow) => d.client_nom || d.fournisseur_nom || '—'
 
   const annulerDoc = async (d: DocRow) => {
-    if (!window.confirm(`Annuler ${d.numero} ?`)) return
+    const isFactureVente = d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F')
+    const motif = isFactureVente ? window.prompt(`Annuler ${d.numero} et créer un avoir ?\nMotif (optionnel) :`) : null
+    if (isFactureVente && motif === null) return
+    if (!isFactureVente && !window.confirm(`Annuler ${d.numero} ?`)) return
     await runAction('Annulation document', async () => {
-      if (d._source === 'ff') {
+      if (isFactureVente) {
+        const res = await api.documentsAnnulerAvecAvoir?.(d.id, motif || undefined) as { success?: boolean; error?: string; avoir?: { numero: string } }
+        if (!res?.success) throw new Error(res?.error || 'Échec annulation')
+      } else if (d._source === 'ff') {
         await api.facturesFournisseursAnnuler(d.id)
       } else {
         await api.documentsUpdate(d.id, { statut: 'ANNULE' })
       }
       load()
-    }, { successMessage: 'Document annulé' })
+    }, { successMessage: isFactureVente ? 'Facture annulée — avoir créé' : 'Document annulé' })
+  }
+
+  const canEditDoc = (d: DocRow) => {
+    if (d.statut === 'ANNULE' || d.statut === 'REVOQUE' || d.type_document === 'AVOIR') return false
+    if (d._source === 'ff') return d.type_document === 'FACTURE_ACHAT' || d.type_document === 'FACTURE_ACHAT_BL'
+    return ['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F'].includes(d.type_document)
+  }
+
+  const startEdit = (d: DocRow) => {
+    const mode = d._source === 'ff' ? 'achat' : 'vente'
+    setShowPinForEdit({ mode, id: d.id, numero: d.numero })
+  }
+
+  const exportAvoirForRow = (d: DocRow) => {
+    const avoirRow = d.avoir_id ? docs.find(x => x.id === d.avoir_id) : docs.find(x => x.numero === d.avoir_numero)
+    if (avoirRow) exportSingleDoc(avoirRow)
   }
 
   const marquerRecu = async (d: DocRow) => {
@@ -388,11 +419,12 @@ export default function DocumentsTab() {
 
   // ── Export Format B — Bilan Factures Vente ──
   const exportVentes = () => {
-    const ventes = docs.filter(d => d.type_document === 'FACTURE_VENTE' || d.type_document === 'DEVIS' || d.type_document === 'BON_LIVRAISON')
+    const ventes = docs.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'DEVIS' || d.type_document === 'BON_LIVRAISON' || d.type_document === 'AVOIR'))
     const rows = ventes.map(f => ({
       'DOCUMENT':  f.numero,
       'CLIENT':    f.client_nom ?? '',
       'DATE':      format(new Date(f.created_at), 'dd/MM/yyyy'),
+      'AVOIR':     f.avoir_numero ?? '',
       'EXO':       f.exo ?? null,
       'TVA':       +(f.total_tva ?? 0).toFixed(3),
       'BASE':      +(f.total_ht ?? 0).toFixed(3),
@@ -405,7 +437,8 @@ export default function DocumentsTab() {
     }))
     const sum = (key: string) => rows.reduce((s, r) => s + (Number(r[key as keyof typeof r]) || 0), 0)
     rows.push({
-      'DOCUMENT': 'TOTAL', 'CLIENT': '', 'DATE': '', 'EXO': null,
+      'DOCUMENT': 'TOTAL', 'CLIENT': '', 'DATE': '', 'AVOIR': '',
+      'EXO': null,
       'TVA': +sum('TVA').toFixed(3), 'BASE': +sum('BASE').toFixed(3), 'MONTANT': +sum('MONTANT').toFixed(3),
       'TAXE': +sum('TAXE').toFixed(3), 'MT TAXE': +sum('MT TAXE').toFixed(3),
       'TOTAL TVA': +sum('TOTAL TVA').toFixed(3), 'TOTAL HT': +sum('TOTAL HT').toFixed(3), 'TOTAL TTC': +sum('TOTAL TTC').toFixed(3),
@@ -413,7 +446,7 @@ export default function DocumentsTab() {
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
     setExcelModal({
       rows: rows as Record<string, unknown>[],
-      columns: ['DOCUMENT','CLIENT','DATE','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
+      columns: ['DOCUMENT','CLIENT','DATE','AVOIR','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
       title: `Bilan Ventes ${periode}`,
       fileName: `BILAN_VENTES_${periode.replace('/', '_')}.xlsx`,
     })
@@ -477,7 +510,8 @@ export default function DocumentsTab() {
               <th className="text-left px-3 py-2 font-semibold text-text-secondary">Date</th>
               <th className="text-right px-3 py-2 font-semibold text-text-secondary">Total TTC</th>
               <th className="text-center px-3 py-2 font-semibold text-text-secondary">Statut</th>
-              <th className="w-36 px-3 py-2 no-print" />
+              <th className="text-left px-3 py-2 font-semibold text-text-secondary">Avoir</th>
+              <th className="w-40 px-3 py-2 no-print" />
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -498,11 +532,26 @@ export default function DocumentsTab() {
                   <td className="px-3 py-2 text-center">
                     <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border', sc.cls)}>{sc.label}</span>
                   </td>
+                  <td className="px-3 py-2">
+                    {d.avoir_numero ? (
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono text-[10px] text-red-700 font-semibold">{d.avoir_numero}</span>
+                        <button onClick={() => exportAvoirForRow(d)} title="Exporter avoir" className="p-0.5 rounded text-green-600 hover:bg-green-50 no-print">
+                          <Download size={11} />
+                        </button>
+                      </div>
+                    ) : d.type_document === 'AVOIR' && d.facture_origine_numero ? (
+                      <span className="text-[10px] text-text-muted">← {d.facture_origine_numero}</span>
+                    ) : '—'}
+                  </td>
                   <td className="px-3 py-2 no-print">
                     <div className="flex items-center gap-1 justify-end">
                       <button onClick={() => setPreviewDoc(d)} title="Voir" className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-muted"><Eye size={12} /></button>
                       <button onClick={() => printDoc(d)} title="Imprimer" className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-muted"><Printer size={12} /></button>
                       <button onClick={() => exportSingleDoc(d)} title="Exporter Excel" className="p-1 rounded text-text-muted hover:text-green-600 hover:bg-green-50"><Download size={12} /></button>
+                      {canEditDoc(d) && (
+                        <button onClick={() => startEdit(d)} title="Modifier" className="p-1 rounded text-text-muted hover:text-accent-600 hover:bg-accent-50"><Edit2 size={12} /></button>
+                      )}
                       {d.statut === 'NON_ARRIVE' && (
                         <button onClick={() => marquerRecu(d)} title="Marquer reçu" className="p-1 rounded text-blue-600 hover:bg-blue-50"><PackageCheck size={12} /></button>
                       )}
@@ -511,7 +560,7 @@ export default function DocumentsTab() {
                           <RotateCcw size={12} />
                         </button>
                       )}
-                      {d.statut !== 'ANNULE' && d.statut !== 'REVOQUE' && (
+                      {d.statut !== 'ANNULE' && d.statut !== 'REVOQUE' && d.type_document !== 'AVOIR' && (
                         <button onClick={() => annulerDoc(d)} title="Annuler" className="p-1 rounded text-text-muted hover:text-danger hover:bg-red-50"><Ban size={12} /></button>
                       )}
                     </div>
@@ -520,10 +569,10 @@ export default function DocumentsTab() {
               )
             })}
             {filtered.length === 0 && !loading && (
-              <tr><td colSpan={7} className="px-3 py-12 text-center text-text-muted">Aucun document trouvé</td></tr>
+              <tr><td colSpan={8} className="px-3 py-12 text-center text-text-muted">Aucun document trouvé</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={7} className="px-3 py-12 text-center text-text-muted">Chargement...</td></tr>
+              <tr><td colSpan={8} className="px-3 py-12 text-center text-text-muted">Chargement...</td></tr>
             )}
           </tbody>
         </table>
@@ -547,10 +596,13 @@ export default function DocumentsTab() {
               {previewDoc.total_remise ? <div className="flex justify-between text-red-600"><span>Remise</span><span className="font-price">- {formatPrice(previewDoc.total_remise)}</span></div> : null}
               <div className="flex justify-between font-bold border-t border-border pt-1"><span>Total TTC</span><span className="font-price text-base">{formatPrice(previewDoc.total_ttc)}</span></div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button type="button" onClick={() => setPreviewDoc(null)} className="flex-1 bg-muted hover:bg-border py-2 rounded-xl text-sm font-semibold">Fermer</button>
               <button type="button" onClick={() => { printDoc(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-muted border border-border hover:bg-border rounded-xl text-sm font-semibold"><Printer size={13} /> Imprimer</button>
-              {previewDoc.statut !== 'ANNULE' && (
+              {canEditDoc(previewDoc) && (
+                <button type="button" onClick={() => { startEdit(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-accent-50 hover:bg-accent-100 border border-accent-200 rounded-xl text-sm font-semibold"><Edit2 size={13} /> Modifier</button>
+              )}
+              {previewDoc.statut !== 'ANNULE' && previewDoc.statut !== 'REVOQUE' && previewDoc.type_document !== 'AVOIR' && (
                 <button type="button" onClick={() => { annulerDoc(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-red-50 hover:bg-red-100 text-danger border border-red-200 rounded-xl text-sm font-semibold"><Ban size={13} /> Annuler</button>
               )}
             </div>
@@ -583,6 +635,26 @@ export default function DocumentsTab() {
 
       {printAchatId && (
         <FactureAchatPrintModal factureId={printAchatId} onClose={() => setPrintAchatId(null)} />
+      )}
+
+      {showPinForEdit && (
+        <PinUnlockModal
+          title={`Modifier ${showPinForEdit.numero}`}
+          onCancel={() => setShowPinForEdit(null)}
+          onUnlocked={() => {
+            setEditTarget({ mode: showPinForEdit.mode, id: showPinForEdit.id })
+            setShowPinForEdit(null)
+          }}
+        />
+      )}
+
+      {editTarget && (
+        <InvoiceEditModal
+          mode={editTarget.mode}
+          documentId={editTarget.id}
+          onClose={() => setEditTarget(null)}
+          onSaved={load}
+        />
       )}
     </div>
   )

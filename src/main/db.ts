@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.9.5'
+export const SCHEMA_VERSION = '1.9.6'
 
 export function initDatabase() {
   const db = getDb()
@@ -705,6 +705,11 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE documents ADD COLUMN revoque_at TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE documents ADD COLUMN revoque_motif TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE documents ADD COLUMN reference_source_id TEXT`) } catch { /* already exists */ }
+  // v1.9.931 — avoir (credit note) linkage
+  try { db.exec(`ALTER TABLE documents ADD COLUMN avoir_id TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE documents ADD COLUMN document_origine_id TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE documents ADD COLUMN facture_origine_numero TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE documents ADD COLUMN annule_motif TEXT`) } catch { /* already exists */ }
   // ventes: type_vente
   try { db.exec(`ALTER TABLE ventes ADD COLUMN type_vente TEXT DEFAULT 'TICKET'`) } catch { /* already exists */ }
   // produits: source_tag (NF fournisseur libre)
@@ -719,6 +724,7 @@ export function initDatabase() {
 
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN updated_at TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN numeros_serie_json TEXT`) } catch { /* already exists */ }
 
   db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES ('cat-reparation', 'Réparation', '🔧')`).run()
 
@@ -736,6 +742,7 @@ export function initDatabase() {
     // Factures
     facture_layout:          'professionnel',
     invoice_prefix_facture:  'FAC',
+    invoice_prefix_avoir:    'AVO',
     invoice_prefix_vente:    'VTE',
     invoice_footer:          'Merci pour votre confiance !',
     invoice_show_tva:        'true',
