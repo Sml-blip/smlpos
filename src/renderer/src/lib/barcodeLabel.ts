@@ -16,16 +16,18 @@ export function parseLabelPrice(prix: number | string | undefined | null): numbe
 }
 
 function mergeConfig(partial?: Partial<LabelPrintConfig>): LabelPrintConfig {
-  const cfg = { ...DEFAULT_LABEL_CONFIG, ...partial }
-  cfg.rotationDeg = partial?.rotationDeg === 0 ? 0 : 180
-  return cfg
+  return {
+    ...DEFAULT_LABEL_CONFIG,
+    ...partial,
+    rotationDeg: partial?.rotationDeg === 180 ? 180 : 0,
+  }
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** 40×20mm label — name top, barcode centered, price bottom (nothing cropped). */
+/** 40×20mm label — left-anchored; 180° rotation mirrors alignment so print stays left. */
 export function buildBarcodeLabelHtml(
   code: string,
   nom: string,
@@ -43,15 +45,21 @@ export function buildBarcodeLabelHtml(
   const priceStr = `${priceNum.toFixed(3)} DT`
 
   const contentW = Math.max(1, cfg.widthMm - cfg.stripLeftMm - cfg.stripRightMm)
-  const maxBarWidthMm = Math.max(28, contentW - 2.5)
+  const maxBarWidthMm = Math.max(24, contentW - 3.5)
+  const flip = cfg.rotationDeg === 180
+  /** After 180° rotation, HTML-right becomes physical-left — mirror so print reads left. */
+  const anchor = flip ? 'right' : 'left'
+  const flexMain = flip ? 'flex-end' : 'flex-start'
+  const gridAlign = flip ? 'end' : 'start'
 
   const svg = labelBarcodeSvg(barcodeValue, {
     maxWidthMm: maxBarWidthMm,
-    barHeightMm: 6,
+    barHeightMm: 5.8,
     showText: true,
+    align: anchor,
   })
 
-  const labelRotate = cfg.rotationDeg === 180
+  const labelRotate = flip
     ? 'transform: rotate(180deg); transform-origin: center center;'
     : ''
 
@@ -72,6 +80,7 @@ export function buildBarcodeLabelHtml(
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: ${cfg.widthMm}mm;
+      height: ${cfg.heightMm}mm;
       font-family: Arial, Helvetica, sans-serif;
       background: #fff;
       color: #000;
@@ -81,22 +90,23 @@ export function buildBarcodeLabelHtml(
     .sheet {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
-      padding: 0.4mm ${cfg.stripRightMm}mm 0.4mm ${cfg.stripLeftMm}mm;
+      padding: 0.35mm ${cfg.stripRightMm}mm 0.35mm ${cfg.stripLeftMm}mm;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      align-items: stretch;
+      justify-content: ${flexMain};
       overflow: hidden;
     }
     .sheet.page-break { page-break-after: always; break-after: page; }
     .label {
       width: ${contentW}mm;
-      height: ${cfg.heightMm - 0.8}mm;
+      max-width: 100%;
+      height: ${cfg.heightMm - 0.7}mm;
       display: grid;
       grid-template-rows: auto 1fr auto;
       align-items: center;
-      justify-items: center;
-      gap: 0.2mm;
-      text-align: center;
+      justify-items: ${gridAlign};
+      gap: 0.15mm;
+      text-align: ${anchor};
     }
     .label-name {
       width: 100%;
@@ -108,25 +118,23 @@ export function buildBarcodeLabelHtml(
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       word-break: break-word;
-      padding: 0 0.5mm;
+      padding: 0 0.25mm 0 0;
     }
     .barcode-wrap {
       width: 100%;
       display: flex;
       align-items: center;
-      justify-content: center;
+      justify-content: ${flexMain};
       overflow: hidden;
-      padding: 0 1mm;
+      padding: 0;
     }
     .label-barcode,
     .barcode-wrap svg {
       display: block;
-      margin-left: auto;
-      margin-right: auto;
       max-width: ${maxBarWidthMm}mm;
       width: auto;
       height: auto;
-      max-height: 10.5mm;
+      max-height: 10mm;
     }
     .label-barcode rect,
     .barcode-wrap svg rect {
@@ -138,7 +146,7 @@ export function buildBarcodeLabelHtml(
       font-weight: 900;
       line-height: 1.1;
       white-space: nowrap;
-      padding: 0 0.5mm;
+      padding: 0 0.25mm 0 0;
     }
   </style></head><body>${sheets}</body></html>`
 }

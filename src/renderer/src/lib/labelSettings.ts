@@ -6,7 +6,7 @@ const api = window.api
 export async function loadLabelPrintConfig(): Promise<LabelPrintConfig> {
   try {
     const all = (await api.settingsGetAll()) as Record<string, string>
-    const rot = parseInt(all.impression_label_rotation ?? '180', 10)
+    const rot = parseInt(all.impression_label_rotation ?? '0', 10)
     return {
       widthMm: parseFloat(all.impression_label_width ?? '') || DEFAULT_LABEL_CONFIG.widthMm,
       heightMm: parseFloat(all.impression_label_height ?? '') || DEFAULT_LABEL_CONFIG.heightMm,
@@ -33,6 +33,6 @@ export function mergeLabelConfig(partial?: Partial<LabelPrintConfig>): LabelPrin
   return {
     ...DEFAULT_LABEL_CONFIG,
     ...partial,
-    rotationDeg: partial?.rotationDeg === 0 ? 0 : (partial?.rotationDeg === 180 ? 180 : DEFAULT_LABEL_CONFIG.rotationDeg),
+    rotationDeg: partial?.rotationDeg === 180 ? 180 : (partial?.rotationDeg === 0 ? 0 : DEFAULT_LABEL_CONFIG.rotationDeg),
   }
 }

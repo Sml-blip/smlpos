@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.938",
+  "version": "1.9.939",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -13,7 +13,7 @@
     "package": "npm run prepackage && npm run build && electron-builder",
     "package:msi": "npm run prepackage && npm run build && electron-builder --win msi",
     "package:nsis": "npm run prepackage && npm run build && electron-builder --win nsis",
-    "release:win": "npm run prepackage && npm run build && electron-builder --win nsis --publish always",
+    "release:win": "node scripts/release-win.mjs",
     "release:win:local": "npm run prepackage && npm run build && electron-builder --win nsis --dir",
     "postinstall": "electron-builder install-app-deps"
   },

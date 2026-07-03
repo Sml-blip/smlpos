@@ -18,9 +18,9 @@ export interface LabelPrintConfig {
 export const DEFAULT_LABEL_CONFIG: LabelPrintConfig = {
   widthMm: 40,
   heightMm: 19.9,
-  stripLeftMm: 1.3,
-  stripRightMm: 1.3,
-  rotationDeg: 180,
+  stripLeftMm: 1,
+  stripRightMm: 3,
+  rotationDeg: 0,
 }
 
 export interface PrintJob {
