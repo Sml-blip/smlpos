@@ -6,7 +6,7 @@ import JsBarcode from 'jsbarcode'
 
 const MM_TO_PX = 3.7795275591
 
-import type { BarcodeFormatMode } from './labelLayout'
+type BarcodeFormatMode = 'auto' | 'EAN13' | 'EAN8' | 'CODE128'
 
 export function normalizeBarcodeText(raw: string): string {
   return String(raw ?? '').trim()
@@ -67,6 +67,17 @@ export function pickBarcodeValue(code: string, productRef = ''): string {
     if (format.startsWith('EAN')) return c
   }
   return candidates.sort((a, b) => a.length - b.length)[0] ?? normalizeBarcodeText(code)
+}
+
+/** Label printing always uses EAN-8 — normalize from code or product ref. */
+export function pickEan8Value(code: string, productRef = ''): string {
+  const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
+  for (const c of candidates) {
+    const { value, format } = resolveBarcodeFormat(c, 'EAN8')
+    if (format === 'EAN8' && /^\d{8}$/.test(value)) return value
+  }
+  const fallback = candidates[0] ?? normalizeBarcodeText(code) ?? '0000000'
+  return resolveBarcodeFormat(fallback, 'EAN8').value
 }
 
 export function estimateModuleCount(text: string): number {
@@ -141,7 +152,7 @@ export function labelBarcodeSvg(
   const moduleMax = opts.moduleWidthMaxMm ?? 0.38
   const maxWidthPx = maxWidthMm * MM_TO_PX
   const barHeightPx = barHeightMm * MM_TO_PX
-  const { value, format } = resolveBarcodeFormat(raw, opts.formatMode ?? 'auto')
+  const { value, format } = resolveBarcodeFormat(raw, opts.formatMode ?? 'EAN8')
 
   let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm, moduleMax)
   let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)

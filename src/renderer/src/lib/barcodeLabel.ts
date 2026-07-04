@@ -1,4 +1,4 @@
-import { labelBarcodeSvg, pickBarcodeValue } from './barcode'
+import { labelBarcodeSvg, pickEan8Value } from './barcode'
 import type { LabelPrintConfig } from './printManager'
 import { effectiveLabelMargins } from './printManager'
 import { clampLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
@@ -45,7 +45,7 @@ export function buildBarcodeLabelHtml(
   const contentH = margins.contentH
   const layout = clampLayout(cfg.layout, contentW, contentH)
 
-  const barcodeValue = pickBarcodeValue(code, productRef)
+  const barcodeValue = pickEan8Value(code, productRef)
   const displayName = (nom || productRef || 'Produit').trim()
   const safeName = escapeHtml(displayName)
   const safeRef = escapeHtml(productRef || code)
@@ -58,7 +58,7 @@ export function buildBarcodeLabelHtml(
         maxWidthMm: layout.barcode.w,
         barHeightMm: Math.max(3, layout.barcode.h - (layout.showBarcodeText ? 3 : 0)),
         showText: layout.showBarcodeText,
-        formatMode: layout.barcodeFormat,
+        formatMode: 'EAN8',
       })
     : ''
 
@@ -77,12 +77,17 @@ export function buildBarcodeLabelHtml(
 
   const labelRotate = flip ? 'transform:rotate(180deg);transform-origin:center center;' : ''
 
+  /** Slight shrink so physical printers (Gainscha) don't clip the right edge. */
+  const PRINT_SAFE_SCALE = 0.97
+
   const labelInner = `
         <div class="label" style="${labelRotate}">
           <div class="label-area">
+            <div class="label-content">
             ${nameBlock}
             ${barcodeBlock}
             ${priceBlock}
+            </div>
           </div>
         </div>`
 
@@ -122,6 +127,14 @@ export function buildBarcodeLabelHtml(
       height: ${contentH}mm;
       overflow: hidden;
     }
+    .label-content {
+      position: relative;
+      width: ${contentW}mm;
+      height: ${contentH}mm;
+      transform: scale(${PRINT_SAFE_SCALE});
+      transform-origin: top left;
+      overflow: hidden;
+    }
     .el {
       position: absolute;
       overflow: hidden;
@@ -148,10 +161,10 @@ export function buildBarcodeLabelHtml(
     }
     .el-barcode svg {
       display: block;
-      width: 100%;
-      height: 100%;
       max-width: 100%;
       max-height: 100%;
+      width: auto;
+      height: auto;
     }
     .el-barcode svg rect { shape-rendering: crispEdges; }
     .el-price {
@@ -171,7 +184,7 @@ export function buildBarcodeLabelHtml(
 }
 
 export function buildSampleLabelHtml(config?: Partial<LabelPrintConfig>): string {
-  return buildBarcodeLabelHtml('1234567890123', 'Produit test scanner', 12.5, 'REF-TEST', config)
+  return buildBarcodeLabelHtml('12345670', 'Produit test scanner', 12.5, 'REF-TEST', config)
 }
 
 export function patchLabelLayout(

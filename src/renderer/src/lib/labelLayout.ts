@@ -1,7 +1,9 @@
 import { DEFAULT_LABEL_CONFIG, effectiveLabelMargins, type LabelPrintConfig } from './printManager'
 
 export type LabelElementId = 'name' | 'barcode' | 'price'
-export type BarcodeFormatMode = 'auto' | 'EAN13' | 'EAN8' | 'CODE128'
+
+/** Inner padding so content stays inside the printable area on Gainscha-style printers. */
+export const LABEL_SAFE_INSET_MM = 1.5
 
 export interface LabelElementBox {
   x: number
@@ -15,51 +17,60 @@ export interface LabelVisualLayout {
   name: LabelElementBox
   barcode: LabelElementBox
   price: LabelElementBox
-  barcodeFormat: BarcodeFormatMode
   showBarcodeText: boolean
 }
 
 export const LABEL_ELEMENT_IDS: LabelElementId[] = ['name', 'barcode', 'price']
 
-export const BARCODE_FORMAT_OPTIONS: { value: BarcodeFormatMode; label: string }[] = [
-  { value: 'auto', label: 'Auto (EAN si possible)' },
-  { value: 'EAN13', label: 'EAN-13' },
-  { value: 'EAN8', label: 'EAN-8' },
-  { value: 'CODE128', label: 'Code 128' },
-]
+const FIXED_H: Record<LabelElementId, number> = {
+  name: 3.8,
+  barcode: 9.5,
+  price: 3.8,
+}
 
-const MIN_W = 4
-const MIN_H = 2
+function fixedBoxWidth(contentW: number): number {
+  return Math.max(4, contentW - LABEL_SAFE_INSET_MM * 2)
+}
 
 export function printableArea(cfg: Pick<LabelPrintConfig, 'widthMm' | 'heightMm' | 'stripLeftMm' | 'stripRightMm' | 'stripTopMm' | 'stripBottomMm'>) {
   return effectiveLabelMargins(cfg)
 }
 
-export function defaultVisualLayout(contentW: number, contentH: number): LabelVisualLayout {
-  const w = Math.min(contentW, Math.max(MIN_W, contentW))
+export function defaultVisualLayout(contentW: number, _contentH: number): LabelVisualLayout {
+  const w = fixedBoxWidth(contentW)
+  const inset = LABEL_SAFE_INSET_MM
   return {
-    name: { x: 0, y: 0.4, w, h: 3.8, visible: true },
-    barcode: { x: 0, y: 4.5, w, h: 9.5, visible: true },
-    price: { x: 0, y: 14.8, w, h: 3.8, visible: true },
-    barcodeFormat: 'auto',
+    name: { x: inset, y: 0.4, w, h: FIXED_H.name, visible: true },
+    barcode: { x: inset, y: 4.5, w, h: FIXED_H.barcode, visible: true },
+    price: { x: inset, y: 14.8, w, h: FIXED_H.price, visible: true },
     showBarcodeText: true,
   }
 }
 
-export function clampBox(box: LabelElementBox, contentW: number, contentH: number): LabelElementBox {
-  const w = Math.min(contentW, Math.max(MIN_W, box.w))
-  const h = Math.min(contentH, Math.max(MIN_H, box.h))
-  const x = Math.min(Math.max(0, box.x), Math.max(0, contentW - w))
-  const y = Math.min(Math.max(0, box.y), Math.max(0, contentH - h))
+/** Move-only: x/y change; w/h are fixed per element type. */
+export function clampBox(
+  id: LabelElementId,
+  box: LabelElementBox,
+  contentW: number,
+  contentH: number,
+): LabelElementBox {
+  const w = fixedBoxWidth(contentW)
+  const h = FIXED_H[id]
+  const minX = LABEL_SAFE_INSET_MM
+  const minY = LABEL_SAFE_INSET_MM
+  const maxX = Math.max(minX, contentW - LABEL_SAFE_INSET_MM - w)
+  const maxY = Math.max(minY, contentH - LABEL_SAFE_INSET_MM - h)
+  const x = Math.min(Math.max(minX, box.x), maxX)
+  const y = Math.min(Math.max(minY, box.y), maxY)
   return { ...box, x, y, w, h }
 }
 
 export function clampLayout(layout: LabelVisualLayout, contentW: number, contentH: number): LabelVisualLayout {
   return {
-    ...layout,
-    name: clampBox(layout.name, contentW, contentH),
-    barcode: clampBox(layout.barcode, contentW, contentH),
-    price: clampBox(layout.price, contentW, contentH),
+    showBarcodeText: layout.showBarcodeText !== false,
+    name: clampBox('name', layout.name, contentW, contentH),
+    barcode: clampBox('barcode', layout.barcode, contentW, contentH),
+    price: clampBox('price', layout.price, contentW, contentH),
   }
 }
 
@@ -72,17 +83,12 @@ export function parseVisualLayout(raw: string | undefined, contentW: number, con
       name: { ...fallback.name, ...j.name },
       barcode: { ...fallback.barcode, ...j.barcode },
       price: { ...fallback.price, ...j.price },
-      barcodeFormat: isFormat(j.barcodeFormat) ? j.barcodeFormat : fallback.barcodeFormat,
       showBarcodeText: j.showBarcodeText !== false,
     }
     return clampLayout(merged, contentW, contentH)
   } catch {
     return fallback
   }
-}
-
-function isFormat(v: unknown): v is BarcodeFormatMode {
-  return v === 'auto' || v === 'EAN13' || v === 'EAN8' || v === 'CODE128'
 }
 
 export function serializeVisualLayout(layout: LabelVisualLayout): string {

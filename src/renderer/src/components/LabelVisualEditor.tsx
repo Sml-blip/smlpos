@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { labelBarcodeSvg, pickBarcodeValue } from '../lib/barcode'
+import { labelBarcodeSvg, pickEan8Value } from '../lib/barcode'
 import type { LabelPrintConfig } from '../lib/printManager'
 import {
-  BARCODE_FORMAT_OPTIONS,
   clampBox,
   clampLayout,
   fontPtForBox,
@@ -30,11 +29,8 @@ interface LabelVisualEditorProps {
   zoomPct?: number
 }
 
-type DragMode = 'move' | 'resize'
-
 interface DragState {
   id: LabelElementId
-  mode: DragMode
   startX: number
   startY: number
   orig: LabelVisualLayout[LabelElementId]
@@ -61,16 +57,16 @@ export default function LabelVisualEditor({
 
   const priceStr = `${parseLabelPrice(preview.prix).toFixed(3)} DT`
   const displayName = (preview.nom || preview.productRef || 'Produit').trim()
-  const barcodeValue = pickBarcodeValue(preview.code, preview.productRef)
+  const barcodeValue = pickEan8Value(preview.code, preview.productRef)
 
   const barcodeSvg = useMemo(
     () => labelBarcodeSvg(barcodeValue, {
       maxWidthMm: layout.barcode.w,
       barHeightMm: Math.max(3, layout.barcode.h - (layout.showBarcodeText ? 3 : 0)),
       showText: layout.showBarcodeText,
-      formatMode: layout.barcodeFormat,
+      formatMode: 'EAN8',
     }),
-    [barcodeValue, layout.barcode.w, layout.barcode.h, layout.showBarcodeText, layout.barcodeFormat],
+    [barcodeValue, layout.barcode.w, layout.barcode.h, layout.showBarcodeText],
   )
 
   const patchLayout = useCallback((next: LabelVisualLayout) => {
@@ -89,19 +85,11 @@ export default function LabelVisualEditor({
     const dx = pxToMm(e.clientX - drag.startX)
     const dy = pxToMm(e.clientY - drag.startY)
     const next = { ...layout }
-    if (drag.mode === 'move') {
-      next[drag.id] = clampBox({
-        ...drag.orig,
-        x: drag.orig.x + dx,
-        y: drag.orig.y + dy,
-      }, contentW, contentH)
-    } else {
-      next[drag.id] = clampBox({
-        ...drag.orig,
-        w: drag.orig.w + dx,
-        h: drag.orig.h + dy,
-      }, contentW, contentH)
-    }
+    next[drag.id] = clampBox(drag.id, {
+      ...drag.orig,
+      x: drag.orig.x + dx,
+      y: drag.orig.y + dy,
+    }, contentW, contentH)
     const clamped = clampLayout(next, contentW, contentH)
     liveLayoutRef.current = clamped
     setLiveLayout(clamped)
@@ -123,13 +111,12 @@ export default function LabelVisualEditor({
     window.removeEventListener('pointerup', onPointerUp)
   }, [onPointerMove, onPointerUp])
 
-  function startDrag(id: LabelElementId, mode: DragMode, e: React.PointerEvent) {
+  function startDrag(id: LabelElementId, e: React.PointerEvent) {
     e.preventDefault()
     e.stopPropagation()
     setSelected(id)
     dragRef.current = {
       id,
-      mode,
       startX: e.clientX,
       startY: e.clientY,
       orig: { ...displayLayout[id] },
@@ -170,7 +157,7 @@ export default function LabelVisualEditor({
     } else {
       content = (
         <div
-          style={{ width: '100%', height: '100%' }}
+          style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
           dangerouslySetInnerHTML={{ __html: barcodeSvg }}
         />
       )
@@ -178,7 +165,7 @@ export default function LabelVisualEditor({
 
     const labels: Record<LabelElementId, string> = {
       name: 'Nom',
-      barcode: 'Code-barres',
+      barcode: 'EAN-8',
       price: 'Prix',
     }
 
@@ -187,7 +174,7 @@ export default function LabelVisualEditor({
         key={id}
         role="button"
         tabIndex={0}
-        onPointerDown={(e) => startDrag(id, 'move', e)}
+        onPointerDown={(e) => startDrag(id, e)}
         onClick={(e) => { e.stopPropagation(); setSelected(id) }}
         style={{
           position: 'absolute',
@@ -220,23 +207,7 @@ export default function LabelVisualEditor({
             {labels[id]}
           </span>
         )}
-        <div style={{ width: '100%', padding: '0 1px', pointerEvents: 'none' }}>{content}</div>
-        {isSel && (
-          <div
-            onPointerDown={(e) => startDrag(id, 'resize', e)}
-            style={{
-              position: 'absolute',
-              right: -4,
-              bottom: -4,
-              width: 10,
-              height: 10,
-              background: '#3B6D11',
-              borderRadius: 2,
-              cursor: 'nwse-resize',
-              touchAction: 'none',
-            }}
-          />
-        )}
+        <div style={{ width: '100%', padding: '0 1px', pointerEvents: 'none', overflow: 'hidden' }}>{content}</div>
       </div>
     )
   }
@@ -244,7 +215,7 @@ export default function LabelVisualEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)' }}>
-        Cliquez pour sélectionner · glissez pour déplacer · coin vert pour redimensionner
+        Cliquez pour sélectionner · glissez pour déplacer · format EAN-8 fixe
       </div>
 
       <div
@@ -274,20 +245,8 @@ export default function LabelVisualEditor({
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontWeight: 600 }}>Format code-barres</span>
-          <select
-            value={displayLayout.barcodeFormat}
-            className="border border-border rounded-lg px-2 py-1.5 text-xs bg-white"
-            onChange={(e) => patchLayout({ ...displayLayout, barcodeFormat: e.target.value as LabelVisualLayout['barcodeFormat'] })}
-          >
-            {BARCODE_FORMAT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 18 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 11, alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input
             type="checkbox"
             checked={displayLayout.showBarcodeText}
@@ -295,6 +254,7 @@ export default function LabelVisualEditor({
           />
           Numéro sous le code
         </label>
+        <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>Code-barres : EAN-8</span>
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
