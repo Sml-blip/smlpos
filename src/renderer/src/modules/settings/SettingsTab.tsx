@@ -453,8 +453,32 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
             </p>
           )}
           <p className="text-xs text-text-secondary mb-3">
-            Glissez les blocs pour positionner nom, code-barres et prix. Le layout est aussi disponible lors de l&apos;impression depuis Inventaire ou Achats.
+            Glissez les blocs pour positionner nom, code-barres et prix. Sur Windows, l&apos;impression utilise le SDK Gainscha GTSPL (GS-2408D, GI-2408T, etc.).
           </p>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <Field label="Moteur étiquette">
+              <select
+                value={labelCfg.labelEngine}
+                onChange={(e) => patchLabelCfg({ labelEngine: e.target.value === 'html' ? 'html' : 'gainscha' })}
+                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white"
+              >
+                <option value="gainscha">SDK Gainscha (recommandé)</option>
+                <option value="html">Windows / HTML (secours)</option>
+              </select>
+            </Field>
+            {labelCfg.labelEngine === 'gainscha' && (
+              <Field label="Connexion SDK">
+                <select
+                  value={labelCfg.labelConnection}
+                  onChange={(e) => patchLabelCfg({ labelConnection: e.target.value === 'usb' ? 'usb' : 'driver' })}
+                  className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white"
+                >
+                  <option value="driver">Imprimante Windows</option>
+                  <option value="usb">USB direct</option>
+                </select>
+              </Field>
+            )}
+          </div>
           <LabelVisualEditor
             config={labelCfg}
             preview={{ code: '1234567890123', nom: 'Produit test scanner', prix: 12.5, productRef: 'REF-TEST' }}

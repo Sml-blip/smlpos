@@ -24,6 +24,13 @@ import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
 import { resolveElectronPageSize } from './printPageSize'
+import {
+  gainschaDetectUsb,
+  gainschaPrintLabel,
+  gainschaSdkVersion,
+  isGainschaAvailable,
+  type GainschaPrintJob,
+} from './gainschaPrint'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
 
@@ -2747,6 +2754,14 @@ function setupIpcHandlers() {
       dpi: options.dpi as { horizontal: number; vertical: number } | undefined,
     })
   })
+
+  ipcMain.handle('gainscha:isAvailable', () => isGainschaAvailable())
+
+  ipcMain.handle('gainscha:detectUsb', async () => gainschaDetectUsb())
+
+  ipcMain.handle('gainscha:version', async () => gainschaSdkVersion())
+
+  ipcMain.handle('gainscha:printLabel', async (_event, job: GainschaPrintJob) => gainschaPrintLabel(job))
 
   // ─── Backup ───────────────────────────────────────────────────────────────────
   ipcMain.handle('backup:create', () => {

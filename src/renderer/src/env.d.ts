@@ -235,6 +235,10 @@ interface Window {
       printerName: string,
       options?: Record<string, unknown>,
     ) => Promise<{ success: boolean; error?: string }>
+    gainschaIsAvailable?: () => Promise<boolean>
+    gainschaDetectUsb?: () => Promise<{ success: boolean; devices?: string[]; error?: string }>
+    gainschaVersion?: () => Promise<{ success: boolean; version?: string; error?: string }>
+    gainschaPrintLabel?: (job: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>
 
     // Window
     windowMinimize: () => Promise<void>

@@ -26,6 +26,7 @@ import {
   scheduleSaveLabelPrintConfig,
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
+import { buildGainschaPrintJob } from '../lib/gainschaLabelJob'
 import LabelVisualEditor from './LabelVisualEditor'
 
 const api = window.api
@@ -202,6 +203,9 @@ export default function PrintManagerModal({
   const [labelSaveState, setLabelSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const labelHydratedRef = useRef(false)
   const [ticketWidthMm, setTicketWidthMm] = useState<58 | 80>(80)
+  const [gainschaAvailable, setGainschaAvailable] = useState(false)
+  const [gainschaUsbDevices, setGainschaUsbDevices] = useState<string[]>([])
+  const [gainschaSdkVer, setGainschaSdkVer] = useState('')
 
   const [zoom, setZoom] = useState(() => (kind === 'label' ? 300 : 75))
   const [printing, setPrinting] = useState(false)
@@ -346,6 +350,30 @@ export default function PrintManagerModal({
     setLabelCfg((prev) => mergeLabelConfig({ ...prev, ...patch }))
   }, [])
 
+  useEffect(() => {
+    if (kind !== 'label') return
+    let cancelled = false
+    async function loadGainscha() {
+      try {
+        const available = (await api.gainschaIsAvailable?.()) === true
+        if (cancelled) return
+        setGainschaAvailable(available)
+        if (!available) return
+        const ver = await api.gainschaVersion?.()
+        if (!cancelled && ver?.version) setGainschaSdkVer(String(ver.version))
+        const det = await api.gainschaDetectUsb?.()
+        if (!cancelled && det?.devices?.length) {
+          setGainschaUsbDevices(det.devices)
+          setLabelCfg((prev) => (prev.usbDevice ? prev : mergeLabelConfig({ ...prev, usbDevice: det.devices![0] })))
+        }
+      } catch {
+        if (!cancelled) setGainschaAvailable(false)
+      }
+    }
+    loadGainscha()
+    return () => { cancelled = true }
+  }, [kind])
+
   // ── Zoom ───────────────────────────────────────────────────────────────────
 
   function adjustZoom(delta: number) {
@@ -362,7 +390,18 @@ export default function PrintManagerModal({
   // ── Print ──────────────────────────────────────────────────────────────────
 
   async function handlePrint() {
-    if (!opts.printerName) {
+    const useGainscha = kind === 'label'
+      && labelCfg.labelEngine === 'gainscha'
+      && gainschaAvailable
+    const useUsb = useGainscha && labelCfg.labelConnection === 'usb'
+
+    if (useUsb) {
+      if (!labelCfg.usbDevice) {
+        setStatusMsg('Sélectionnez un périphérique USB Gainscha')
+        setStatusOk(false)
+        return
+      }
+    } else if (!opts.printerName) {
       setStatusMsg('Sélectionnez une imprimante')
       setStatusOk(false)
       return
@@ -373,12 +412,42 @@ export default function PrintManagerModal({
     setStatusOk(true)
 
     try {
-      if (settingsKey) {
+      if (settingsKey && !useUsb) {
         try {
           await api.settingsSet(settingsKey, opts.printerName)
         } catch {
           // non-fatal
         }
+      }
+
+      if (useGainscha) {
+        await saveLabelPrintConfig(labelCfg)
+        const source = labelSource ?? {
+          code: '12345670',
+          nom: 'Produit test scanner',
+          prix: 12.5,
+          productRef: 'REF-TEST',
+        }
+        const job = buildGainschaPrintJob(labelCfg, source, {
+          printerName: opts.printerName,
+          copies: opts.copies,
+          connection: labelCfg.labelConnection,
+          usbDevice: labelCfg.usbDevice,
+        })
+        if (!api.gainschaPrintLabel) {
+          setStatusMsg('SDK Gainscha indisponible')
+          setStatusOk(false)
+          return
+        }
+        const result = await api.gainschaPrintLabel(job)
+        if (result.success) {
+          setStatusMsg(`Imprimé (SDK Gainscha) · ${opts.copies} copie(s)`)
+          setStatusOk(true)
+        } else {
+          setStatusMsg(`Erreur Gainscha : ${result.error ?? 'inconnue'}`)
+          setStatusOk(false)
+        }
+        return
       }
 
       let printOptions: Record<string, unknown> = {
@@ -605,6 +674,59 @@ export default function PrintManagerModal({
           <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)', marginBottom: 8 }}>
             Éditeur visuel à droite — glisser / redimensionner les blocs (EAN-8)
           </div>
+          {gainschaAvailable && (
+            <div style={styles.field}>
+              <label style={styles.fieldLabel}>Moteur d&apos;impression</label>
+              <select
+                value={labelCfg.labelEngine}
+                onChange={(e) => patchLabelCfg({ labelEngine: e.target.value === 'html' ? 'html' : 'gainscha' })}
+                style={styles.select}
+              >
+                <option value="gainscha">SDK Gainscha (TSPL){gainschaSdkVer ? ` v${gainschaSdkVer}` : ''}</option>
+                <option value="html">Windows / HTML (secours)</option>
+              </select>
+            </div>
+          )}
+          {gainschaAvailable && labelCfg.labelEngine === 'gainscha' && (
+            <>
+              <div style={styles.field}>
+                <label style={styles.fieldLabel}>Connexion</label>
+                <select
+                  value={labelCfg.labelConnection}
+                  onChange={(e) => patchLabelCfg({ labelConnection: e.target.value === 'usb' ? 'usb' : 'driver' })}
+                  style={styles.select}
+                >
+                  <option value="driver">Imprimante Windows</option>
+                  <option value="usb">USB direct (SDK)</option>
+                </select>
+              </div>
+              {labelCfg.labelConnection === 'usb' && (
+                <div style={styles.field}>
+                  <label style={styles.fieldLabel}>Périphérique USB</label>
+                  <select
+                    value={labelCfg.usbDevice}
+                    onChange={(e) => patchLabelCfg({ usbDevice: e.target.value })}
+                    style={styles.select}
+                  >
+                    <option value="">— Choisir —</option>
+                    {gainschaUsbDevices.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    style={{ ...styles.iconBtn, marginTop: 6, width: '100%', fontSize: 10 }}
+                    onClick={async () => {
+                      const det = await api.gainschaDetectUsb?.()
+                      if (det?.devices) setGainschaUsbDevices(det.devices)
+                    }}
+                  >
+                    Détecter USB
+                  </button>
+                </div>
+              )}
+            </>
+          )}
           <div style={styles.field}>
             <label style={styles.fieldLabel}>Rotation</label>
             <select
@@ -618,7 +740,7 @@ export default function PrintManagerModal({
           </div>
         </div>
 
-        {renderPrinterSelect()}
+        {labelCfg.labelConnection !== 'usb' && renderPrinterSelect()}
         {renderCopiesControl()}
 
         <div style={styles.section}>
@@ -652,6 +774,13 @@ export default function PrintManagerModal({
       </>
     )
   }
+
+  const canPrint = useMemo(() => {
+    if (kind === 'label' && labelCfg.labelEngine === 'gainscha' && gainschaAvailable && labelCfg.labelConnection === 'usb') {
+      return !!labelCfg.usbDevice
+    }
+    return !!opts.printerName
+  }, [kind, labelCfg.labelEngine, labelCfg.labelConnection, labelCfg.usbDevice, gainschaAvailable, opts.printerName])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -687,11 +816,11 @@ export default function PrintManagerModal({
               <button
                 type="button"
                 onClick={handlePrint}
-                disabled={printing || !opts.printerName}
+                disabled={printing || !canPrint}
                 style={{
                   ...styles.printBtn,
-                  opacity: printing || !opts.printerName ? 0.5 : 1,
-                  cursor: printing || !opts.printerName ? 'not-allowed' : 'pointer',
+                  opacity: printing || !canPrint ? 0.5 : 1,
+                  cursor: printing || !canPrint ? 'not-allowed' : 'pointer',
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 8 }}>

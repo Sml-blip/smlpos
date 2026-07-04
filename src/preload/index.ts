@@ -220,6 +220,10 @@ const api = {
   printLabel: (html: string) => ipcRenderer.invoke('print:label', html),
   getPrinters: () => ipcRenderer.invoke('print:getPrinters'),
   printContent: (html: string, printerName: string, options?: Record<string, unknown>) => ipcRenderer.invoke('print:printContent', html, printerName, options ?? {}),
+  gainschaIsAvailable: () => ipcRenderer.invoke('gainscha:isAvailable') as Promise<boolean>,
+  gainschaDetectUsb: () => ipcRenderer.invoke('gainscha:detectUsb') as Promise<{ success: boolean; devices?: string[]; error?: string }>,
+  gainschaVersion: () => ipcRenderer.invoke('gainscha:version') as Promise<{ success: boolean; version?: string; error?: string }>,
+  gainschaPrintLabel: (job: Record<string, unknown>) => ipcRenderer.invoke('gainscha:printLabel', job) as Promise<{ success: boolean; error?: string }>,
 
   // Backup
   backupCreate: () => ipcRenderer.invoke('backup:create'),

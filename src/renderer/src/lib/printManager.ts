@@ -19,6 +19,10 @@ export interface LabelPrintConfig {
   dpi: number
   defaultCopies: number
   layout: LabelVisualLayout
+  /** Windows: native Gainscha GTSPL SDK vs HTML spooler */
+  labelEngine: 'gainscha' | 'html'
+  labelConnection: 'driver' | 'usb'
+  usbDevice: string
 }
 
 export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
@@ -29,8 +33,11 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   stripTopMm: 0.35,
   stripBottomMm: 0.35,
   rotationDeg: 0,
-  dpi: 300,
+  dpi: 203,
   defaultCopies: 1,
+  labelEngine: 'gainscha',
+  labelConnection: 'driver',
+  usbDevice: '',
 }
 
 /** Gainscha / 40mm label printers often have ~8mm non-printable zone on the right. */
@@ -60,6 +67,9 @@ export const LABEL_SETTING_KEYS = [
   'impression_label_dpi',
   'impression_label_copies',
   'impression_label_layout_json',
+  'impression_label_engine',
+  'impression_label_connection',
+  'impression_label_usb_device',
 ] as const
 
 export interface PrintJob {
