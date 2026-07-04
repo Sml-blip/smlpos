@@ -26,7 +26,7 @@ import {
   scheduleSaveLabelPrintConfig,
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
-import LabelBarcodeSettingsForm from './LabelBarcodeSettingsForm'
+import LabelVisualEditor from './LabelVisualEditor'
 
 const api = window.api
 
@@ -596,34 +596,34 @@ export default function PrintManagerModal({
     return (
       <>
         <div style={styles.section}>
-          <div style={styles.sectionLabel}>Étiquette code-barres</div>
+          <div style={styles.sectionLabel}>Étiquette</div>
+          {labelSaveState !== 'idle' && (
+            <div style={{ fontSize: 10, fontWeight: 600, color: labelSaveState === 'saved' ? '#3B6D11' : '#888', marginBottom: 6 }}>
+              {labelSaveState === 'saving' ? 'Enregistrement…' : 'Layout enregistré'}
+            </div>
+          )}
           <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)', marginBottom: 8 }}>
-            Réglages enregistrés automatiquement · aperçu en direct
+            Éditeur visuel à droite — glisser / redimensionner les blocs
           </div>
-          <LabelBarcodeSettingsForm
-            variant="modal"
-            config={labelCfg}
-            onChange={patchLabelCfg}
-            saveState={labelSaveState}
-          />
+          <div style={styles.field}>
+            <label style={styles.fieldLabel}>Rotation</label>
+            <select
+              value={String(labelCfg.rotationDeg)}
+              onChange={(e) => patchLabelCfg({ rotationDeg: parseInt(e.target.value, 10) === 180 ? 180 : 0 })}
+              style={styles.select}
+            >
+              <option value="0">0° (normal)</option>
+              <option value="180">180° (retourné)</option>
+            </select>
+          </div>
         </div>
 
         {renderPrinterSelect()}
         {renderCopiesControl()}
 
         <div style={styles.section}>
-          <Toggle
-            id="label-color"
-            label="Couleur"
-            checked={opts.color}
-            onChange={(v) => set('color', v)}
-          />
-          <Toggle
-            id="label-bg"
-            label="Arrière-plan"
-            checked={opts.printBackground}
-            onChange={(v) => set('printBackground', v)}
-          />
+          <Toggle id="label-color" label="Couleur" checked={opts.color} onChange={(v) => set('color', v)} />
+          <Toggle id="label-bg" label="Arrière-plan" checked={opts.printBackground} onChange={(v) => set('printBackground', v)} />
         </div>
       </>
     )
@@ -726,6 +726,21 @@ export default function PrintManagerModal({
 
             {/* Canvas */}
             <div style={styles.canvas}>
+              {kind === 'label' && labelSource ? (
+                <div style={{ width: '100%', height: '100%', padding: 8, boxSizing: 'border-box' }}>
+                  <LabelVisualEditor
+                    config={labelCfg}
+                    preview={{
+                      code: labelSource.code,
+                      nom: labelSource.nom,
+                      prix: labelSource.prix,
+                      productRef: labelSource.productRef,
+                    }}
+                    onConfigChange={patchLabelCfg}
+                    zoomPct={zoom}
+                  />
+                </div>
+              ) : (
               <div
                 style={{
                   ...styles.pageShadow,
@@ -758,6 +773,7 @@ export default function PrintManagerModal({
                   />
                 </div>
               </div>
+              )}
             </div>
 
             {/* Status bar */}

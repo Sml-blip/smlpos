@@ -6,6 +6,8 @@ import JsBarcode from 'jsbarcode'
 
 const MM_TO_PX = 3.7795275591
 
+import type { BarcodeFormatMode } from './labelLayout'
+
 export function normalizeBarcodeText(raw: string): string {
   return String(raw ?? '').trim()
 }
@@ -20,9 +22,27 @@ function eanCheckDigit(digits: string): string {
   return mod === 0 ? '0' : String(10 - mod)
 }
 
-export function resolveBarcodeFormat(text: string): { value: string; format: string } {
+export function resolveBarcodeFormat(text: string, mode: BarcodeFormatMode = 'auto'): { value: string; format: string } {
   const trimmed = text.trim()
   const digitsOnly = trimmed.replace(/\D/g, '')
+
+  if (mode === 'CODE128') {
+    return { value: trimmed.toUpperCase(), format: 'CODE128' }
+  }
+  if (mode === 'EAN13') {
+    if (/^\d{13}$/.test(trimmed)) return { value: trimmed, format: 'EAN13' }
+    if (/^\d{12}$/.test(trimmed)) return { value: trimmed + eanCheckDigit(trimmed), format: 'EAN13' }
+    if (digitsOnly.length === 13) return { value: digitsOnly, format: 'EAN13' }
+    if (digitsOnly.length === 12) return { value: digitsOnly + eanCheckDigit(digitsOnly), format: 'EAN13' }
+    return { value: digitsOnly.slice(0, 13) || trimmed, format: 'EAN13' }
+  }
+  if (mode === 'EAN8') {
+    if (/^\d{8}$/.test(trimmed)) return { value: trimmed, format: 'EAN8' }
+    if (/^\d{7}$/.test(trimmed)) return { value: trimmed + eanCheckDigit(trimmed), format: 'EAN8' }
+    if (digitsOnly.length === 8) return { value: digitsOnly, format: 'EAN8' }
+    if (digitsOnly.length === 7) return { value: digitsOnly + eanCheckDigit(digitsOnly), format: 'EAN8' }
+    return { value: digitsOnly.slice(0, 8) || trimmed, format: 'EAN8' }
+  }
 
   if (/^\d+$/.test(trimmed)) {
     if (trimmed.length === 13) return { value: trimmed, format: 'EAN13' }
@@ -73,6 +93,7 @@ export interface LabelBarcodeSvgOptions {
   showText?: boolean
   align?: 'left' | 'right'
   moduleWidthMaxMm?: number
+  formatMode?: BarcodeFormatMode
 }
 
 function renderBarcodeSvg(
@@ -120,7 +141,7 @@ export function labelBarcodeSvg(
   const moduleMax = opts.moduleWidthMaxMm ?? 0.38
   const maxWidthPx = maxWidthMm * MM_TO_PX
   const barHeightPx = barHeightMm * MM_TO_PX
-  const { value, format } = resolveBarcodeFormat(raw)
+  const { value, format } = resolveBarcodeFormat(raw, opts.formatMode ?? 'auto')
 
   let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm, moduleMax)
   let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)

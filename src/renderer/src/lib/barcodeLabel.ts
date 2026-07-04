@@ -1,6 +1,9 @@
 import { labelBarcodeSvg, pickBarcodeValue } from './barcode'
-import type { LabelPrintConfig, LabelTextAlign } from './printManager'
-import { DEFAULT_LABEL_CONFIG, effectiveLabelMargins } from './printManager'
+import type { LabelPrintConfig } from './printManager'
+import { effectiveLabelMargins } from './printManager'
+import { clampLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
+import type { LabelVisualLayout } from './labelLayout'
+import { mergeLabelConfig } from './labelSettings'
 
 export interface BarcodeLabelOptions {
   code: string
@@ -16,44 +19,18 @@ export function parseLabelPrice(prix: number | string | undefined | null): numbe
 }
 
 function mergeConfig(partial?: Partial<LabelPrintConfig>): LabelPrintConfig {
-  return {
-    ...DEFAULT_LABEL_CONFIG,
-    ...partial,
-    rotationDeg: partial?.rotationDeg === 180 ? 180 : 0,
-    nameMaxLines: partial?.nameMaxLines === 1 ? 1 : partial?.nameMaxLines === 3 ? 3 : (partial?.nameMaxLines ?? DEFAULT_LABEL_CONFIG.nameMaxLines),
-    textAlign: partial?.textAlign ?? DEFAULT_LABEL_CONFIG.textAlign,
-    contentVAlign: partial?.contentVAlign ?? DEFAULT_LABEL_CONFIG.contentVAlign,
-    contentScalePct: partial?.contentScalePct ?? DEFAULT_LABEL_CONFIG.contentScalePct,
-  }
+  return mergeLabelConfig(partial)
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-function resolveAlign(cfg: LabelPrintConfig): LabelTextAlign {
-  if (cfg.textAlign !== 'auto') return cfg.textAlign
-  return cfg.rotationDeg === 180 ? 'right' : 'left'
+function elementStyle(box: { x: number; y: number; w: number; h: number }): string {
+  return `left:${box.x}mm;top:${box.y}mm;width:${box.w}mm;height:${box.h}mm;`
 }
 
-function cssAlign(align: LabelTextAlign): { anchor: string; flexMain: string; crossAlign: string; svgAlign: 'left' | 'right' } {
-  if (align === 'center') {
-    return { anchor: 'center', flexMain: 'center', crossAlign: 'center', svgAlign: 'left' }
-  }
-  if (align === 'right') {
-    return { anchor: 'right', flexMain: 'flex-end', crossAlign: 'flex-end', svgAlign: 'right' }
-  }
-  return { anchor: 'left', flexMain: 'flex-start', crossAlign: 'flex-start', svgAlign: 'left' }
-}
-
-function vAlignCss(v: LabelPrintConfig['contentVAlign']): string {
-  if (v === 'center') return 'center'
-  if (v === 'bottom') return 'flex-end'
-  if (v === 'space-between') return 'space-between'
-  return 'flex-start'
-}
-
-/** Label HTML — tight flex layout, content forced inside printable area. */
+/** Label HTML — absolute layout from visual editor positions. */
 export function buildBarcodeLabelHtml(
   code: string,
   nom: string,
@@ -63,55 +40,46 @@ export function buildBarcodeLabelHtml(
   copies = 1,
 ): string {
   const cfg = mergeConfig(configPartial)
+  const margins = effectiveLabelMargins(cfg)
+  const contentW = margins.contentW
+  const contentH = margins.contentH
+  const layout = clampLayout(cfg.layout, contentW, contentH)
+
   const barcodeValue = pickBarcodeValue(code, productRef)
   const displayName = (nom || productRef || 'Produit').trim()
   const safeName = escapeHtml(displayName)
   const safeRef = escapeHtml(productRef || code)
   const priceNum = parseLabelPrice(prix)
   const priceStr = `${priceNum.toFixed(3)} DT`
-
-  const margins = effectiveLabelMargins(cfg)
-  const contentW = margins.contentW
-  const contentH = margins.contentH
-  const padTop = margins.stripTopMm
-  const padRight = margins.stripRightMm
-  const padBottom = margins.stripBottomMm
-  const padLeft = margins.stripLeftMm
-  const maxBarWidthMm = Math.max(10, contentW - cfg.barMarginMm)
-  const barBlockMaxHmm = cfg.barHeightMm + (cfg.showBarcodeText ? 3.5 : 0)
-  const align = resolveAlign(cfg)
-  const { anchor, flexMain, crossAlign, svgAlign } = cssAlign(align)
   const flip = cfg.rotationDeg === 180
-  const scale = Math.min(2, Math.max(0.7, cfg.contentScalePct / 100))
-  const scaleOrigin = anchor === 'center' ? 'top center' : anchor === 'right' ? 'top right' : 'top left'
-  const scaleWidthPct = (100 / scale).toFixed(2)
 
-  const svg = labelBarcodeSvg(barcodeValue, {
-    maxWidthMm: maxBarWidthMm,
-    barHeightMm: cfg.barHeightMm,
-    showText: cfg.showBarcodeText,
-    align: svgAlign,
-    moduleWidthMaxMm: cfg.moduleWidthMaxMm,
-  })
-
-  const labelRotate = flip
-    ? 'transform: rotate(180deg); transform-origin: center center;'
+  const svg = layout.barcode.visible
+    ? labelBarcodeSvg(barcodeValue, {
+        maxWidthMm: layout.barcode.w,
+        barHeightMm: Math.max(3, layout.barcode.h - (layout.showBarcodeText ? 3 : 0)),
+        showText: layout.showBarcodeText,
+        formatMode: layout.barcodeFormat,
+      })
     : ''
 
-  const nameMb = cfg.showName && svg ? cfg.gapNameBarcodeMm : 0
-  const barMb = svg && cfg.showPrice ? cfg.gapBarcodePriceMm : 0
+  const namePt = fontPtForBox(layout.name.h, 8)
+  const pricePt = fontPtForBox(layout.price.h, 10)
 
-  const nameBlock = cfg.showName
-    ? `<div class="label-name" title="${safeName}">${safeName}</div>`
+  const nameBlock = layout.name.visible
+    ? `<div class="el el-name" style="${elementStyle(layout.name)}"><span>${safeName}</span></div>`
     : ''
-  const priceBlock = cfg.showPrice
-    ? `<div class="label-price">${priceStr}</div>`
+  const barcodeBlock = layout.barcode.visible && svg
+    ? `<div class="el el-barcode" style="${elementStyle(layout.barcode)}">${svg}</div>`
     : ''
-  const barcodeBlock = svg ? `<div class="barcode-wrap">${svg}</div>` : ''
+  const priceBlock = layout.price.visible
+    ? `<div class="el el-price" style="${elementStyle(layout.price)}"><span>${priceStr}</span></div>`
+    : ''
+
+  const labelRotate = flip ? 'transform:rotate(180deg);transform-origin:center center;' : ''
 
   const labelInner = `
         <div class="label" style="${labelRotate}">
-          <div class="label-scale">
+          <div class="label-area">
             ${nameBlock}
             ${barcodeBlock}
             ${priceBlock}
@@ -129,8 +97,6 @@ export function buildBarcodeLabelHtml(
     html, body {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
-      max-width: ${cfg.widthMm}mm;
-      max-height: ${cfg.heightMm}mm;
       overflow: hidden;
       font-family: Arial, Helvetica, sans-serif;
       background: #fff;
@@ -141,90 +107,80 @@ export function buildBarcodeLabelHtml(
     .sheet {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
-      max-width: ${cfg.widthMm}mm;
-      max-height: ${cfg.heightMm}mm;
-      padding: ${padTop}mm ${padRight}mm ${padBottom}mm ${padLeft}mm;
-      display: flex;
-      align-items: stretch;
-      justify-content: ${flexMain};
+      padding: ${margins.stripTopMm}mm ${margins.stripRightMm}mm ${margins.stripBottomMm}mm ${margins.stripLeftMm}mm;
       overflow: hidden;
     }
     .sheet.page-break { page-break-after: always; break-after: page; }
     .label {
       width: ${contentW}mm;
-      max-width: 100%;
       height: ${contentH}mm;
-      max-height: 100%;
-      display: flex;
-      flex-direction: column;
-      justify-content: ${vAlignCss(cfg.contentVAlign)};
-      align-items: ${crossAlign};
-      overflow: hidden;
-      text-align: ${anchor};
-    }
-    .label-scale {
-      width: ${scaleWidthPct}%;
-      max-width: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: ${crossAlign};
-      text-align: ${anchor};
-      transform: scale(${scale.toFixed(3)});
-      transform-origin: ${scaleOrigin};
       overflow: hidden;
     }
-    .label-name {
-      flex: 0 0 auto;
-      width: 100%;
-      max-width: 100%;
-      font-size: ${cfg.nameFontPt}pt;
-      font-weight: 700;
-      line-height: 1.05;
+    .label-area {
+      position: relative;
+      width: ${contentW}mm;
+      height: ${contentH}mm;
       overflow: hidden;
-      display: -webkit-box;
-      -webkit-line-clamp: ${cfg.nameMaxLines};
-      -webkit-box-orient: vertical;
-      word-break: break-word;
-      margin-bottom: ${nameMb}mm;
     }
-    .barcode-wrap {
-      flex: 0 1 auto;
-      width: 100%;
-      max-width: 100%;
-      min-height: 0;
-      max-height: ${barBlockMaxHmm}mm;
+    .el {
+      position: absolute;
+      overflow: hidden;
+    }
+    .el-name {
       display: flex;
       align-items: center;
-      justify-content: ${flexMain};
+      font-size: ${namePt}pt;
+      font-weight: 700;
+      line-height: 1.05;
+      word-break: break-word;
+    }
+    .el-name span {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
       overflow: hidden;
-      margin-bottom: ${barMb}mm;
+      width: 100%;
     }
-    .label-barcode,
-    .barcode-wrap svg {
+    .el-barcode {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .el-barcode svg {
       display: block;
-      max-width: 100%;
       width: 100%;
-      height: auto;
-      max-height: ${barBlockMaxHmm}mm;
-    }
-    .label-barcode rect,
-    .barcode-wrap svg rect {
-      shape-rendering: crispEdges;
-    }
-    .label-price {
-      flex: 0 0 auto;
-      width: 100%;
+      height: 100%;
       max-width: 100%;
-      font-size: ${cfg.priceFontPt}pt;
+      max-height: 100%;
+    }
+    .el-barcode svg rect { shape-rendering: crispEdges; }
+    .el-price {
+      display: flex;
+      align-items: center;
+      font-size: ${pricePt}pt;
       font-weight: 900;
       line-height: 1.05;
       white-space: nowrap;
+    }
+    .el-price span {
       overflow: hidden;
       text-overflow: ellipsis;
+      width: 100%;
     }
   </style></head><body>${sheets}</body></html>`
 }
 
 export function buildSampleLabelHtml(config?: Partial<LabelPrintConfig>): string {
   return buildBarcodeLabelHtml('1234567890123', 'Produit test scanner', 12.5, 'REF-TEST', config)
+}
+
+export function patchLabelLayout(
+  cfg: LabelPrintConfig,
+  layoutPatch: Partial<LabelVisualLayout>,
+): LabelPrintConfig {
+  const margins = effectiveLabelMargins(cfg)
+  return {
+    ...cfg,
+    layout: clampLayout(mergeVisualLayout(cfg.layout, layoutPatch), margins.contentW, margins.contentH),
+  }
 }

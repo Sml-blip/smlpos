@@ -8,8 +8,8 @@ import {
 } from 'lucide-react'
 import InvoiceTemplateEditor from './InvoiceTemplateEditor'
 import { printTestPage, printLabelTestPage } from '../../components/PrintDialog'
-import LabelBarcodeSettingsForm, { labelConfigPatchToSettings } from '../../components/LabelBarcodeSettingsForm'
-import { labelConfigFromSettings, scheduleSaveLabelPrintConfig, mergeLabelConfig } from '../../lib/labelSettings'
+import LabelVisualEditor from '../../components/LabelVisualEditor'
+import { labelConfigFromSettings, scheduleSaveLabelPrintConfig, mergeLabelConfig, settingsFromLabelConfig } from '../../lib/labelSettings'
 import type { LabelPrintConfig } from '../../lib/printManager'
 import { invalidateProduitsCache } from '../../lib/produitsCache'
 import { loadData, runAction } from '../../lib/apiCall'
@@ -69,22 +69,9 @@ const DEFAULTS: Record<string, string> = {
   impression_label_strip_top: '0.35',
   impression_label_strip_bottom: '0.35',
   impression_label_rotation: '0',
-  impression_label_bar_height: '5.8',
-  impression_label_bar_margin: '1',
-  impression_label_module_max: '0.38',
-  impression_label_show_name: 'true',
-  impression_label_show_price: 'true',
-  impression_label_show_barcode_text: 'true',
-  impression_label_name_font: '5.5',
-  impression_label_price_font: '7.5',
-  impression_label_name_lines: '2',
-  impression_label_align: 'auto',
   impression_label_dpi: '300',
   impression_label_copies: '1',
-  impression_label_gap_name_bar: '0.2',
-  impression_label_gap_bar_price: '0.2',
-  impression_label_valign: 'top',
-  impression_label_content_scale: '100',
+  impression_label_layout_json: '',
   // Sécurité
   caisse_interne_pin:    'sml2023',
   securite_require_shift:'true',
@@ -372,7 +359,7 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
 
   const patchLabelCfg = useCallback((patch: Partial<LabelPrintConfig>) => {
     const next = mergeLabelConfig({ ...labelCfg, ...patch })
-    const settingsPatch = labelConfigPatchToSettings(patch, labelCfg)
+    const settingsPatch = settingsFromLabelConfig(next)
     for (const [key, val] of Object.entries(settingsPatch)) {
       set(key, val)
     }
@@ -459,11 +446,20 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
         </Section>
       </Card>
       <Card>
-        <Section title="Étiquettes code-barres">
-          <LabelBarcodeSettingsForm
+        <Section title="Étiquettes code-barres — éditeur visuel">
+          {labelSaveState !== 'idle' && (
+            <p className={`text-xs font-semibold mb-2 ${labelSaveState === 'saved' ? 'text-green-700' : 'text-text-secondary'}`}>
+              {labelSaveState === 'saving' ? 'Enregistrement…' : 'Layout enregistré'}
+            </p>
+          )}
+          <p className="text-xs text-text-secondary mb-3">
+            Glissez les blocs pour positionner nom, code-barres et prix. Le layout est aussi disponible lors de l&apos;impression depuis Inventaire ou Achats.
+          </p>
+          <LabelVisualEditor
             config={labelCfg}
-            onChange={patchLabelCfg}
-            saveState={labelSaveState}
+            preview={{ code: '1234567890123', nom: 'Produit test scanner', prix: 12.5, productRef: 'REF-TEST' }}
+            onConfigChange={patchLabelCfg}
+            zoomPct={180}
           />
         </Section>
       </Card>
