@@ -69,7 +69,15 @@ export function pickBarcodeValue(code: string, productRef = ''): string {
   return candidates.sort((a, b) => a.length - b.length)[0] ?? normalizeBarcodeText(code)
 }
 
-/** Label printing always uses EAN-8 — normalize from code or product ref. */
+/** Label printing uses CODE128 — full product code, no truncation. */
+export function pickLabelBarcodeValue(code: string, productRef = ''): string {
+  const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
+  const picked = candidates[0] ?? normalizeBarcodeText(code)
+  if (!picked) return '0'
+  return resolveBarcodeFormat(picked, 'CODE128').value
+}
+
+/** @deprecated Use pickLabelBarcodeValue for labels. */
 export function pickEan8Value(code: string, productRef = ''): string {
   const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
   for (const c of candidates) {
@@ -80,11 +88,22 @@ export function pickEan8Value(code: string, productRef = ''): string {
   return resolveBarcodeFormat(fallback, 'EAN8').value
 }
 
+export function estimateCode128Modules(text: string): number {
+  const { value } = resolveBarcodeFormat(text, 'CODE128')
+  return 35 + value.length * 11
+}
+
 export function estimateModuleCount(text: string): number {
   const { value, format } = resolveBarcodeFormat(text)
   if (format === 'EAN13') return 95
   if (format === 'EAN8') return 67
-  return 35 + value.length * 11
+  return estimateCode128Modules(value)
+}
+
+/** Bar area height inside a layout box (caption uses remaining ~25%). */
+export function labelBarcodeBarHeightMm(boxHeightMm: number, showCaption: boolean): number {
+  if (!showCaption) return boxHeightMm
+  return Math.max(3, boxHeightMm * 0.75)
 }
 
 export function moduleWidthMmForLabel(text: string, maxBarWidthMm: number, moduleMax = 0.38): number {
@@ -135,7 +154,7 @@ function renderBarcodeSvg(
   return svg
 }
 
-/** Label barcode SVG — fits inside maxWidthMm, centered via CSS in template. */
+/** Label barcode SVG — bars only; caption rendered separately in HTML/editor. */
 export function labelBarcodeSvg(
   text: string,
   opts: LabelBarcodeSvgOptions = {},
@@ -152,32 +171,24 @@ export function labelBarcodeSvg(
   const moduleMax = opts.moduleWidthMaxMm ?? 0.38
   const maxWidthPx = maxWidthMm * MM_TO_PX
   const barHeightPx = barHeightMm * MM_TO_PX
-  const { value, format } = resolveBarcodeFormat(raw, opts.formatMode ?? 'EAN8')
+  const { value, format } = resolveBarcodeFormat(raw, opts.formatMode ?? 'CODE128')
 
-  let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm, moduleMax)
-  let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
+  let moduleMm = moduleWidthMmForLabel(value, maxWidthMm, moduleMax)
+  let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, false)
 
   let svgW = parseFloat(svg.getAttribute('width') ?? '0')
   if (svgW > maxWidthPx && svgW > 0) {
     moduleMm = moduleMm * (maxWidthPx / svgW) * 0.95
-    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
+    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, false)
     svgW = parseFloat(svg.getAttribute('width') ?? '0')
   } else if (svgW > 0 && svgW < maxWidthPx * 0.92) {
     moduleMm = moduleMm * ((maxWidthPx * 0.98) / svgW)
-    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
+    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, false)
     svgW = parseFloat(svg.getAttribute('width') ?? '0')
   }
 
-  const viewBox = svg.getAttribute('viewBox')
-  if (viewBox) {
-    svg.setAttribute('width', '100%')
-    svg.setAttribute('height', '100%')
-  } else {
-    const svgWmm = Math.min(maxWidthMm, svgW / MM_TO_PX)
-    const svgHmm = parseFloat(svg.getAttribute('height') ?? '0') / MM_TO_PX
-    svg.setAttribute('width', `${svgWmm.toFixed(2)}mm`)
-    svg.setAttribute('height', `${svgHmm.toFixed(2)}mm`)
-  }
+  svg.setAttribute('width', '100%')
+  svg.setAttribute('height', 'auto')
   svg.setAttribute('class', 'label-barcode')
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
   applyCrispEdges(svg)

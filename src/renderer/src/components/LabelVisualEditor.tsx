@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { labelBarcodeSvg, pickEan8Value } from '../lib/barcode'
+import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodeValue } from '../lib/barcode'
 import type { LabelPrintConfig } from '../lib/printManager'
 import {
   clampBox,
@@ -61,14 +61,13 @@ export default function LabelVisualEditor({
 
   const priceStr = `${parseLabelPrice(preview.prix).toFixed(3)} DT`
   const displayName = (preview.nom || preview.productRef || 'Produit').trim()
-  const barcodeValue = pickEan8Value(preview.code, preview.productRef)
+  const barcodeValue = pickLabelBarcodeValue(preview.code, preview.productRef)
 
   const barcodeSvg = useMemo(
     () => labelBarcodeSvg(barcodeValue, {
       maxWidthMm: layout.barcode.w,
-      barHeightMm: Math.max(4, layout.barcode.h - (layout.showBarcodeText ? 3.5 : 0)),
-      showText: layout.showBarcodeText,
-      formatMode: 'EAN8',
+      barHeightMm: labelBarcodeBarHeightMm(layout.barcode.h, layout.showBarcodeText),
+      formatMode: 'CODE128',
     }),
     [barcodeValue, layout.barcode.w, layout.barcode.h, layout.showBarcodeText],
   )
@@ -176,16 +175,39 @@ export default function LabelVisualEditor({
       )
     } else {
       content = (
-        <div
-          style={{ width: '100%', height: '100%' }}
-          dangerouslySetInnerHTML={{ __html: barcodeSvg }}
-        />
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'stretch',
+        }}>
+          <div
+            style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'flex-end', width: '100%' }}
+            dangerouslySetInnerHTML={{ __html: barcodeSvg }}
+          />
+          {layout.showBarcodeText && (
+            <div style={{
+              flexShrink: 0,
+              fontSize: `${fontPtForBox(box.h * 0.25, 7) * scale}pt`,
+              fontWeight: 700,
+              lineHeight: 1,
+              textAlign: 'center',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              width: '100%',
+            }}>
+              {barcodeValue}
+            </div>
+          )}
+        </div>
       )
     }
 
     const labels: Record<LabelElementId, string> = {
       name: 'Nom',
-      barcode: 'EAN-8',
+      barcode: 'Code128',
       price: 'Prix',
     }
 
@@ -205,9 +227,9 @@ export default function LabelVisualEditor({
           border: isSel ? '1.5px solid #3B6D11' : '1px dashed rgba(100,100,100,0.45)',
           background: isSel ? 'rgba(59,109,17,0.06)' : 'rgba(255,255,255,0.6)',
           cursor: 'move',
-          overflow: 'hidden',
+          overflow: id === 'barcode' ? 'visible' : 'hidden',
           display: 'flex',
-          alignItems: 'center',
+          alignItems: id === 'barcode' ? 'stretch' : 'center',
           boxSizing: 'border-box',
           touchAction: 'none',
           userSelect: 'none',
@@ -230,7 +252,7 @@ export default function LabelVisualEditor({
             {labels[id]}
           </span>
         )}
-        <div style={{ width: '100%', height: '100%', padding: '0 1px', pointerEvents: 'none', overflow: 'hidden' }}>
+        <div style={{ width: '100%', height: '100%', padding: '0 1px', pointerEvents: 'none', overflow: id === 'barcode' ? 'visible' : 'hidden' }}>
           {content}
         </div>
         {isSel && (
@@ -258,7 +280,7 @@ export default function LabelVisualEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)' }}>
-        Cliquez · glissez pour déplacer · coin vert pour redimensionner · EAN-8
+        Cliquez · glissez pour déplacer · coin vert pour redimensionner · Code128
       </div>
 
       <div
@@ -297,7 +319,7 @@ export default function LabelVisualEditor({
           />
           Numéro sous le code
         </label>
-        <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>Code-barres : EAN-8</span>
+        <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>Code-barres : Code128</span>
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

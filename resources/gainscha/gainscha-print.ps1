@@ -36,6 +36,23 @@ function FontMul([double]$hMm, [int]$dpi) {
     return [string][math]::Max(1, [math]::Min(4, [math]::Round($dots / 8)))
 }
 
+function EstimateCode128Modules([string]$text) {
+    $len = [string]$text
+    if ($len.Length -lt 1) { return 46 }
+    return 35 + ($len.Length * 11)
+}
+
+function Code128ModuleWidths([double]$boxWidthMm, [string]$value, [int]$dpi) {
+    $boxDots = MmToDots $boxWidthMm $dpi
+    $modules = EstimateCode128Modules $value
+    $quiet = 24
+    $narrow = [math]::Floor(($boxDots * 0.95 - $quiet) / $modules)
+    if ($narrow -lt 2) { $narrow = 2 }
+    if ($narrow -gt 8) { $narrow = 8 }
+    $wide = $narrow * 2
+    return @([string]$narrow, [string]$wide)
+}
+
 if ($Version) {
     try {
         $driver = New-Object GTSPL_SDK.Driver
@@ -132,21 +149,38 @@ function Invoke-PrintJob {
             else         { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $mul, $txt) }
         }
 
-        # ── Barcode (EAN-8) ───────────────────────────────────────────────────
+        # ── Barcode (CODE128) ─────────────────────────────────────────────────
         if ($job.elements.barcode.visible -eq $true) {
-            $el      = $job.elements.barcode
-            $x       = MmToDots ($stripL + [double]$el.x) $dpi
-            $y       = MmToDots ($stripT + [double]$el.y) $dpi
-            $barHMm  = [double]$el.h
-            if ($job.showBarcodeText -eq $true) { $barHMm = [math]::Max(4, $barHMm - 3.5) }
-            $h        = MmToDots $barHMm $dpi
-            $readable = if ($job.showBarcodeText -eq $true) { '2' } else { '0' }
-            $value    = [string]$el.value
-            # TSPL EAN-8 type = 'EAN8'
-            if ($useUsb) {
-                $null = $dev.barcode_USB("$x", "$y", 'EAN8', "$h", $readable, '0', '2', '2', $value)
+            $el       = $job.elements.barcode
+            $x        = MmToDots ($stripL + [double]$el.x) $dpi
+            $y        = MmToDots ($stripT + [double]$el.y) $dpi
+            $boxHMm   = [double]$el.h
+            $boxWMm   = [double]$el.w
+            $showText = $job.showBarcodeText -eq $true
+            if ($showText) {
+                $barHMm = [math]::Max(3, $boxHMm * 0.75)
             } else {
-                $null = $dev.barcode("$x", "$y", 'EAN8', "$h", $readable, '0', '2', '2', $value)
+                $barHMm = $boxHMm
+            }
+            $h = MmToDots $barHMm $dpi
+            $moduleWidths = Code128ModuleWidths $boxWMm ([string]$el.value) $dpi
+            $narrow = $moduleWidths[0]
+            $wide = $moduleWidths[1]
+            $value = [string]$el.value
+            if ($useUsb) {
+                $null = $dev.barcode_USB("$x", "$y", '128', "$h", '0', '0', $narrow, $wide, $value)
+            } else {
+                $null = $dev.barcode("$x", "$y", '128', "$h", '0', '0', $narrow, $wide, $value)
+            }
+            if ($showText) {
+                $caption = [string]$el.displayText
+                if (-not $caption) { $caption = $value }
+                $captionY = MmToDots ($stripT + [double]$el.y + $barHMm + 0.5) $dpi
+                if ($useUsb) {
+                    $null = $dev.printerfont_USB("$x", "$captionY", '3', '0', '1', '1', $caption)
+                } else {
+                    $null = $dev.printerfont("$x", "$captionY", '3', '0', '1', '1', $caption)
+                }
             }
         }
 

@@ -1,4 +1,4 @@
-import { labelBarcodeSvg, pickEan8Value } from './barcode'
+import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodeValue } from './barcode'
 import type { LabelPrintConfig } from './printManager'
 import { effectiveLabelMargins } from './printManager'
 import { clampLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
@@ -45,7 +45,8 @@ export function buildBarcodeLabelHtml(
   const contentH = margins.contentH
   const layout = clampLayout(cfg.layout, contentW, contentH)
 
-  const barcodeValue = pickEan8Value(code, productRef)
+  const barcodeValue = pickLabelBarcodeValue(code, productRef)
+  const safeBarcode = escapeHtml(barcodeValue)
   const displayName = (nom || productRef || 'Produit').trim()
   const safeName = escapeHtml(displayName)
   const safeRef = escapeHtml(productRef || code)
@@ -53,12 +54,14 @@ export function buildBarcodeLabelHtml(
   const priceStr = `${priceNum.toFixed(3)} DT`
   const flip = cfg.rotationDeg === 180
 
+  const barHeightMm = labelBarcodeBarHeightMm(layout.barcode.h, layout.showBarcodeText)
+  const captionPt = fontPtForBox(layout.barcode.h * 0.25, 7)
+
   const svg = layout.barcode.visible
     ? labelBarcodeSvg(barcodeValue, {
         maxWidthMm: layout.barcode.w,
-        barHeightMm: Math.max(3, layout.barcode.h - (layout.showBarcodeText ? 3 : 0)),
-        showText: layout.showBarcodeText,
-        formatMode: 'EAN8',
+        barHeightMm,
+        formatMode: 'CODE128',
       })
     : ''
 
@@ -69,7 +72,10 @@ export function buildBarcodeLabelHtml(
     ? `<div class="el el-name" style="${elementStyle(layout.name)}"><span>${safeName}</span></div>`
     : ''
   const barcodeBlock = layout.barcode.visible && svg
-    ? `<div class="el el-barcode" style="${elementStyle(layout.barcode)}">${svg}</div>`
+    ? `<div class="el el-barcode" style="${elementStyle(layout.barcode)}">
+        <div class="barcode-bars">${svg}</div>
+        ${layout.showBarcodeText ? `<div class="barcode-caption">${safeBarcode}</div>` : ''}
+      </div>`
     : ''
   const priceBlock = layout.price.visible
     ? `<div class="el el-price" style="${elementStyle(layout.price)}"><span>${priceStr}</span></div>`
@@ -143,17 +149,35 @@ export function buildBarcodeLabelHtml(
     }
     .el-barcode {
       display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-direction: column;
+      align-items: stretch;
+      overflow: visible;
     }
-    .el-barcode svg {
+    .barcode-bars {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: flex-end;
+      width: 100%;
+    }
+    .barcode-bars svg {
       display: block;
       width: 100%;
-      height: 100%;
-      max-width: 100%;
-      max-height: 100%;
+      height: auto;
     }
-    .el-barcode svg rect { shape-rendering: crispEdges; }
+    .barcode-bars svg rect { shape-rendering: crispEdges; }
+    .barcode-caption {
+      flex-shrink: 0;
+      font-size: ${captionPt}pt;
+      font-weight: 700;
+      line-height: 1;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 100%;
+      padding-top: 0.2mm;
+    }
     .el-price {
       display: flex;
       align-items: center;
@@ -171,7 +195,7 @@ export function buildBarcodeLabelHtml(
 }
 
 export function buildSampleLabelHtml(config?: Partial<LabelPrintConfig>): string {
-  return buildBarcodeLabelHtml('12345670', 'Produit test scanner', 12.5, 'REF-TEST', config)
+  return buildBarcodeLabelHtml('SML-20260704-12345', 'Produit test scanner', 12.5, 'REF-TEST', config)
 }
 
 export function patchLabelLayout(

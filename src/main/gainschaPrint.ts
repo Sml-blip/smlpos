@@ -12,6 +12,7 @@ export interface GainschaLabelElement {
   visible: boolean
   text?: string
   value?: string
+  displayText?: string
 }
 
 export interface GainschaPrintJob {

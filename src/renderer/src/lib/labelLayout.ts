@@ -30,7 +30,7 @@ const BOX_LIMITS: Record<LabelElementId, { minW: number; minH: number; maxH: num
 
 const DEFAULT_H: Record<LabelElementId, number> = {
   name: 3.5,
-  barcode: 12,
+  barcode: 13,
   price: 3.5,
 }
 
@@ -56,7 +56,7 @@ export function defaultVisualLayout(contentW: number, _contentH: number): LabelV
   return {
     name: { x: inset, y: 0.4, w, h: DEFAULT_H.name, visible: true },
     barcode: { x: inset, y: 4, w, h: DEFAULT_H.barcode, visible: true },
-    price: { x: inset, y: 16.2, w, h: DEFAULT_H.price, visible: true },
+    price: { x: inset, y: 17.1, w, h: DEFAULT_H.price, visible: true },
     showBarcodeText: true,
   }
 }

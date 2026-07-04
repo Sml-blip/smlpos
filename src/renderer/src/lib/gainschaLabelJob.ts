@@ -1,4 +1,4 @@
-import { pickEan8Value } from './barcode'
+import { pickLabelBarcodeValue } from './barcode'
 import { clampLayout, printableArea } from './labelLayout'
 import type { LabelPrintConfig } from './printManager'
 import { parseLabelPrice } from './barcodeLabel'
@@ -19,7 +19,7 @@ export interface GainschaPrintJobPayload {
   showBarcodeText: boolean
   elements: {
     name: { x: number; y: number; w: number; h: number; visible: boolean; text: string }
-    barcode: { x: number; y: number; w: number; h: number; visible: boolean; value: string }
+    barcode: { x: number; y: number; w: number; h: number; visible: boolean; value: string; displayText: string }
     price: { x: number; y: number; w: number; h: number; visible: boolean; text: string }
   }
 }
@@ -38,7 +38,7 @@ export function buildGainschaPrintJob(
   const layout = clampLayout(cfg.layout, margins.contentW, margins.contentH)
   const displayName = (source.nom || source.productRef || 'Produit').trim()
   const priceStr = `${parseLabelPrice(source.prix).toFixed(3)} DT`
-  const barcodeValue = pickEan8Value(source.code, source.productRef)
+  const barcodeValue = pickLabelBarcodeValue(source.code, source.productRef)
 
   return {
     connection: options.connection ?? cfg.labelConnection ?? 'driver',
@@ -70,6 +70,7 @@ export function buildGainschaPrintJob(
         h: layout.barcode.h,
         visible: layout.barcode.visible,
         value: barcodeValue,
+        displayText: barcodeValue,
       },
       price: {
         x: layout.price.x,
