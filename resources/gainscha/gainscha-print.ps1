@@ -25,13 +25,15 @@ if (-not (Test-Path $DllPath)) {
 Set-Location $SdkDir
 Add-Type -Path $DllPath
 
+# TSPL barcode coordinates and heights are in dots; label SIZE uses mm.
 function MmToDots([double]$mm, [int]$dpi) {
     return [int][math]::Round($mm * $dpi / 25.4)
 }
 
+# Map box height (mm) to TSPL font multiplier 1-4.
 function FontMul([double]$hMm, [int]$dpi) {
     $dots = $hMm * $dpi / 25.4
-    return [string][math]::Max(1, [math]::Min(4, [math]::Round($dots / 7)))
+    return [string][math]::Max(1, [math]::Min(4, [math]::Round($dots / 8)))
 }
 
 if ($Version) {
@@ -93,24 +95,25 @@ function Invoke-PrintJob {
 
         if ($opened -eq 0) { throw 'Impossible d''ouvrir le port imprimante (code 0)' }
 
-        $wDots = MmToDots ([double]$job.widthMm) $dpi
-        $hDots = MmToDots ([double]$job.heightMm) $dpi
-        $speed = '4'
-        $density = '8'
-        $sensor = '0'
-        $gap = '2'
-        $offset = '0'
+        # SIZE takes mm values, not dots
+        $wMm = [string][math]::Round([double]$job.widthMm)
+        $hMm = [string][math]::Round([double]$job.heightMm)
+        $speed    = '4'
+        $density  = '8'
+        $sensor   = '0'  # 0 = gap sensor
+        $gap      = '2'  # 2mm gap between labels
+        $offset   = '0'
 
         if ($useUsb) {
-            $null = $dev.setup_USB("$wDots", "$hDots", $speed, $density, $sensor, $gap, $offset)
+            $null = $dev.setup_USB($wMm, $hMm, $speed, $density, $sensor, $gap, $offset)
         } else {
-            $null = $dev.setup("$wDots", "$hDots", $speed, $density, $sensor, $gap, $offset)
+            $null = $dev.setup($wMm, $hMm, $speed, $density, $sensor, $gap, $offset)
         }
 
-        if ([int]$job.rotationDeg -eq 180) {
-            if ($useUsb) { $null = $dev.sendcommand_USB('DIRECTION 1') }
-            else { $null = $dev.sendcommand('DIRECTION 1') }
-        }
+        # DIRECTION: 0 = top-of-form forward (default), 1 = reverse/flip 180
+        $direction = if ([int]$job.rotationDeg -eq 180) { 'DIRECTION 1' } else { 'DIRECTION 0' }
+        if ($useUsb) { $null = $dev.sendcommand_USB($direction) }
+        else { $null = $dev.sendcommand($direction) }
 
         if ($useUsb) { $null = $dev.clearbuffer_USB() }
         else { $null = $dev.clearbuffer() }
@@ -118,51 +121,55 @@ function Invoke-PrintJob {
         $stripL = [double]$job.stripLeftMm
         $stripT = [double]$job.stripTopMm
 
+        # ── Name (product title) ─────────────────────────────────────────────
         if ($job.elements.name.visible -eq $true) {
-            $el = $job.elements.name
-            $x = MmToDots ($stripL + [double]$el.x) $dpi
-            $y = MmToDots ($stripT + [double]$el.y) $dpi
-            $ymul = FontMul ([double]$el.h) $dpi
-            $text = [string]$el.text
-            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $ymul, $text) }
-            else { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $ymul, $text) }
+            $el  = $job.elements.name
+            $x   = MmToDots ($stripL + [double]$el.x) $dpi
+            $y   = MmToDots ($stripT + [double]$el.y) $dpi
+            $mul = FontMul ([double]$el.h) $dpi
+            $txt = [string]$el.text
+            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $mul, $txt) }
+            else         { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $mul, $txt) }
         }
 
+        # ── Barcode (EAN-8) ───────────────────────────────────────────────────
         if ($job.elements.barcode.visible -eq $true) {
-            $el = $job.elements.barcode
-            $x = MmToDots ($stripL + [double]$el.x) $dpi
-            $y = MmToDots ($stripT + [double]$el.y) $dpi
-            $barHMm = [double]$el.h
+            $el      = $job.elements.barcode
+            $x       = MmToDots ($stripL + [double]$el.x) $dpi
+            $y       = MmToDots ($stripT + [double]$el.y) $dpi
+            $barHMm  = [double]$el.h
             if ($job.showBarcodeText -eq $true) { $barHMm = [math]::Max(4, $barHMm - 3.5) }
-            $h = MmToDots $barHMm $dpi
-            $readable = if ($job.showBarcodeText -eq $true) { '1' } else { '0' }
-            $value = [string]$el.value
+            $h        = MmToDots $barHMm $dpi
+            $readable = if ($job.showBarcodeText -eq $true) { '2' } else { '0' }
+            $value    = [string]$el.value
+            # TSPL EAN-8 type = 'EAN8'
             if ($useUsb) {
-                $null = $dev.barcode_USB("$x", "$y", 'E80', "$h", $readable, '0', '2', '2', $value)
+                $null = $dev.barcode_USB("$x", "$y", 'EAN8', "$h", $readable, '0', '2', '2', $value)
             } else {
-                $null = $dev.barcode("$x", "$y", 'E80', "$h", $readable, '0', '2', '2', $value)
+                $null = $dev.barcode("$x", "$y", 'EAN8', "$h", $readable, '0', '2', '2', $value)
             }
         }
 
+        # ── Price ─────────────────────────────────────────────────────────────
         if ($job.elements.price.visible -eq $true) {
-            $el = $job.elements.price
-            $x = MmToDots ($stripL + [double]$el.x) $dpi
-            $y = MmToDots ($stripT + [double]$el.y) $dpi
-            $ymul = FontMul ([double]$el.h) $dpi
-            $text = [string]$el.text
-            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $ymul, $text) }
-            else { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $ymul, $text) }
+            $el  = $job.elements.price
+            $x   = MmToDots ($stripL + [double]$el.x) $dpi
+            $y   = MmToDots ($stripT + [double]$el.y) $dpi
+            $mul = FontMul ([double]$el.h) $dpi
+            $txt = [string]$el.text
+            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $mul, $txt) }
+            else         { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $mul, $txt) }
         }
 
         $copies = [string][math]::Max(1, [math]::Min(99, [int]$job.copies))
         if ($useUsb) { $null = $dev.printlabel_USB('1', $copies) }
-        else { $null = $dev.printlabel('1', $copies) }
+        else         { $null = $dev.printlabel('1', $copies) }
     }
     finally {
         if ($dev) {
             try {
                 if ($useUsb) { $null = $dev.closeport_USB() }
-                else { $null = $dev.closeport() }
+                else         { $null = $dev.closeport() }
             } catch { }
         }
     }

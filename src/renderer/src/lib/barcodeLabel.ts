@@ -77,17 +77,12 @@ export function buildBarcodeLabelHtml(
 
   const labelRotate = flip ? 'transform:rotate(180deg);transform-origin:center center;' : ''
 
-  /** Slight shrink so physical printers (Gainscha) don't clip the right edge. */
-  const PRINT_SAFE_SCALE = 0.97
-
   const labelInner = `
         <div class="label" style="${labelRotate}">
           <div class="label-area">
-            <div class="label-content">
             ${nameBlock}
             ${barcodeBlock}
             ${priceBlock}
-            </div>
           </div>
         </div>`
 
@@ -125,14 +120,6 @@ export function buildBarcodeLabelHtml(
       position: relative;
       width: ${contentW}mm;
       height: ${contentH}mm;
-      overflow: hidden;
-    }
-    .label-content {
-      position: relative;
-      width: ${contentW}mm;
-      height: ${contentH}mm;
-      transform: scale(${PRINT_SAFE_SCALE});
-      transform-origin: top left;
       overflow: hidden;
     }
     .el {
