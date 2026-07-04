@@ -56,10 +56,10 @@ export function estimateModuleCount(text: string): number {
   return 35 + value.length * 11
 }
 
-export function moduleWidthMmForLabel(text: string, maxBarWidthMm: number): number {
+export function moduleWidthMmForLabel(text: string, maxBarWidthMm: number, moduleMax = 0.38): number {
   const modules = estimateModuleCount(text) + 12
   const fit = (maxBarWidthMm - 1) / modules
-  return Math.max(0.2, Math.min(0.38, fit))
+  return Math.max(0.2, Math.min(moduleMax, fit))
 }
 
 function applyCrispEdges(svg: SVGSVGElement): void {
@@ -72,6 +72,7 @@ export interface LabelBarcodeSvgOptions {
   barHeightMm?: number
   showText?: boolean
   align?: 'left' | 'right'
+  moduleWidthMaxMm?: number
 }
 
 function renderBarcodeSvg(
@@ -116,11 +117,12 @@ export function labelBarcodeSvg(
 
   const maxWidthMm = opts.maxWidthMm ?? 34
   const barHeightMm = opts.barHeightMm ?? 6.5
+  const moduleMax = opts.moduleWidthMaxMm ?? 0.38
   const maxWidthPx = maxWidthMm * MM_TO_PX
   const barHeightPx = barHeightMm * MM_TO_PX
   const { value, format } = resolveBarcodeFormat(raw)
 
-  let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm)
+  let moduleMm = moduleWidthMmForLabel(raw, maxWidthMm, moduleMax)
   let svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
 
   let svgW = parseFloat(svg.getAttribute('width') ?? '0')

@@ -16,7 +16,6 @@ import {
   type PrintKind,
   type PrintSettingsKey,
   type LabelPrintConfig,
-  DEFAULT_LABEL_CONFIG,
   inferPrintKind,
   defaultSettingsKey,
 } from '../lib/printManager'
@@ -24,8 +23,10 @@ import {
   loadLabelPrintConfig,
   saveLabelPrintConfig,
   mergeLabelConfig,
+  scheduleSaveLabelPrintConfig,
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
+import LabelBarcodeSettingsForm from './LabelBarcodeSettingsForm'
 
 const api = window.api
 
@@ -198,6 +199,8 @@ export default function PrintManagerModal({
   })
 
   const [labelCfg, setLabelCfg] = useState<LabelPrintConfig>(() => mergeLabelConfig(labelConfig))
+  const [labelSaveState, setLabelSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const labelHydratedRef = useRef(false)
   const [ticketWidthMm, setTicketWidthMm] = useState<58 | 80>(80)
 
   const [zoom, setZoom] = useState(() => (kind === 'label' ? 300 : 75))
@@ -243,7 +246,10 @@ export default function PrintManagerModal({
         if (kind === 'label') {
           const loaded = await loadLabelPrintConfig()
           if (!cancelled) {
-            setLabelCfg(mergeLabelConfig({ ...loaded, ...labelConfig }))
+            const merged = mergeLabelConfig({ ...loaded, ...labelConfig })
+            setLabelCfg(merged)
+            setOpts((prev) => ({ ...prev, copies: merged.defaultCopies || 1 }))
+            labelHydratedRef.current = true
           }
         }
 
@@ -260,6 +266,17 @@ export default function PrintManagerModal({
     load()
     return () => { cancelled = true }
   }, [settingsKey, kind, labelConfig])
+
+  useEffect(() => {
+    if (kind !== 'label' || !labelHydratedRef.current) return
+    setLabelSaveState('saving')
+    scheduleSaveLabelPrintConfig(labelCfg, (ok) => {
+      setLabelSaveState(ok ? 'saved' : 'idle')
+      if (ok) {
+        window.setTimeout(() => setLabelSaveState('idle'), 2000)
+      }
+    })
+  }, [kind, labelCfg])
 
   // ── Derived page dimensions ────────────────────────────────────────────────
 
@@ -325,8 +342,8 @@ export default function PrintManagerModal({
     }))
   }, [])
 
-  const setLabelField = useCallback(<K extends keyof LabelPrintConfig>(key: K, val: LabelPrintConfig[K]) => {
-    setLabelCfg((prev) => ({ ...prev, [key]: val }))
+  const patchLabelCfg = useCallback((patch: Partial<LabelPrintConfig>) => {
+    setLabelCfg((prev) => mergeLabelConfig({ ...prev, ...patch }))
   }, [])
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
@@ -377,7 +394,7 @@ export default function PrintManagerModal({
           ...printOptions,
           widthMm: labelCfg.widthMm,
           heightMm: labelCfg.heightMm,
-          dpi: { horizontal: 300, vertical: 300 },
+          dpi: { horizontal: labelCfg.dpi, vertical: labelCfg.dpi },
         }
       } else if (kind === 'document') {
         printOptions = {
@@ -579,82 +596,35 @@ export default function PrintManagerModal({
     return (
       <>
         <div style={styles.section}>
-          <div style={styles.sectionLabel}>Support</div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary, #666)' }}>
-            Étiquettes à découper
+          <div style={styles.sectionLabel}>Étiquette code-barres</div>
+          <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)', marginBottom: 8 }}>
+            Réglages enregistrés automatiquement · aperçu en direct
           </div>
-        </div>
-
-        <div style={styles.section}>
-          <div style={styles.sectionLabel}>Taille</div>
-          <div style={styles.marginGrid}>
-            <div style={styles.miniField}>
-              <label style={styles.miniLabel}>Largeur (mm)</label>
-              <input
-                type="number"
-                value={labelCfg.widthMm}
-                min={1}
-                step={0.1}
-                onChange={(e) => setLabelField('widthMm', Math.max(1, parseFloat(e.target.value) || DEFAULT_LABEL_CONFIG.widthMm))}
-                style={styles.miniInput}
-              />
-            </div>
-            <div style={styles.miniField}>
-              <label style={styles.miniLabel}>Hauteur (mm)</label>
-              <input
-                type="number"
-                value={labelCfg.heightMm}
-                min={1}
-                step={0.1}
-                onChange={(e) => setLabelField('heightMm', Math.max(1, parseFloat(e.target.value) || DEFAULT_LABEL_CONFIG.heightMm))}
-                style={styles.miniInput}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div style={styles.section}>
-          <div style={styles.sectionLabel}>Bandes exposées</div>
-          <div style={styles.marginGrid}>
-            <div style={styles.miniField}>
-              <label style={styles.miniLabel}>Gauche (mm)</label>
-              <input
-                type="number"
-                value={labelCfg.stripLeftMm}
-                min={0}
-                step={0.1}
-                onChange={(e) => setLabelField('stripLeftMm', Math.max(0, parseFloat(e.target.value) || 0))}
-                style={styles.miniInput}
-              />
-            </div>
-            <div style={styles.miniField}>
-              <label style={styles.miniLabel}>Droite (mm)</label>
-              <input
-                type="number"
-                value={labelCfg.stripRightMm}
-                min={0}
-                step={0.1}
-                onChange={(e) => setLabelField('stripRightMm', Math.max(0, parseFloat(e.target.value) || 0))}
-                style={styles.miniInput}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div style={styles.section}>
-          <div style={styles.sectionLabel}>Orientation</div>
-          <select
-            value={String(labelCfg.rotationDeg)}
-            onChange={(e) => setLabelField('rotationDeg', parseInt(e.target.value, 10) === 0 ? 0 : 180)}
-            style={styles.select}
-          >
-            <option value="180">Portrait 180°</option>
-            <option value="0">Portrait 0°</option>
-          </select>
+          <LabelBarcodeSettingsForm
+            variant="modal"
+            config={labelCfg}
+            onChange={patchLabelCfg}
+            saveState={labelSaveState}
+          />
         </div>
 
         {renderPrinterSelect()}
         {renderCopiesControl()}
+
+        <div style={styles.section}>
+          <Toggle
+            id="label-color"
+            label="Couleur"
+            checked={opts.color}
+            onChange={(v) => set('color', v)}
+          />
+          <Toggle
+            id="label-bg"
+            label="Arrière-plan"
+            checked={opts.printBackground}
+            onChange={(v) => set('printBackground', v)}
+          />
+        </div>
       </>
     )
   }

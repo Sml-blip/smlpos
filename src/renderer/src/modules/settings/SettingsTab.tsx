@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { cn } from '../../lib/utils'
 import {
   Settings, FileText, ShieldCheck, Printer, Save, RefreshCw,
@@ -8,6 +8,9 @@ import {
 } from 'lucide-react'
 import InvoiceTemplateEditor from './InvoiceTemplateEditor'
 import { printTestPage, printLabelTestPage } from '../../components/PrintDialog'
+import LabelBarcodeSettingsForm, { labelConfigPatchToSettings } from '../../components/LabelBarcodeSettingsForm'
+import { labelConfigFromSettings, scheduleSaveLabelPrintConfig, mergeLabelConfig } from '../../lib/labelSettings'
+import type { LabelPrintConfig } from '../../lib/printManager'
 import { invalidateProduitsCache } from '../../lib/produitsCache'
 import { loadData, runAction } from '../../lib/apiCall'
 import { isSupabaseEnabled } from '../../lib/supabase'
@@ -61,9 +64,23 @@ const DEFAULTS: Record<string, string> = {
   impression_printer_label: '',
   impression_label_width: '40.0',
   impression_label_height: '19.9',
-  impression_label_strip_left: '1.3',
-  impression_label_strip_right: '1.3',
-  impression_label_rotation: '180',
+  impression_label_strip_left: '1',
+  impression_label_strip_right: '3',
+  impression_label_strip_top: '0.35',
+  impression_label_strip_bottom: '0.35',
+  impression_label_rotation: '0',
+  impression_label_bar_height: '5.8',
+  impression_label_bar_margin: '3.5',
+  impression_label_module_max: '0.38',
+  impression_label_show_name: 'true',
+  impression_label_show_price: 'true',
+  impression_label_show_barcode_text: 'true',
+  impression_label_name_font: '5.5',
+  impression_label_price_font: '7.5',
+  impression_label_name_lines: '2',
+  impression_label_align: 'auto',
+  impression_label_dpi: '300',
+  impression_label_copies: '1',
   // Sécurité
   caisse_interne_pin:    'sml2023',
   securite_require_shift:'true',
@@ -344,6 +361,30 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
 function ImpressionSection({ values, set, toggle }: { values: Record<string, string>; set: (k: string, v: string) => void; toggle: (k: string) => void }) {
   const [printers, setPrinters] = useState<{ name: string; isDefault?: boolean }[]>([])
   const [loadingPrinters, setLoadingPrinters] = useState(false)
+  const [labelSaveState, setLabelSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const labelHydratedRef = useRef(false)
+
+  const labelCfg = useMemo(() => labelConfigFromSettings(values), [values])
+
+  const patchLabelCfg = useCallback((patch: Partial<LabelPrintConfig>) => {
+    const next = mergeLabelConfig({ ...labelCfg, ...patch })
+    const settingsPatch = labelConfigPatchToSettings(patch, labelCfg)
+    for (const [key, val] of Object.entries(settingsPatch)) {
+      set(key, val)
+    }
+  }, [labelCfg, set])
+
+  useEffect(() => {
+    if (!labelHydratedRef.current) {
+      labelHydratedRef.current = true
+      return
+    }
+    setLabelSaveState('saving')
+    scheduleSaveLabelPrintConfig(labelCfg, (ok) => {
+      setLabelSaveState(ok ? 'saved' : 'idle')
+      if (ok) window.setTimeout(() => setLabelSaveState('idle'), 2000)
+    })
+  }, [labelCfg])
 
   const refreshPrinters = useCallback(async () => {
     setLoadingPrinters(true)
@@ -414,36 +455,12 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
         </Section>
       </Card>
       <Card>
-        <Section title="Étiquettes code-barres (défauts)">
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Largeur (mm)">
-              <input type="text" inputMode="decimal" value={values['impression_label_width'] ?? '40.0'}
-                onChange={e => set('impression_label_width', e.target.value.replace(/[^0-9.,]/g, ''))}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
-            </Field>
-            <Field label="Hauteur (mm)">
-              <input type="text" inputMode="decimal" value={values['impression_label_height'] ?? '19.9'}
-                onChange={e => set('impression_label_height', e.target.value.replace(/[^0-9.,]/g, ''))}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
-            </Field>
-            <Field label="Bande gauche (mm)">
-              <input type="text" inputMode="decimal" value={values['impression_label_strip_left'] ?? '1.3'}
-                onChange={e => set('impression_label_strip_left', e.target.value.replace(/[^0-9.,]/g, ''))}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
-            </Field>
-            <Field label="Bande droite (mm)">
-              <input type="text" inputMode="decimal" value={values['impression_label_strip_right'] ?? '1.3'}
-                onChange={e => set('impression_label_strip_right', e.target.value.replace(/[^0-9.,]/g, ''))}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white" />
-            </Field>
-            <Field label="Orientation">
-              <select value={values['impression_label_rotation'] ?? '180'} onChange={e => set('impression_label_rotation', e.target.value)}
-                className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
-                <option value="180">Portrait 180°</option>
-                <option value="0">Portrait 0°</option>
-              </select>
-            </Field>
-          </div>
+        <Section title="Étiquettes code-barres">
+          <LabelBarcodeSettingsForm
+            config={labelCfg}
+            onChange={patchLabelCfg}
+            saveState={labelSaveState}
+          />
         </Section>
       </Card>
       <Card>
