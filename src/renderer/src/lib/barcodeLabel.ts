@@ -157,14 +157,14 @@ export function buildBarcodeLabelHtml(
     .el-barcode {
       display: flex;
       align-items: center;
-      justify-content: flex-start;
+      justify-content: center;
     }
     .el-barcode svg {
       display: block;
+      width: 100%;
+      height: 100%;
       max-width: 100%;
       max-height: 100%;
-      width: auto;
-      height: auto;
     }
     .el-barcode svg rect { shape-rendering: crispEdges; }
     .el-price {

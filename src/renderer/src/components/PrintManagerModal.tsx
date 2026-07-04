@@ -603,7 +603,7 @@ export default function PrintManagerModal({
             </div>
           )}
           <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)', marginBottom: 8 }}>
-            Éditeur visuel à droite — glisser les blocs (EAN-8, tailles fixes)
+            Éditeur visuel à droite — glisser / redimensionner les blocs (EAN-8)
           </div>
           <div style={styles.field}>
             <label style={styles.fieldLabel}>Rotation</label>

@@ -29,8 +29,11 @@ interface LabelVisualEditorProps {
   zoomPct?: number
 }
 
+type DragMode = 'move' | 'resize'
+
 interface DragState {
   id: LabelElementId
+  mode: DragMode
   startX: number
   startY: number
   orig: LabelVisualLayout[LabelElementId]
@@ -47,6 +50,7 @@ export default function LabelVisualEditor({
     () => clampLayout(config.layout, contentW, contentH),
     [config.layout, contentW, contentH],
   )
+  const flipDrag = config.rotationDeg === 180
 
   const [selected, setSelected] = useState<LabelElementId>('barcode')
   const dragRef = useRef<DragState | null>(null)
@@ -62,7 +66,7 @@ export default function LabelVisualEditor({
   const barcodeSvg = useMemo(
     () => labelBarcodeSvg(barcodeValue, {
       maxWidthMm: layout.barcode.w,
-      barHeightMm: Math.max(3, layout.barcode.h - (layout.showBarcodeText ? 3 : 0)),
+      barHeightMm: Math.max(4, layout.barcode.h - (layout.showBarcodeText ? 3.5 : 0)),
       showText: layout.showBarcodeText,
       formatMode: 'EAN8',
     }),
@@ -82,18 +86,31 @@ export default function LabelVisualEditor({
   const onPointerMove = useCallback((e: PointerEvent) => {
     const drag = dragRef.current
     if (!drag) return
-    const dx = pxToMm(e.clientX - drag.startX)
-    const dy = pxToMm(e.clientY - drag.startY)
-    const next = { ...layout }
-    next[drag.id] = clampBox(drag.id, {
-      ...drag.orig,
-      x: drag.orig.x + dx,
-      y: drag.orig.y + dy,
-    }, contentW, contentH)
+    let dx = pxToMm(e.clientX - drag.startX)
+    let dy = pxToMm(e.clientY - drag.startY)
+    if (flipDrag) {
+      dx = -dx
+      dy = -dy
+    }
+    const base = liveLayoutRef.current ?? layout
+    const next = { ...base }
+    if (drag.mode === 'move') {
+      next[drag.id] = clampBox(drag.id, {
+        ...drag.orig,
+        x: drag.orig.x + dx,
+        y: drag.orig.y + dy,
+      }, contentW, contentH)
+    } else {
+      next[drag.id] = clampBox(drag.id, {
+        ...drag.orig,
+        w: drag.orig.w + dx,
+        h: drag.orig.h + dy,
+      }, contentW, contentH)
+    }
     const clamped = clampLayout(next, contentW, contentH)
     liveLayoutRef.current = clamped
     setLiveLayout(clamped)
-  }, [contentW, contentH, layout, pxToMm])
+  }, [contentW, contentH, flipDrag, layout, pxToMm])
 
   const onPointerUp = useCallback(() => {
     if (liveLayoutRef.current) {
@@ -111,16 +128,19 @@ export default function LabelVisualEditor({
     window.removeEventListener('pointerup', onPointerUp)
   }, [onPointerMove, onPointerUp])
 
-  function startDrag(id: LabelElementId, e: React.PointerEvent) {
+  function startDrag(id: LabelElementId, mode: DragMode, e: React.PointerEvent) {
     e.preventDefault()
     e.stopPropagation()
     setSelected(id)
     dragRef.current = {
       id,
+      mode,
       startX: e.clientX,
       startY: e.clientY,
       orig: { ...displayLayout[id] },
     }
+    liveLayoutRef.current = displayLayout
+    e.currentTarget.setPointerCapture(e.pointerId)
     window.addEventListener('pointermove', onPointerMove)
     window.addEventListener('pointerup', onPointerUp)
   }
@@ -157,7 +177,7 @@ export default function LabelVisualEditor({
     } else {
       content = (
         <div
-          style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center' }}
+          style={{ width: '100%', height: '100%' }}
           dangerouslySetInnerHTML={{ __html: barcodeSvg }}
         />
       )
@@ -174,7 +194,7 @@ export default function LabelVisualEditor({
         key={id}
         role="button"
         tabIndex={0}
-        onPointerDown={(e) => startDrag(id, e)}
+        onPointerDown={(e) => startDrag(id, 'move', e)}
         onClick={(e) => { e.stopPropagation(); setSelected(id) }}
         style={{
           position: 'absolute',
@@ -190,12 +210,14 @@ export default function LabelVisualEditor({
           alignItems: 'center',
           boxSizing: 'border-box',
           touchAction: 'none',
+          userSelect: 'none',
         }}
       >
         {isSel && (
           <span style={{
             position: 'absolute',
-            top: -16,
+            top: flipDrag ? undefined : -16,
+            bottom: flipDrag ? -16 : undefined,
             left: 0,
             fontSize: 9,
             fontWeight: 700,
@@ -203,11 +225,32 @@ export default function LabelVisualEditor({
             background: '#fff',
             padding: '0 3px',
             borderRadius: 2,
+            pointerEvents: 'none',
           }}>
             {labels[id]}
           </span>
         )}
-        <div style={{ width: '100%', padding: '0 1px', pointerEvents: 'none', overflow: 'hidden' }}>{content}</div>
+        <div style={{ width: '100%', height: '100%', padding: '0 1px', pointerEvents: 'none', overflow: 'hidden' }}>
+          {content}
+        </div>
+        {isSel && (
+          <div
+            onPointerDown={(e) => startDrag(id, 'resize', e)}
+            style={{
+              position: 'absolute',
+              right: flipDrag ? undefined : -4,
+              left: flipDrag ? -4 : undefined,
+              bottom: flipDrag ? undefined : -4,
+              top: flipDrag ? -4 : undefined,
+              width: 10,
+              height: 10,
+              background: '#3B6D11',
+              borderRadius: 2,
+              cursor: 'nwse-resize',
+              touchAction: 'none',
+            }}
+          />
+        )}
       </div>
     )
   }
@@ -215,7 +258,7 @@ export default function LabelVisualEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
       <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)' }}>
-        Cliquez pour sélectionner · glissez pour déplacer · format EAN-8 fixe
+        Cliquez · glissez pour déplacer · coin vert pour redimensionner · EAN-8
       </div>
 
       <div

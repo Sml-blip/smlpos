@@ -162,21 +162,24 @@ export function labelBarcodeSvg(
     moduleMm = moduleMm * (maxWidthPx / svgW) * 0.95
     svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
     svgW = parseFloat(svg.getAttribute('width') ?? '0')
+  } else if (svgW > 0 && svgW < maxWidthPx * 0.92) {
+    moduleMm = moduleMm * ((maxWidthPx * 0.98) / svgW)
+    svg = renderBarcodeSvg(value, format, moduleMm * MM_TO_PX, barHeightPx, opts.showText ?? true)
+    svgW = parseFloat(svg.getAttribute('width') ?? '0')
   }
 
-  const svgHmm = parseFloat(svg.getAttribute('height') ?? '0') / MM_TO_PX
   const viewBox = svg.getAttribute('viewBox')
   if (viewBox) {
     svg.setAttribute('width', '100%')
-    svg.setAttribute('height', `${Math.min(barHeightMm + (opts.showText ? 3.5 : 0), svgHmm).toFixed(2)}mm`)
+    svg.setAttribute('height', '100%')
   } else {
     const svgWmm = Math.min(maxWidthMm, svgW / MM_TO_PX)
+    const svgHmm = parseFloat(svg.getAttribute('height') ?? '0') / MM_TO_PX
     svg.setAttribute('width', `${svgWmm.toFixed(2)}mm`)
     svg.setAttribute('height', `${svgHmm.toFixed(2)}mm`)
   }
   svg.setAttribute('class', 'label-barcode')
-  const align = opts.align === 'right' ? 'xMaxYMid' : 'xMinYMid'
-  svg.setAttribute('preserveAspectRatio', `${align} meet`)
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
   applyCrispEdges(svg)
   return svg.outerHTML
 }
