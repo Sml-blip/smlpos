@@ -33,7 +33,8 @@ function MmToDots([double]$mm, [int]$dpi) {
 # Map box height (mm) to TSPL font multiplier 1-4.
 function FontMul([double]$hMm, [int]$dpi) {
     $dots = $hMm * $dpi / 25.4
-    return [string][math]::Max(1, [math]::Min(4, [math]::Round($dots / 8)))
+    # Keep text compact on 39x20mm labels to avoid overlaps.
+    return [string][math]::Max(1, [math]::Min(2, [math]::Round($dots / 14)))
 }
 
 function EstimateCode128Modules([string]$text) {
@@ -47,9 +48,10 @@ function Code128ModuleWidths([double]$boxWidthMm, [string]$value, [int]$dpi) {
     $modules = EstimateCode128Modules $value
     $quiet = 24
     $narrow = [math]::Floor(($boxDots * 0.95 - $quiet) / $modules)
-    if ($narrow -lt 2) { $narrow = 2 }
-    if ($narrow -gt 8) { $narrow = 8 }
-    $wide = $narrow * 2
+    if ($narrow -lt 1) { $narrow = 1 }
+    if ($narrow -gt 3) { $narrow = 3 }
+    # For CODE128 on Gainscha, keeping narrow=wide avoids overly fat bars and right-edge crop.
+    $wide = $narrow
     return @([string]$narrow, [string]$wide)
 }
 
@@ -175,11 +177,15 @@ function Invoke-PrintJob {
             if ($showText) {
                 $caption = [string]$el.displayText
                 if (-not $caption) { $caption = $value }
-                $captionY = MmToDots ($stripT + [double]$el.y + $barHMm + 0.5) $dpi
+                # Trim very long captions so they stay inside the label width.
+                if ($caption.Length -gt 28) {
+                    $caption = $caption.Substring(0, 28)
+                }
+                $captionY = MmToDots ($stripT + [double]$el.y + $barHMm + 0.35) $dpi
                 if ($useUsb) {
-                    $null = $dev.printerfont_USB("$x", "$captionY", '3', '0', '1', '1', $caption)
+                    $null = $dev.printerfont_USB("$x", "$captionY", '2', '0', '1', '1', $caption)
                 } else {
-                    $null = $dev.printerfont("$x", "$captionY", '3', '0', '1', '1', $caption)
+                    $null = $dev.printerfont("$x", "$captionY", '2', '0', '1', '1', $caption)
                 }
             }
         }

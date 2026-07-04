@@ -179,7 +179,16 @@ export default function SettingsTab({ onCheckForUpdates, updateChecking }: { onC
           {activeSection === 'facture'     && <FactureSection values={values} set={set} toggle={toggle} />}
           {activeSection === 'pos'         && <POSSection values={values} set={set} toggle={toggle} />}
           {activeSection === 'impression'  && <ImpressionSection values={values} set={set} toggle={toggle} />}
-          {activeSection === 'securite'    && <SecuriteSection values={values} set={set} toggle={toggle} appVer={appVer} />}
+          {activeSection === 'securite'    && (
+            <SecuriteSection
+              values={values}
+              set={set}
+              toggle={toggle}
+              appVer={appVer}
+              onCheckForUpdates={onCheckForUpdates}
+              updateChecking={updateChecking}
+            />
+          )}
           {activeSection === 'sauvegarde'  && <SauvegardeSection values={values} set={set} />}
         </div>
       </div>
@@ -529,7 +538,21 @@ function OperateurPinField({ label, pinKey, values, set }: { label: string; pinK
   )
 }
 
-function SecuriteSection({ values, set, toggle, appVer }: { values: Record<string, string>; set: (k: string, v: string) => void; toggle: (k: string) => void; appVer: string }) {
+function SecuriteSection({
+  values,
+  set,
+  toggle,
+  appVer,
+  onCheckForUpdates,
+  updateChecking,
+}: {
+  values: Record<string, string>
+  set: (k: string, v: string) => void
+  toggle: (k: string) => void
+  appVer: string
+  onCheckForUpdates?: (manual?: boolean) => void | Promise<void>
+  updateChecking?: boolean
+}) {
   return (
     <div className="max-w-2xl space-y-5">
       {/* Per-operator PINs */}
