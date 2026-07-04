@@ -71,7 +71,7 @@ const PAGE_DIMS_MM: Record<NativePageSize, { w: number; h: number }> = {
   A5: { w: 148, h: 210 },
   '58mm': { w: 58, h: 200 },
   '80mm': { w: 80, h: 200 },
-  '40x20mm': { w: 40, h: 20 },
+  '40x20mm': { w: 39, h: 20 },
 }
 
 const MM_TO_PX = 3.7795275591

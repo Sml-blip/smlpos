@@ -26,7 +26,7 @@ export interface LabelPrintConfig {
 }
 
 export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
-  widthMm: 40,
+  widthMm: 39,
   heightMm: 20,
   stripLeftMm: 1,
   stripRightMm: 8,
