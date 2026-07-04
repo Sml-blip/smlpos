@@ -1,4 +1,4 @@
-import { pickLabelBarcodeValue } from './barcode'
+import { pickLabelBarcodePayload } from './barcode'
 import { clampLayout, printableArea } from './labelLayout'
 import type { LabelPrintConfig } from './printManager'
 import { parseLabelPrice } from './barcodeLabel'
@@ -19,7 +19,7 @@ export interface GainschaPrintJobPayload {
   showBarcodeText: boolean
   elements: {
     name: { x: number; y: number; w: number; h: number; visible: boolean; text: string }
-    barcode: { x: number; y: number; w: number; h: number; visible: boolean; value: string; displayText: string }
+    barcode: { x: number; y: number; w: number; h: number; visible: boolean; value: string; displayText: string; format: 'EAN13' | 'EAN8' | 'CODE128' }
     price: { x: number; y: number; w: number; h: number; visible: boolean; text: string }
   }
 }
@@ -34,11 +34,29 @@ export function buildGainschaPrintJob(
     usbDevice?: string
   },
 ): GainschaPrintJobPayload {
-  const margins = printableArea(cfg)
+  const compactSdkTemplate = cfg.widthMm <= 45 && cfg.heightMm <= 25
+  const margins = compactSdkTemplate
+    ? {
+        stripLeftMm: 0.6,
+        stripRightMm: 0.6,
+        stripTopMm: 0.35,
+        stripBottomMm: 0.35,
+        contentW: Math.max(1, cfg.widthMm - 1.2),
+        contentH: Math.max(1, cfg.heightMm - 0.7),
+      }
+    : printableArea(cfg)
   const layout = clampLayout(cfg.layout, margins.contentW, margins.contentH)
   const displayName = (source.nom || source.productRef || 'Produit').trim()
   const priceStr = `${parseLabelPrice(source.prix).toFixed(3)} DT`
-  const barcodeValue = pickLabelBarcodeValue(source.code, source.productRef)
+  const barcode = pickLabelBarcodePayload(source.code, source.productRef)
+  const sdkLayout = compactSdkTemplate
+    ? {
+        name: { x: 11.5, y: 0.7, w: Math.max(12, margins.contentW - 11.5), h: 3, visible: true },
+        price: { x: 0.6, y: 0.7, w: 10.5, h: 3, visible: true },
+        barcode: { x: 0.6, y: 5.1, w: Math.max(24, margins.contentW - 1.2), h: 14, visible: true },
+        showBarcodeText: false,
+      }
+    : layout
 
   return {
     connection: options.connection ?? cfg.labelConnection ?? 'driver',
@@ -53,31 +71,32 @@ export function buildGainschaPrintJob(
     rotationDeg: cfg.rotationDeg,
     dpi: cfg.dpi,
     copies: options.copies,
-    showBarcodeText: layout.showBarcodeText,
+    showBarcodeText: compactSdkTemplate ? false : layout.showBarcodeText,
     elements: {
       name: {
-        x: layout.name.x,
-        y: layout.name.y,
-        w: layout.name.w,
-        h: layout.name.h,
-        visible: layout.name.visible,
+        x: sdkLayout.name.x,
+        y: sdkLayout.name.y,
+        w: sdkLayout.name.w,
+        h: sdkLayout.name.h,
+        visible: sdkLayout.name.visible,
         text: displayName,
       },
       barcode: {
-        x: layout.barcode.x,
-        y: layout.barcode.y,
-        w: layout.barcode.w,
-        h: layout.barcode.h,
-        visible: layout.barcode.visible,
-        value: barcodeValue,
-        displayText: barcodeValue,
+        x: sdkLayout.barcode.x,
+        y: sdkLayout.barcode.y,
+        w: sdkLayout.barcode.w,
+        h: sdkLayout.barcode.h,
+        visible: sdkLayout.barcode.visible,
+        value: barcode.value,
+        displayText: barcode.value,
+        format: barcode.format,
       },
       price: {
-        x: layout.price.x,
-        y: layout.price.y,
-        w: layout.price.w,
-        h: layout.price.h,
-        visible: layout.price.visible,
+        x: sdkLayout.price.x,
+        y: sdkLayout.price.y,
+        w: sdkLayout.price.w,
+        h: sdkLayout.price.h,
+        visible: sdkLayout.price.visible,
         text: priceStr,
       },
     },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodeValue } from '../lib/barcode'
+import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodePayload } from '../lib/barcode'
 import type { LabelPrintConfig } from '../lib/printManager'
 import {
   clampBox,
@@ -61,15 +61,16 @@ export default function LabelVisualEditor({
 
   const priceStr = `${parseLabelPrice(preview.prix).toFixed(3)} DT`
   const displayName = (preview.nom || preview.productRef || 'Produit').trim()
-  const barcodeValue = pickLabelBarcodeValue(preview.code, preview.productRef)
+  const barcode = pickLabelBarcodePayload(preview.code, preview.productRef)
+  const barcodeValue = barcode.value
 
   const barcodeSvg = useMemo(
     () => labelBarcodeSvg(barcodeValue, {
       maxWidthMm: layout.barcode.w,
       barHeightMm: labelBarcodeBarHeightMm(layout.barcode.h, layout.showBarcodeText),
-      formatMode: 'CODE128',
+      formatMode: barcode.format,
     }),
-    [barcodeValue, layout.barcode.w, layout.barcode.h, layout.showBarcodeText],
+    [barcode.format, barcodeValue, layout.barcode.w, layout.barcode.h, layout.showBarcodeText],
   )
 
   const patchLayout = useCallback((next: LabelVisualLayout) => {

@@ -29,7 +29,7 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   widthMm: 39,
   heightMm: 20,
   stripLeftMm: 1,
-  stripRightMm: 8,
+  stripRightMm: 1,
   stripTopMm: 0.35,
   stripBottomMm: 0.35,
   rotationDeg: 0,
@@ -40,8 +40,8 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   usbDevice: '',
 }
 
-/** Gainscha / 40mm label printers often have ~8mm non-printable zone on the right. */
-export const LABEL_SAFE_RIGHT_MM = 8
+/** Keep a small physical inset; the SDK print template uses almost the full 39mm width. */
+export const LABEL_SAFE_RIGHT_MM = 1
 
 export function effectiveLabelMargins(cfg: Pick<LabelPrintConfig, 'widthMm' | 'heightMm' | 'stripLeftMm' | 'stripRightMm' | 'stripTopMm' | 'stripBottomMm'>) {
   const minRight = cfg.widthMm <= 45 ? LABEL_SAFE_RIGHT_MM : 3

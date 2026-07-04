@@ -3,7 +3,7 @@ import { DEFAULT_LABEL_CONFIG, effectiveLabelMargins, type LabelPrintConfig } fr
 export type LabelElementId = 'name' | 'barcode' | 'price'
 
 /** Inner padding so content stays inside the printable area on Gainscha-style printers. */
-export const LABEL_SAFE_INSET_MM = 1.5
+export const LABEL_SAFE_INSET_MM = 0.6
 
 export interface LabelElementBox {
   x: number
@@ -29,9 +29,9 @@ const BOX_LIMITS: Record<LabelElementId, { minW: number; minH: number; maxH: num
 }
 
 const DEFAULT_H: Record<LabelElementId, number> = {
-  name: 3.5,
-  barcode: 13,
-  price: 3.5,
+  name: 3,
+  barcode: 13.2,
+  price: 3,
 }
 
 function maxBoxWidth(contentW: number): number {
@@ -54,10 +54,10 @@ export function defaultVisualLayout(contentW: number, _contentH: number): LabelV
   const w = defaultBoxWidth(contentW)
   const inset = LABEL_SAFE_INSET_MM
   return {
-    name: { x: inset, y: 0.4, w, h: DEFAULT_H.name, visible: true },
-    barcode: { x: inset, y: 4, w, h: DEFAULT_H.barcode, visible: true },
-    price: { x: inset, y: 17.1, w, h: DEFAULT_H.price, visible: true },
-    showBarcodeText: true,
+    price: { x: inset, y: 0.5, w: 10.5, h: DEFAULT_H.price, visible: true },
+    name: { x: 11.5, y: 0.5, w: Math.max(12, w - 11), h: DEFAULT_H.name, visible: true },
+    barcode: { x: inset, y: 4.7, w, h: DEFAULT_H.barcode, visible: true },
+    showBarcodeText: false,
   }
 }
 
@@ -101,9 +101,14 @@ export function parseVisualLayout(raw: string | undefined, contentW: number, con
       price: { ...fallback.price, ...j.price },
       showBarcodeText: j.showBarcodeText !== false,
     }
-    // Upgrade tiny legacy barcode boxes saved before larger defaults.
-    if (merged.barcode.h < DEFAULT_H.barcode * 0.85) {
-      merged.barcode.h = DEFAULT_H.barcode
+    // Replace old cramped/overlapping label layouts with the scannable full-width template.
+    if (
+      merged.barcode.h < DEFAULT_H.barcode * 0.85 ||
+      merged.barcode.w < contentW * 0.86 ||
+      merged.barcode.y < 4.4 ||
+      merged.price.y > contentH - 5
+    ) {
+      return fallback
     }
     return clampLayout(merged, contentW, contentH)
   } catch {

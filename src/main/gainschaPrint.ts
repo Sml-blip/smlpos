@@ -13,6 +13,7 @@ export interface GainschaLabelElement {
   text?: string
   value?: string
   displayText?: string
+  format?: 'EAN13' | 'EAN8' | 'CODE128'
 }
 
 export interface GainschaPrintJob {

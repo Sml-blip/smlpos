@@ -49,9 +49,8 @@ function Code128ModuleWidths([double]$boxWidthMm, [string]$value, [int]$dpi) {
     $quiet = 24
     $narrow = [math]::Floor(($boxDots * 0.95 - $quiet) / $modules)
     if ($narrow -lt 1) { $narrow = 1 }
-    if ($narrow -gt 3) { $narrow = 3 }
-    # For CODE128 on Gainscha, keeping narrow=wide avoids overly fat bars and right-edge crop.
-    $wide = $narrow
+    if ($narrow -gt 2) { $narrow = 2 }
+    $wide = $narrow * 2
     return @([string]$narrow, [string]$wide)
 }
 
@@ -147,8 +146,9 @@ function Invoke-PrintJob {
             $y   = MmToDots ($stripT + [double]$el.y) $dpi
             $mul = FontMul ([double]$el.h) $dpi
             $txt = [string]$el.text
-            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $mul, $txt) }
-            else         { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $mul, $txt) }
+            if ($txt.Length -gt 19) { $txt = $txt.Substring(0, 19) }
+            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '2', '0', '1', $mul, $txt) }
+            else         { $null = $dev.printerfont("$x", "$y", '2', '0', '1', $mul, $txt) }
         }
 
         # ── Barcode (CODE128) ─────────────────────────────────────────────────
@@ -165,14 +165,26 @@ function Invoke-PrintJob {
                 $barHMm = $boxHMm
             }
             $h = MmToDots $barHMm $dpi
-            $moduleWidths = Code128ModuleWidths $boxWMm ([string]$el.value) $dpi
-            $narrow = $moduleWidths[0]
-            $wide = $moduleWidths[1]
             $value = [string]$el.value
-            if ($useUsb) {
-                $null = $dev.barcode_USB("$x", "$y", '128', "$h", '0', '0', $narrow, $wide, $value)
+            $format = [string]$el.format
+            if ($format -eq 'EAN13') {
+                $barcodeType = 'EAN13'
+                $narrow = '2'
+                $wide = '2'
+            } elseif ($format -eq 'EAN8') {
+                $barcodeType = 'EAN8'
+                $narrow = '2'
+                $wide = '2'
             } else {
-                $null = $dev.barcode("$x", "$y", '128', "$h", '0', '0', $narrow, $wide, $value)
+                $barcodeType = '128'
+                $moduleWidths = Code128ModuleWidths $boxWMm $value $dpi
+                $narrow = $moduleWidths[0]
+                $wide = $moduleWidths[1]
+            }
+            if ($useUsb) {
+                $null = $dev.barcode_USB("$x", "$y", $barcodeType, "$h", '0', '0', $narrow, $wide, $value)
+            } else {
+                $null = $dev.barcode("$x", "$y", $barcodeType, "$h", '0', '0', $narrow, $wide, $value)
             }
             if ($showText) {
                 $caption = [string]$el.displayText
@@ -197,8 +209,9 @@ function Invoke-PrintJob {
             $y   = MmToDots ($stripT + [double]$el.y) $dpi
             $mul = FontMul ([double]$el.h) $dpi
             $txt = [string]$el.text
-            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '3', '0', '1', $mul, $txt) }
-            else         { $null = $dev.printerfont("$x", "$y", '3', '0', '1', $mul, $txt) }
+            if ($txt.Length -gt 10) { $txt = $txt.Substring(0, 10) }
+            if ($useUsb) { $null = $dev.printerfont_USB("$x", "$y", '2', '0', '1', $mul, $txt) }
+            else         { $null = $dev.printerfont("$x", "$y", '2', '0', '1', $mul, $txt) }
         }
 
         $copies = [string][math]::Max(1, [math]::Min(99, [int]$job.copies))

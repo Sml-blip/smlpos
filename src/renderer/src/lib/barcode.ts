@@ -7,6 +7,7 @@ import JsBarcode from 'jsbarcode'
 const MM_TO_PX = 3.7795275591
 
 type BarcodeFormatMode = 'auto' | 'EAN13' | 'EAN8' | 'CODE128'
+export type LabelBarcodeFormat = 'EAN13' | 'EAN8' | 'CODE128'
 
 export function normalizeBarcodeText(raw: string): string {
   return String(raw ?? '').trim()
@@ -71,10 +72,24 @@ export function pickBarcodeValue(code: string, productRef = ''): string {
 
 /** Label printing uses CODE128 — full product code, no truncation. */
 export function pickLabelBarcodeValue(code: string, productRef = ''): string {
+  return pickLabelBarcodePayload(code, productRef).value
+}
+
+export function pickLabelBarcodePayload(code: string, productRef = ''): { value: string; format: LabelBarcodeFormat } {
   const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
   const picked = candidates[0] ?? normalizeBarcodeText(code)
-  if (!picked) return '0'
-  return resolveBarcodeFormat(picked, 'CODE128').value
+  if (!picked) return { value: '0', format: 'CODE128' }
+  const trimmed = picked.trim()
+  const digitsOnly = trimmed.replace(/\D/g, '')
+
+  // Prefer real EAN formats for numeric retail barcodes: they scan much better
+  // than dense CODE128 on 39x20mm labels.
+  if (/^\d{13}$/.test(trimmed)) return { value: trimmed, format: 'EAN13' }
+  if (/^\d{8}$/.test(trimmed)) return { value: trimmed, format: 'EAN8' }
+  if (digitsOnly.length === 13) return { value: digitsOnly, format: 'EAN13' }
+  if (digitsOnly.length === 8) return { value: digitsOnly, format: 'EAN8' }
+
+  return { value: resolveBarcodeFormat(picked, 'CODE128').value, format: 'CODE128' }
 }
 
 /** @deprecated Use pickLabelBarcodeValue for labels. */

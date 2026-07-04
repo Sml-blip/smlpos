@@ -21,14 +21,23 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 function normalizeStripRight(stripRightMm: number, widthMm: number): number {
+  if (widthMm <= 45 && stripRightMm > 4) return LABEL_SAFE_RIGHT_MM
   if (widthMm <= 45 && stripRightMm < LABEL_SAFE_RIGHT_MM) return LABEL_SAFE_RIGHT_MM
   return stripRightMm
+}
+
+function normalizeStripLeft(stripLeftMm: number, widthMm: number): number {
+  if (widthMm <= 45 && stripLeftMm > 4) return DEFAULT_LABEL_CONFIG.stripLeftMm
+  return stripLeftMm
 }
 
 export function labelConfigFromSettings(all: Record<string, string>): LabelPrintConfig {
   const widthMm = parseNum(all.impression_label_width, DEFAULT_LABEL_CONFIG.widthMm)
   const heightMm = parseNum(all.impression_label_height, DEFAULT_LABEL_CONFIG.heightMm)
-  const stripLeftMm = parseNum(all.impression_label_strip_left, DEFAULT_LABEL_CONFIG.stripLeftMm)
+  const stripLeftMm = normalizeStripLeft(
+    parseNum(all.impression_label_strip_left, DEFAULT_LABEL_CONFIG.stripLeftMm),
+    widthMm,
+  )
   const stripRightMm = normalizeStripRight(
     parseNum(all.impression_label_strip_right, DEFAULT_LABEL_CONFIG.stripRightMm),
     widthMm,
@@ -122,6 +131,7 @@ export function mergeLabelConfig(partial?: Partial<LabelPrintConfig>): LabelPrin
     usbDevice: partial?.usbDevice ?? base.usbDevice,
   }
   merged.stripRightMm = normalizeStripRight(merged.stripRightMm, merged.widthMm)
+  merged.stripLeftMm = normalizeStripLeft(merged.stripLeftMm, merged.widthMm)
   const { contentW, contentH } = printableArea(merged)
   merged.layout = clampLayout(merged.layout, contentW, contentH)
   return merged

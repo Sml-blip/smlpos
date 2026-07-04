@@ -1,4 +1,4 @@
-import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodeValue } from './barcode'
+import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodePayload } from './barcode'
 import type { LabelPrintConfig } from './printManager'
 import { effectiveLabelMargins } from './printManager'
 import { clampLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
@@ -45,7 +45,8 @@ export function buildBarcodeLabelHtml(
   const contentH = margins.contentH
   const layout = clampLayout(cfg.layout, contentW, contentH)
 
-  const barcodeValue = pickLabelBarcodeValue(code, productRef)
+  const barcode = pickLabelBarcodePayload(code, productRef)
+  const barcodeValue = barcode.value
   const safeBarcode = escapeHtml(barcodeValue)
   const displayName = (nom || productRef || 'Produit').trim()
   const safeName = escapeHtml(displayName)
@@ -61,7 +62,7 @@ export function buildBarcodeLabelHtml(
     ? labelBarcodeSvg(barcodeValue, {
         maxWidthMm: layout.barcode.w,
         barHeightMm,
-        formatMode: 'CODE128',
+        formatMode: barcode.format,
       })
     : ''
 
