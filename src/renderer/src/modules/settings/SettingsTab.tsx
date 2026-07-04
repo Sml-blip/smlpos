@@ -96,7 +96,7 @@ const DEFAULTS: Record<string, string> = {
   boutique_banque:        '',
 }
 
-export default function SettingsTab() {
+export default function SettingsTab({ onCheckForUpdates }: { onCheckForUpdates?: (manual?: boolean) => void | Promise<void> }) {
   const [activeSection, setActiveSection] = useState<TabId>('facture')
   const [values, setValues] = useState<Record<string, string>>(DEFAULTS)
   const [loading, setLoading] = useState(false)
@@ -590,7 +590,7 @@ function SecuriteSection({ values, set, toggle, appVer }: { values: Record<strin
             <div className="flex justify-between"><span>Sync cloud</span><span className="font-semibold text-text-primary">Supabase</span></div>
           </div>
           <div className="mt-4 pt-4 border-t border-border">
-            <UpdateCheckButton />
+            <UpdateCheckButton onCheck={() => onCheckForUpdates?.(true)} />
           </div>
         </Section>
       </Card>
@@ -1322,13 +1322,22 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   )
 }
 
-function UpdateCheckButton() {
+function UpdateCheckButton({ onCheck }: { onCheck?: () => void | Promise<void> }) {
   const [checking, setChecking] = useState(false)
   return (
     <button
       type="button"
       disabled={checking}
       onClick={async () => {
+        if (onCheck) {
+          setChecking(true)
+          try {
+            await onCheck()
+          } finally {
+            setChecking(false)
+          }
+          return
+        }
         if (!api.updateCheck) {
           showToast('info', 'Disponible uniquement dans l\'application installée')
           return

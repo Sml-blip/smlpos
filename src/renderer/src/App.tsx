@@ -184,7 +184,7 @@ export default function App() {
         {activeTab === 'clients'        && <ClientsTab />}
         {activeTab === 'personnels'     && <PersonnelsTab />}
         {activeTab === 'documents'      && <DocumentsTab />}
-        {activeTab === 'settings'       && <SettingsTab />}
+        {activeTab === 'settings'       && <SettingsTab onCheckForUpdates={checkForUpdates} />}
       </div>
 
       <StatusBar />
