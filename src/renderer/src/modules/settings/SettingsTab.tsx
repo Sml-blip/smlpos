@@ -81,6 +81,9 @@ const DEFAULTS: Record<string, string> = {
   impression_label_align: 'auto',
   impression_label_dpi: '300',
   impression_label_copies: '1',
+  impression_label_gap_name_bar: '0.2',
+  impression_label_gap_bar_price: '0.2',
+  impression_label_valign: 'top',
   // Sécurité
   caisse_interne_pin:    'sml2023',
   securite_require_shift:'true',

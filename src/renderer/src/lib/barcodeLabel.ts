@@ -22,6 +22,7 @@ function mergeConfig(partial?: Partial<LabelPrintConfig>): LabelPrintConfig {
     rotationDeg: partial?.rotationDeg === 180 ? 180 : 0,
     nameMaxLines: partial?.nameMaxLines === 1 ? 1 : partial?.nameMaxLines === 3 ? 3 : (partial?.nameMaxLines ?? DEFAULT_LABEL_CONFIG.nameMaxLines),
     textAlign: partial?.textAlign ?? DEFAULT_LABEL_CONFIG.textAlign,
+    contentVAlign: partial?.contentVAlign ?? DEFAULT_LABEL_CONFIG.contentVAlign,
   }
 }
 
@@ -34,17 +35,24 @@ function resolveAlign(cfg: LabelPrintConfig): LabelTextAlign {
   return cfg.rotationDeg === 180 ? 'right' : 'left'
 }
 
-function cssAlign(align: LabelTextAlign): { anchor: string; flexMain: string; gridAlign: string; svgAlign: 'left' | 'right' } {
+function cssAlign(align: LabelTextAlign): { anchor: string; flexMain: string; crossAlign: string; svgAlign: 'left' | 'right' } {
   if (align === 'center') {
-    return { anchor: 'center', flexMain: 'center', gridAlign: 'center', svgAlign: 'left' }
+    return { anchor: 'center', flexMain: 'center', crossAlign: 'center', svgAlign: 'left' }
   }
   if (align === 'right') {
-    return { anchor: 'right', flexMain: 'flex-end', gridAlign: 'end', svgAlign: 'right' }
+    return { anchor: 'right', flexMain: 'flex-end', crossAlign: 'flex-end', svgAlign: 'right' }
   }
-  return { anchor: 'left', flexMain: 'flex-start', gridAlign: 'start', svgAlign: 'left' }
+  return { anchor: 'left', flexMain: 'flex-start', crossAlign: 'flex-start', svgAlign: 'left' }
 }
 
-/** 40×20mm label — configurable layout from LabelPrintConfig. */
+function vAlignCss(v: LabelPrintConfig['contentVAlign']): string {
+  if (v === 'center') return 'center'
+  if (v === 'bottom') return 'flex-end'
+  if (v === 'space-between') return 'space-between'
+  return 'flex-start'
+}
+
+/** Label HTML — tight flex layout, content forced inside printable area. */
 export function buildBarcodeLabelHtml(
   code: string,
   nom: string,
@@ -63,9 +71,10 @@ export function buildBarcodeLabelHtml(
 
   const contentW = Math.max(1, cfg.widthMm - cfg.stripLeftMm - cfg.stripRightMm)
   const contentH = Math.max(1, cfg.heightMm - cfg.stripTopMm - cfg.stripBottomMm)
-  const maxBarWidthMm = Math.max(16, contentW - cfg.barMarginMm)
+  const maxBarWidthMm = Math.max(12, contentW - cfg.barMarginMm)
+  const barBlockMaxHmm = cfg.barHeightMm + (cfg.showBarcodeText ? 3.5 : 0)
   const align = resolveAlign(cfg)
-  const { anchor, flexMain, gridAlign, svgAlign } = cssAlign(align)
+  const { anchor, flexMain, crossAlign, svgAlign } = cssAlign(align)
   const flip = cfg.rotationDeg === 180
 
   const svg = labelBarcodeSvg(barcodeValue, {
@@ -79,6 +88,9 @@ export function buildBarcodeLabelHtml(
   const labelRotate = flip
     ? 'transform: rotate(180deg); transform-origin: center center;'
     : ''
+
+  const nameMb = cfg.showName && svg ? cfg.gapNameBarcodeMm : 0
+  const barMb = svg && cfg.showPrice ? cfg.gapBarcodePriceMm : 0
 
   const nameBlock = cfg.showName
     ? `<div class="label-name" title="${safeName}">${safeName}</div>`
@@ -100,20 +112,15 @@ export function buildBarcodeLabelHtml(
     `<div class="sheet${i < count - 1 ? ' page-break' : ''}">${labelInner}</div>`,
   ).join('')
 
-  const gridRows = cfg.showName && cfg.showPrice
-    ? 'auto 1fr auto'
-    : cfg.showName && !cfg.showPrice
-      ? 'auto 1fr'
-      : !cfg.showName && cfg.showPrice
-        ? '1fr auto'
-        : '1fr'
-
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Étiquette ${safeRef}</title><style>
     @page { size: ${cfg.widthMm}mm ${cfg.heightMm}mm; margin: 0; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
+      max-width: ${cfg.widthMm}mm;
+      max-height: ${cfg.heightMm}mm;
+      overflow: hidden;
       font-family: Arial, Helvetica, sans-serif;
       background: #fff;
       color: #000;
@@ -123,6 +130,8 @@ export function buildBarcodeLabelHtml(
     .sheet {
       width: ${cfg.widthMm}mm;
       height: ${cfg.heightMm}mm;
+      max-width: ${cfg.widthMm}mm;
+      max-height: ${cfg.heightMm}mm;
       padding: ${cfg.stripTopMm}mm ${cfg.stripRightMm}mm ${cfg.stripBottomMm}mm ${cfg.stripLeftMm}mm;
       display: flex;
       align-items: stretch;
@@ -134,49 +143,62 @@ export function buildBarcodeLabelHtml(
       width: ${contentW}mm;
       max-width: 100%;
       height: ${contentH}mm;
-      display: grid;
-      grid-template-rows: ${gridRows};
-      align-items: center;
-      justify-items: ${gridAlign};
-      gap: 0.15mm;
+      max-height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: ${vAlignCss(cfg.contentVAlign)};
+      align-items: ${crossAlign};
+      overflow: hidden;
       text-align: ${anchor};
     }
     .label-name {
+      flex: 0 0 auto;
       width: 100%;
+      max-width: 100%;
       font-size: ${cfg.nameFontPt}pt;
       font-weight: 700;
-      line-height: 1.1;
+      line-height: 1.05;
       overflow: hidden;
       display: -webkit-box;
       -webkit-line-clamp: ${cfg.nameMaxLines};
       -webkit-box-orient: vertical;
       word-break: break-word;
+      margin-bottom: ${nameMb}mm;
     }
     .barcode-wrap {
+      flex: 0 1 auto;
       width: 100%;
+      max-width: 100%;
+      min-height: 0;
+      max-height: ${barBlockMaxHmm}mm;
       display: flex;
       align-items: center;
       justify-content: ${flexMain};
       overflow: hidden;
+      margin-bottom: ${barMb}mm;
     }
     .label-barcode,
     .barcode-wrap svg {
       display: block;
-      max-width: ${maxBarWidthMm}mm;
-      width: auto;
+      max-width: 100%;
+      width: 100%;
       height: auto;
-      max-height: ${cfg.barHeightMm + (cfg.showBarcodeText ? 4 : 0)}mm;
+      max-height: ${barBlockMaxHmm}mm;
     }
     .label-barcode rect,
     .barcode-wrap svg rect {
       shape-rendering: crispEdges;
     }
     .label-price {
+      flex: 0 0 auto;
       width: 100%;
+      max-width: 100%;
       font-size: ${cfg.priceFontPt}pt;
       font-weight: 900;
-      line-height: 1.1;
+      line-height: 1.05;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
   </style></head><body>${sheets}</body></html>`
 }

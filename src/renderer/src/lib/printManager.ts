@@ -31,6 +31,12 @@ export interface LabelPrintConfig {
   textAlign: LabelTextAlign
   dpi: number
   defaultCopies: number
+  /** Vertical gap between product name and barcode (mm) */
+  gapNameBarcodeMm: number
+  /** Vertical gap between barcode and price (mm) */
+  gapBarcodePriceMm: number
+  /** Vertical placement of content block inside the label */
+  contentVAlign: 'top' | 'center' | 'bottom' | 'space-between'
 }
 
 export const DEFAULT_LABEL_CONFIG: LabelPrintConfig = {
@@ -53,6 +59,9 @@ export const DEFAULT_LABEL_CONFIG: LabelPrintConfig = {
   textAlign: 'auto',
   dpi: 300,
   defaultCopies: 1,
+  gapNameBarcodeMm: 0.2,
+  gapBarcodePriceMm: 0.2,
+  contentVAlign: 'top',
 }
 
 export const LABEL_SETTING_KEYS = [
@@ -75,6 +84,9 @@ export const LABEL_SETTING_KEYS = [
   'impression_label_align',
   'impression_label_dpi',
   'impression_label_copies',
+  'impression_label_gap_name_bar',
+  'impression_label_gap_bar_price',
+  'impression_label_valign',
 ] as const
 
 export interface PrintJob {

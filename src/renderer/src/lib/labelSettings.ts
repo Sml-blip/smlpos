@@ -43,7 +43,15 @@ export function labelConfigFromSettings(all: Record<string, string>): LabelPrint
     textAlign: align === 'left' || align === 'center' || align === 'right' ? align : 'auto',
     dpi: clamp(parseNum(all.impression_label_dpi, DEFAULT_LABEL_CONFIG.dpi), 72, 600),
     defaultCopies: clamp(parseInt(all.impression_label_copies ?? '1', 10) || 1, 1, 99),
+    gapNameBarcodeMm: parseNum(all.impression_label_gap_name_bar, DEFAULT_LABEL_CONFIG.gapNameBarcodeMm),
+    gapBarcodePriceMm: parseNum(all.impression_label_gap_bar_price, DEFAULT_LABEL_CONFIG.gapBarcodePriceMm),
+    contentVAlign: parseContentVAlign(all.impression_label_valign),
   }
+}
+
+function parseContentVAlign(raw: string | undefined): LabelPrintConfig['contentVAlign'] {
+  if (raw === 'center' || raw === 'bottom' || raw === 'space-between') return raw
+  return 'top'
 }
 
 export function settingsFromLabelConfig(cfg: LabelPrintConfig): Record<string, string> {
@@ -67,6 +75,9 @@ export function settingsFromLabelConfig(cfg: LabelPrintConfig): Record<string, s
     impression_label_align: cfg.textAlign,
     impression_label_dpi: String(cfg.dpi),
     impression_label_copies: String(cfg.defaultCopies),
+    impression_label_gap_name_bar: String(cfg.gapNameBarcodeMm),
+    impression_label_gap_bar_price: String(cfg.gapBarcodePriceMm),
+    impression_label_valign: cfg.contentVAlign,
   }
 }
 

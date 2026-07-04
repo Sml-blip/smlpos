@@ -137,6 +137,32 @@ export default function LabelBarcodeSettingsForm({
       </div>
 
       <div className={sectionClass}>
+        <div className={sectionTitle}>Espacement vertical</div>
+        <div className={gridClass}>
+          <div>
+            <label className={labelClass}>Nom → code-barres (mm)</label>
+            <input type="number" min={0} max={8} step={0.1} value={cfg.gapNameBarcodeMm} className={inputClass}
+              onChange={e => set('gapNameBarcodeMm', num(e.target.value, cfg.gapNameBarcodeMm, 0, 8))} />
+          </div>
+          <div>
+            <label className={labelClass}>Code-barres → prix (mm)</label>
+            <input type="number" min={0} max={8} step={0.1} value={cfg.gapBarcodePriceMm} className={inputClass}
+              onChange={e => set('gapBarcodePriceMm', num(e.target.value, cfg.gapBarcodePriceMm, 0, 8))} />
+          </div>
+          <div>
+            <label className={labelClass}>Position verticale</label>
+            <select value={cfg.contentVAlign} className={inputClass}
+              onChange={e => set('contentVAlign', e.target.value as LabelPrintConfig['contentVAlign'])}>
+              <option value="top">Haut (compact)</option>
+              <option value="center">Centré</option>
+              <option value="bottom">Bas</option>
+              <option value="space-between">Réparti</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className={sectionClass}>
         <div className={sectionTitle}>Contenu</div>
         <div className={gridClass}>
           <div className={toggleRow}>
@@ -215,5 +241,8 @@ export function labelConfigPatchToSettings(patch: Partial<LabelPrintConfig>, cur
     impression_label_align: merged.textAlign,
     impression_label_dpi: String(merged.dpi),
     impression_label_copies: String(merged.defaultCopies),
+    impression_label_gap_name_bar: String(merged.gapNameBarcodeMm),
+    impression_label_gap_bar_price: String(merged.gapBarcodePriceMm),
+    impression_label_valign: merged.contentVAlign,
   }
 }

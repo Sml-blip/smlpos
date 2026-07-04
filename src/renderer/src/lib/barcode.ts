@@ -91,7 +91,7 @@ function renderBarcodeSvg(
     fontSize: 7,
     fontOptions: 'bold' as const,
     textMargin: 1,
-    margin: 4,
+    margin: 2,
     background: '#ffffff',
     lineColor: '#000000',
   }
@@ -133,9 +133,15 @@ export function labelBarcodeSvg(
   }
 
   const svgHmm = parseFloat(svg.getAttribute('height') ?? '0') / MM_TO_PX
-  const svgWmm = Math.min(maxWidthMm, svgW / MM_TO_PX)
-  svg.setAttribute('width', `${svgWmm.toFixed(2)}mm`)
-  svg.setAttribute('height', `${svgHmm.toFixed(2)}mm`)
+  const viewBox = svg.getAttribute('viewBox')
+  if (viewBox) {
+    svg.setAttribute('width', '100%')
+    svg.setAttribute('height', `${Math.min(barHeightMm + (opts.showText ? 3.5 : 0), svgHmm).toFixed(2)}mm`)
+  } else {
+    const svgWmm = Math.min(maxWidthMm, svgW / MM_TO_PX)
+    svg.setAttribute('width', `${svgWmm.toFixed(2)}mm`)
+    svg.setAttribute('height', `${svgHmm.toFixed(2)}mm`)
+  }
   svg.setAttribute('class', 'label-barcode')
   const align = opts.align === 'right' ? 'xMaxYMid' : 'xMinYMid'
   svg.setAttribute('preserveAspectRatio', `${align} meet`)
