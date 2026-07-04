@@ -1,6 +1,6 @@
 import { labelBarcodeSvg, pickBarcodeValue } from './barcode'
 import type { LabelPrintConfig, LabelTextAlign } from './printManager'
-import { DEFAULT_LABEL_CONFIG } from './printManager'
+import { DEFAULT_LABEL_CONFIG, effectiveLabelMargins } from './printManager'
 
 export interface BarcodeLabelOptions {
   code: string
@@ -23,6 +23,7 @@ function mergeConfig(partial?: Partial<LabelPrintConfig>): LabelPrintConfig {
     nameMaxLines: partial?.nameMaxLines === 1 ? 1 : partial?.nameMaxLines === 3 ? 3 : (partial?.nameMaxLines ?? DEFAULT_LABEL_CONFIG.nameMaxLines),
     textAlign: partial?.textAlign ?? DEFAULT_LABEL_CONFIG.textAlign,
     contentVAlign: partial?.contentVAlign ?? DEFAULT_LABEL_CONFIG.contentVAlign,
+    contentScalePct: partial?.contentScalePct ?? DEFAULT_LABEL_CONFIG.contentScalePct,
   }
 }
 
@@ -69,13 +70,21 @@ export function buildBarcodeLabelHtml(
   const priceNum = parseLabelPrice(prix)
   const priceStr = `${priceNum.toFixed(3)} DT`
 
-  const contentW = Math.max(1, cfg.widthMm - cfg.stripLeftMm - cfg.stripRightMm)
-  const contentH = Math.max(1, cfg.heightMm - cfg.stripTopMm - cfg.stripBottomMm)
-  const maxBarWidthMm = Math.max(12, contentW - cfg.barMarginMm)
+  const margins = effectiveLabelMargins(cfg)
+  const contentW = margins.contentW
+  const contentH = margins.contentH
+  const padTop = margins.stripTopMm
+  const padRight = margins.stripRightMm
+  const padBottom = margins.stripBottomMm
+  const padLeft = margins.stripLeftMm
+  const maxBarWidthMm = Math.max(10, contentW - cfg.barMarginMm)
   const barBlockMaxHmm = cfg.barHeightMm + (cfg.showBarcodeText ? 3.5 : 0)
   const align = resolveAlign(cfg)
   const { anchor, flexMain, crossAlign, svgAlign } = cssAlign(align)
   const flip = cfg.rotationDeg === 180
+  const scale = Math.min(2, Math.max(0.7, cfg.contentScalePct / 100))
+  const scaleOrigin = anchor === 'center' ? 'top center' : anchor === 'right' ? 'top right' : 'top left'
+  const scaleWidthPct = (100 / scale).toFixed(2)
 
   const svg = labelBarcodeSvg(barcodeValue, {
     maxWidthMm: maxBarWidthMm,
@@ -102,9 +111,11 @@ export function buildBarcodeLabelHtml(
 
   const labelInner = `
         <div class="label" style="${labelRotate}">
-          ${nameBlock}
-          ${barcodeBlock}
-          ${priceBlock}
+          <div class="label-scale">
+            ${nameBlock}
+            ${barcodeBlock}
+            ${priceBlock}
+          </div>
         </div>`
 
   const count = Math.min(99, Math.max(1, copies))
@@ -132,7 +143,7 @@ export function buildBarcodeLabelHtml(
       height: ${cfg.heightMm}mm;
       max-width: ${cfg.widthMm}mm;
       max-height: ${cfg.heightMm}mm;
-      padding: ${cfg.stripTopMm}mm ${cfg.stripRightMm}mm ${cfg.stripBottomMm}mm ${cfg.stripLeftMm}mm;
+      padding: ${padTop}mm ${padRight}mm ${padBottom}mm ${padLeft}mm;
       display: flex;
       align-items: stretch;
       justify-content: ${flexMain};
@@ -150,6 +161,17 @@ export function buildBarcodeLabelHtml(
       align-items: ${crossAlign};
       overflow: hidden;
       text-align: ${anchor};
+    }
+    .label-scale {
+      width: ${scaleWidthPct}%;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: ${crossAlign};
+      text-align: ${anchor};
+      transform: scale(${scale.toFixed(3)});
+      transform-origin: ${scaleOrigin};
+      overflow: hidden;
     }
     .label-name {
       flex: 0 0 auto;

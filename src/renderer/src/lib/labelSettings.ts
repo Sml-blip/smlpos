@@ -1,5 +1,5 @@
 import type { LabelPrintConfig, LabelTextAlign } from './printManager'
-import { DEFAULT_LABEL_CONFIG, LABEL_SETTING_KEYS } from './printManager'
+import { DEFAULT_LABEL_CONFIG, LABEL_SETTING_KEYS, LABEL_SAFE_RIGHT_MM } from './printManager'
 
 const api = window.api
 
@@ -27,7 +27,10 @@ export function labelConfigFromSettings(all: Record<string, string>): LabelPrint
     widthMm: parseNum(all.impression_label_width, DEFAULT_LABEL_CONFIG.widthMm),
     heightMm: parseNum(all.impression_label_height, DEFAULT_LABEL_CONFIG.heightMm),
     stripLeftMm: parseNum(all.impression_label_strip_left, DEFAULT_LABEL_CONFIG.stripLeftMm),
-    stripRightMm: parseNum(all.impression_label_strip_right, DEFAULT_LABEL_CONFIG.stripRightMm),
+    stripRightMm: normalizeStripRight(
+      parseNum(all.impression_label_strip_right, DEFAULT_LABEL_CONFIG.stripRightMm),
+      parseNum(all.impression_label_width, DEFAULT_LABEL_CONFIG.widthMm),
+    ),
     stripTopMm: parseNum(all.impression_label_strip_top, DEFAULT_LABEL_CONFIG.stripTopMm),
     stripBottomMm: parseNum(all.impression_label_strip_bottom, DEFAULT_LABEL_CONFIG.stripBottomMm),
     rotationDeg: rot === 180 ? 180 : 0,
@@ -46,12 +49,19 @@ export function labelConfigFromSettings(all: Record<string, string>): LabelPrint
     gapNameBarcodeMm: parseNum(all.impression_label_gap_name_bar, DEFAULT_LABEL_CONFIG.gapNameBarcodeMm),
     gapBarcodePriceMm: parseNum(all.impression_label_gap_bar_price, DEFAULT_LABEL_CONFIG.gapBarcodePriceMm),
     contentVAlign: parseContentVAlign(all.impression_label_valign),
+    contentScalePct: clamp(parseNum(all.impression_label_content_scale, DEFAULT_LABEL_CONFIG.contentScalePct), 70, 200),
   }
 }
 
 function parseContentVAlign(raw: string | undefined): LabelPrintConfig['contentVAlign'] {
   if (raw === 'center' || raw === 'bottom' || raw === 'space-between') return raw
   return 'top'
+}
+
+/** Legacy saves used 1.3–3mm; 40mm label printers need ~8mm right safe zone. */
+function normalizeStripRight(stripRightMm: number, widthMm: number): number {
+  if (widthMm <= 45 && stripRightMm < LABEL_SAFE_RIGHT_MM) return LABEL_SAFE_RIGHT_MM
+  return stripRightMm
 }
 
 export function settingsFromLabelConfig(cfg: LabelPrintConfig): Record<string, string> {
@@ -78,6 +88,7 @@ export function settingsFromLabelConfig(cfg: LabelPrintConfig): Record<string, s
     impression_label_gap_name_bar: String(cfg.gapNameBarcodeMm),
     impression_label_gap_bar_price: String(cfg.gapBarcodePriceMm),
     impression_label_valign: cfg.contentVAlign,
+    impression_label_content_scale: String(cfg.contentScalePct),
   }
 }
 
@@ -116,6 +127,7 @@ export function mergeLabelConfig(partial?: Partial<LabelPrintConfig>): LabelPrin
   const base = { ...DEFAULT_LABEL_CONFIG, ...partial }
   return {
     ...base,
+    stripRightMm: normalizeStripRight(base.stripRightMm, base.widthMm),
     rotationDeg: partial?.rotationDeg === 180 ? 180 : partial?.rotationDeg === 0 ? 0 : base.rotationDeg,
     nameMaxLines: partial?.nameMaxLines === 1 ? 1 : partial?.nameMaxLines === 3 ? 3 : base.nameMaxLines,
     textAlign:

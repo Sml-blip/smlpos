@@ -37,18 +37,20 @@ export interface LabelPrintConfig {
   gapBarcodePriceMm: number
   /** Vertical placement of content block inside the label */
   contentVAlign: 'top' | 'center' | 'bottom' | 'space-between'
+  /** Scale all label content (name + barcode + price), 70–200% */
+  contentScalePct: number
 }
 
 export const DEFAULT_LABEL_CONFIG: LabelPrintConfig = {
   widthMm: 40,
   heightMm: 19.9,
   stripLeftMm: 1,
-  stripRightMm: 3,
+  stripRightMm: 8,
   stripTopMm: 0.35,
   stripBottomMm: 0.35,
   rotationDeg: 0,
   barHeightMm: 5.8,
-  barMarginMm: 3.5,
+  barMarginMm: 1,
   moduleWidthMaxMm: 0.38,
   showName: true,
   showPrice: true,
@@ -62,6 +64,23 @@ export const DEFAULT_LABEL_CONFIG: LabelPrintConfig = {
   gapNameBarcodeMm: 0.2,
   gapBarcodePriceMm: 0.2,
   contentVAlign: 'top',
+  contentScalePct: 100,
+}
+
+/** Gainscha / 40mm label printers often have ~8mm non-printable zone on the right. */
+export const LABEL_SAFE_RIGHT_MM = 8
+
+export function effectiveLabelMargins(cfg: Pick<LabelPrintConfig, 'widthMm' | 'heightMm' | 'stripLeftMm' | 'stripRightMm' | 'stripTopMm' | 'stripBottomMm'>) {
+  const minRight = cfg.widthMm <= 45 ? LABEL_SAFE_RIGHT_MM : 3
+  const stripRightMm = Math.max(cfg.stripRightMm, minRight)
+  return {
+    stripLeftMm: cfg.stripLeftMm,
+    stripRightMm,
+    stripTopMm: cfg.stripTopMm,
+    stripBottomMm: cfg.stripBottomMm,
+    contentW: Math.max(1, cfg.widthMm - cfg.stripLeftMm - stripRightMm),
+    contentH: Math.max(1, cfg.heightMm - cfg.stripTopMm - cfg.stripBottomMm),
+  }
 }
 
 export const LABEL_SETTING_KEYS = [
@@ -87,6 +106,7 @@ export const LABEL_SETTING_KEYS = [
   'impression_label_gap_name_bar',
   'impression_label_gap_bar_price',
   'impression_label_valign',
+  'impression_label_content_scale',
 ] as const
 
 export interface PrintJob {

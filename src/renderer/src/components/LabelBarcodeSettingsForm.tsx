@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { LabelPrintConfig, LabelTextAlign } from '../lib/printManager'
 
 type Variant = 'modal' | 'settings'
@@ -9,16 +10,63 @@ interface LabelBarcodeSettingsFormProps {
   saveState?: 'idle' | 'saving' | 'saved'
 }
 
-function num(
-  raw: string,
-  fallback: number,
-  min: number,
-  max: number,
-  decimals = 1,
-): number {
-  const n = parseFloat(raw.replace(',', '.'))
-  if (!Number.isFinite(n)) return fallback
-  return Math.min(max, Math.max(min, Number(n.toFixed(decimals))))
+interface NumInputProps {
+  value: number
+  onCommit: (value: number) => void
+  min: number
+  max: number
+  decimals?: number
+  className?: string
+}
+
+/** Text input with local draft — fixes broken typing on controlled number fields. */
+function NumInput({ value, onCommit, min, max, decimals = 1, className }: NumInputProps) {
+  const [draft, setDraft] = useState(String(value))
+  const [focused, setFocused] = useState(false)
+
+  useEffect(() => {
+    if (!focused) setDraft(formatDraft(value, decimals))
+  }, [value, focused, decimals])
+
+  function formatDraft(n: number, d: number): string {
+    return d === 0 ? String(Math.round(n)) : String(Number(n.toFixed(d)))
+  }
+
+  function commit(raw: string) {
+    const t = raw.trim().replace(',', '.')
+    if (!t || t === '.' || t === '-') {
+      setDraft(formatDraft(value, decimals))
+      return
+    }
+    const n = parseFloat(t)
+    if (!Number.isFinite(n)) {
+      setDraft(formatDraft(value, decimals))
+      return
+    }
+    const clamped = Math.min(max, Math.max(min, Number(n.toFixed(decimals))))
+    onCommit(clamped)
+    setDraft(formatDraft(clamped, decimals))
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className={className}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false)
+        commit(draft)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur()
+        }
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  )
 }
 
 export default function LabelBarcodeSettingsForm({
@@ -57,37 +105,63 @@ export default function LabelBarcodeSettingsForm({
       )}
 
       <div className={sectionClass}>
+        <div className={sectionTitle}>Échelle contenu</div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <label className={labelClass.replace(' mb-0.5', '').replace(' mb-1', '')}>
+              Taille globale · {cfg.contentScalePct}%
+            </label>
+            <span className="text-[10px] font-bold text-text-primary tabular-nums">{cfg.contentScalePct}%</span>
+          </div>
+          <input
+            type="range"
+            min={70}
+            max={200}
+            step={1}
+            value={cfg.contentScalePct}
+            className="w-full accent-accent-500"
+            onChange={(e) => set('contentScalePct', parseInt(e.target.value, 10))}
+          />
+          <div className="flex justify-between text-[9px] text-text-secondary">
+            <span>70%</span>
+            <span>100%</span>
+            <span>200%</span>
+          </div>
+        </div>
+      </div>
+
+      <div className={sectionClass}>
         <div className={sectionTitle}>Format étiquette</div>
         <div className={gridClass}>
           <div>
             <label className={labelClass}>Largeur (mm)</label>
-            <input type="number" min={10} max={120} step={0.1} value={cfg.widthMm} className={inputClass}
-              onChange={e => set('widthMm', num(e.target.value, cfg.widthMm, 10, 120))} />
+            <NumInput value={cfg.widthMm} min={10} max={120} decimals={1} className={inputClass}
+              onCommit={(v) => set('widthMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Hauteur (mm)</label>
-            <input type="number" min={5} max={80} step={0.1} value={cfg.heightMm} className={inputClass}
-              onChange={e => set('heightMm', num(e.target.value, cfg.heightMm, 5, 80))} />
+            <NumInput value={cfg.heightMm} min={5} max={80} decimals={1} className={inputClass}
+              onCommit={(v) => set('heightMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Marge gauche (mm)</label>
-            <input type="number" min={0} max={20} step={0.1} value={cfg.stripLeftMm} className={inputClass}
-              onChange={e => set('stripLeftMm', num(e.target.value, cfg.stripLeftMm, 0, 20))} />
+            <NumInput value={cfg.stripLeftMm} min={0} max={20} decimals={1} className={inputClass}
+              onCommit={(v) => set('stripLeftMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Marge droite (mm)</label>
-            <input type="number" min={0} max={20} step={0.1} value={cfg.stripRightMm} className={inputClass}
-              onChange={e => set('stripRightMm', num(e.target.value, cfg.stripRightMm, 0, 20))} />
+            <NumInput value={cfg.stripRightMm} min={0} max={20} decimals={1} className={inputClass}
+              onCommit={(v) => set('stripRightMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Marge haut (mm)</label>
-            <input type="number" min={0} max={10} step={0.1} value={cfg.stripTopMm} className={inputClass}
-              onChange={e => set('stripTopMm', num(e.target.value, cfg.stripTopMm, 0, 10))} />
+            <NumInput value={cfg.stripTopMm} min={0} max={10} decimals={1} className={inputClass}
+              onCommit={(v) => set('stripTopMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Marge bas (mm)</label>
-            <input type="number" min={0} max={10} step={0.1} value={cfg.stripBottomMm} className={inputClass}
-              onChange={e => set('stripBottomMm', num(e.target.value, cfg.stripBottomMm, 0, 10))} />
+            <NumInput value={cfg.stripBottomMm} min={0} max={10} decimals={1} className={inputClass}
+              onCommit={(v) => set('stripBottomMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Rotation</label>
@@ -115,18 +189,18 @@ export default function LabelBarcodeSettingsForm({
         <div className={gridClass}>
           <div>
             <label className={labelClass}>Hauteur barres (mm)</label>
-            <input type="number" min={3} max={15} step={0.1} value={cfg.barHeightMm} className={inputClass}
-              onChange={e => set('barHeightMm', num(e.target.value, cfg.barHeightMm, 3, 15))} />
+            <NumInput value={cfg.barHeightMm} min={3} max={15} decimals={1} className={inputClass}
+              onCommit={(v) => set('barHeightMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Marge latérale code (mm)</label>
-            <input type="number" min={0} max={15} step={0.1} value={cfg.barMarginMm} className={inputClass}
-              onChange={e => set('barMarginMm', num(e.target.value, cfg.barMarginMm, 0, 15))} />
+            <NumInput value={cfg.barMarginMm} min={0} max={15} decimals={1} className={inputClass}
+              onCommit={(v) => set('barMarginMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Épaisseur barres max (mm)</label>
-            <input type="number" min={0.15} max={0.6} step={0.01} value={cfg.moduleWidthMaxMm} className={inputClass}
-              onChange={e => set('moduleWidthMaxMm', num(e.target.value, cfg.moduleWidthMaxMm, 0.15, 0.6, 2))} />
+            <NumInput value={cfg.moduleWidthMaxMm} min={0.15} max={0.6} decimals={2} className={inputClass}
+              onCommit={(v) => set('moduleWidthMaxMm', v)} />
           </div>
           <div className={toggleRow}>
             <span className="text-[10px] font-semibold text-text-secondary">Numéro sous le code</span>
@@ -141,13 +215,13 @@ export default function LabelBarcodeSettingsForm({
         <div className={gridClass}>
           <div>
             <label className={labelClass}>Nom → code-barres (mm)</label>
-            <input type="number" min={0} max={8} step={0.1} value={cfg.gapNameBarcodeMm} className={inputClass}
-              onChange={e => set('gapNameBarcodeMm', num(e.target.value, cfg.gapNameBarcodeMm, 0, 8))} />
+            <NumInput value={cfg.gapNameBarcodeMm} min={0} max={8} decimals={1} className={inputClass}
+              onCommit={(v) => set('gapNameBarcodeMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Code-barres → prix (mm)</label>
-            <input type="number" min={0} max={8} step={0.1} value={cfg.gapBarcodePriceMm} className={inputClass}
-              onChange={e => set('gapBarcodePriceMm', num(e.target.value, cfg.gapBarcodePriceMm, 0, 8))} />
+            <NumInput value={cfg.gapBarcodePriceMm} min={0} max={8} decimals={1} className={inputClass}
+              onCommit={(v) => set('gapBarcodePriceMm', v)} />
           </div>
           <div>
             <label className={labelClass}>Position verticale</label>
@@ -175,13 +249,13 @@ export default function LabelBarcodeSettingsForm({
           </div>
           <div>
             <label className={labelClass}>Police nom (pt)</label>
-            <input type="number" min={4} max={12} step={0.5} value={cfg.nameFontPt} className={inputClass}
-              onChange={e => set('nameFontPt', num(e.target.value, cfg.nameFontPt, 4, 12, 1))} />
+            <NumInput value={cfg.nameFontPt} min={4} max={12} decimals={1} className={inputClass}
+              onCommit={(v) => set('nameFontPt', v)} />
           </div>
           <div>
             <label className={labelClass}>Police prix (pt)</label>
-            <input type="number" min={5} max={14} step={0.5} value={cfg.priceFontPt} className={inputClass}
-              onChange={e => set('priceFontPt', num(e.target.value, cfg.priceFontPt, 5, 14, 1))} />
+            <NumInput value={cfg.priceFontPt} min={5} max={14} decimals={1} className={inputClass}
+              onCommit={(v) => set('priceFontPt', v)} />
           </div>
           <div>
             <label className={labelClass}>Lignes nom max</label>
@@ -200,13 +274,13 @@ export default function LabelBarcodeSettingsForm({
         <div className={gridClass}>
           <div>
             <label className={labelClass}>Résolution DPI</label>
-            <input type="number" min={72} max={600} step={1} value={cfg.dpi} className={inputClass}
-              onChange={e => set('dpi', Math.round(num(e.target.value, cfg.dpi, 72, 600, 0)))} />
+            <NumInput value={cfg.dpi} min={72} max={600} decimals={0} className={inputClass}
+              onCommit={(v) => set('dpi', Math.round(v))} />
           </div>
           <div>
             <label className={labelClass}>Copies par défaut</label>
-            <input type="number" min={1} max={99} step={1} value={cfg.defaultCopies} className={inputClass}
-              onChange={e => set('defaultCopies', Math.round(num(e.target.value, cfg.defaultCopies, 1, 99, 0)))} />
+            <NumInput value={cfg.defaultCopies} min={1} max={99} decimals={0} className={inputClass}
+              onCommit={(v) => set('defaultCopies', Math.round(v))} />
           </div>
         </div>
         {!compact && (
@@ -244,5 +318,6 @@ export function labelConfigPatchToSettings(patch: Partial<LabelPrintConfig>, cur
     impression_label_gap_name_bar: String(merged.gapNameBarcodeMm),
     impression_label_gap_bar_price: String(merged.gapBarcodePriceMm),
     impression_label_valign: merged.contentVAlign,
+    impression_label_content_scale: String(merged.contentScalePct),
   }
 }
