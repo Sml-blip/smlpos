@@ -58,7 +58,7 @@ export default function App() {
   const [currentPin, setCurrentPin] = useState('')
   const [appVersion, setAppVersion] = useState('1.9.2')
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { status: updateStatus, showModal: showUpdateModal, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
+  const { status: updateStatus, showModal: showUpdateModal, isManualChecking, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
 
   const setupLock = useCallback(async () => {
     try {
@@ -184,7 +184,7 @@ export default function App() {
         {activeTab === 'clients'        && <ClientsTab />}
         {activeTab === 'personnels'     && <PersonnelsTab />}
         {activeTab === 'documents'      && <DocumentsTab />}
-        {activeTab === 'settings'       && <SettingsTab onCheckForUpdates={checkForUpdates} />}
+        {activeTab === 'settings'       && <SettingsTab onCheckForUpdates={checkForUpdates} updateChecking={isManualChecking} />}
       </div>
 
       <StatusBar />

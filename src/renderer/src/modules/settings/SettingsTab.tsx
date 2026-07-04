@@ -96,7 +96,7 @@ const DEFAULTS: Record<string, string> = {
   boutique_banque:        '',
 }
 
-export default function SettingsTab({ onCheckForUpdates }: { onCheckForUpdates?: (manual?: boolean) => void | Promise<void> }) {
+export default function SettingsTab({ onCheckForUpdates, updateChecking }: { onCheckForUpdates?: (manual?: boolean) => void | Promise<void>; updateChecking?: boolean }) {
   const [activeSection, setActiveSection] = useState<TabId>('facture')
   const [values, setValues] = useState<Record<string, string>>(DEFAULTS)
   const [loading, setLoading] = useState(false)
@@ -590,7 +590,7 @@ function SecuriteSection({ values, set, toggle, appVer }: { values: Record<strin
             <div className="flex justify-between"><span>Sync cloud</span><span className="font-semibold text-text-primary">Supabase</span></div>
           </div>
           <div className="mt-4 pt-4 border-t border-border">
-            <UpdateCheckButton onCheck={() => onCheckForUpdates?.(true)} />
+            <UpdateCheckButton onCheck={() => onCheckForUpdates?.(true)} checking={updateChecking} />
           </div>
         </Section>
       </Card>
@@ -1322,30 +1322,12 @@ function SauvegardeSection({ values, set }: { values: Record<string, string>; se
   )
 }
 
-function UpdateCheckButton({ onCheck }: { onCheck?: () => void | Promise<void> }) {
-  const [checking, setChecking] = useState(false)
+function UpdateCheckButton({ onCheck, checking }: { onCheck?: () => void | Promise<void>; checking?: boolean }) {
   return (
     <button
       type="button"
       disabled={checking}
-      onClick={async () => {
-        if (onCheck) {
-          setChecking(true)
-          try {
-            await onCheck()
-          } finally {
-            setChecking(false)
-          }
-          return
-        }
-        if (!api.updateCheck) {
-          showToast('info', 'Disponible uniquement dans l\'application installée')
-          return
-        }
-        setChecking(true)
-        await api.updateCheck(true)
-        setChecking(false)
-      }}
+      onClick={() => { void onCheck?.() }}
       className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-accent-500 hover:bg-accent-600 disabled:opacity-50 rounded-xl"
     >
       <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />

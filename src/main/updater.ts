@@ -5,6 +5,8 @@ import { createEmergencyBackup } from './backupService'
 
 const { autoUpdater } = updaterPkg
 
+const CHECK_TIMEOUT_MS = 30000
+
 /** Errors when no GitHub release exists yet — don't block the POS on startup. */
 function isBenignUpdateError(message: string): boolean {
   const m = message.toLowerCase()
@@ -36,6 +38,15 @@ function formatReleaseNotes(notes: UpdateInfo['releaseNotes']): string | undefin
   return undefined
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms)
+    }),
+  ])
+}
+
 export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
   if (!app.isPackaged) {
     console.log('[updater] Disabled in development (packaged app only)')
@@ -51,7 +62,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   }
 
   autoUpdater.on('checking-for-update', () => {
-    if (manualCheckActive) send({ state: 'checking' })
+    // Manual checks use button spinner only — no blocking modal
   })
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
@@ -93,17 +104,24 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     if (!app.isPackaged) return { ok: false, reason: 'dev' }
     manualCheckActive = options?.manual === true
     try {
-      await autoUpdater.checkForUpdates()
+      await withTimeout(
+        autoUpdater.checkForUpdates(),
+        CHECK_TIMEOUT_MS,
+        'Délai dépassé — vérifiez votre connexion Internet.',
+      )
       return { ok: true }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      if (!manualCheckActive && isBenignUpdateError(message)) {
+      if (manualCheckActive && isBenignUpdateError(message)) {
+        send({ state: 'not-available', version: app.getVersion() })
         return { ok: true, reason: 'no-release' }
       }
-      send({ state: 'error', message })
+      if (manualCheckActive) {
+        send({ state: 'error', message })
+      }
       return { ok: false, reason: message }
     } finally {
-      setTimeout(() => { manualCheckActive = false }, 5000)
+      manualCheckActive = false
     }
   })
 
