@@ -2251,6 +2251,7 @@ function setupIpcHandlers() {
     if (filters.type_document) { sql += ' AND type_document = ?'; params.push(filters.type_document) }
     if (filters.statut) { sql += ' AND statut = ?'; params.push(filters.statut) }
     if (filters.client_id) { sql += ' AND client_id = ?'; params.push(filters.client_id) }
+    if (filters.vente_id) { sql += ' AND vente_id = ?'; params.push(filters.vente_id) }
     if (filters.fournisseur_id) { sql += ' AND fournisseur_id = ?'; params.push(filters.fournisseur_id) }
     if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom + 'T00:00:00.000Z') }
     if (filters.dateTo) { sql += ' AND created_at <= ?'; params.push(filters.dateTo + 'T23:59:59.999Z') }
@@ -2272,6 +2273,12 @@ function setupIpcHandlers() {
       docLignes = lignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
       if (docLignes.length === 0) {
         return { success: false, error: 'Aucun produit facturé (F) — conversion impossible' }
+      }
+      const existing = db.prepare(
+        `SELECT id, numero FROM documents WHERE vente_id = ? AND type_document = ? AND statut NOT IN ('ANNULE', 'REVOQUE') LIMIT 1`,
+      ).get(normalizedDoc.vente_id, normalizedDoc.type_document) as { id: string; numero: string } | undefined
+      if (existing) {
+        return { success: true, id: existing.id, numero: existing.numero, alreadyExists: true }
       }
     }
     db.transaction(() => {

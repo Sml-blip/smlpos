@@ -57,6 +57,9 @@ export default function DocumentPreviewModal({
   const [showInvoiceEdit, setShowInvoiceEdit] = useState(false)
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   const previewRef = useRef<HTMLDivElement>(null)
+  const printRef = useRef<HTMLDivElement>(null)
+  const docIdRef = useRef('')
+  const creatingRef = useRef(false)
 
   const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
   const lignesItems = useMemo(
@@ -111,6 +114,26 @@ export default function DocumentPreviewModal({
     })
   }, [])
 
+  useEffect(() => {
+    docIdRef.current = docId
+  }, [docId])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadData('Recherche document', async () => {
+      const rows = await api.documentsList({ vente_id: vente.id, type_document: typeDoc }) as { id: string; numero: string; statut?: string }[]
+      const existing = rows?.find(d => d.statut !== 'ANNULE' && d.statut !== 'REVOQUE')
+      if (existing && !cancelled && !docIdRef.current) {
+        setDocId(existing.id)
+        docIdRef.current = existing.id
+        setDocNumero(existing.numero)
+        setDocCreated(true)
+      }
+      return existing
+    }, { silent: true })
+    return () => { cancelled = true }
+  }, [vente.id, typeDoc])
+
   const getNextNumero = async (): Promise<string> => {
     const year = new Date().getFullYear()
     const yy = String(year).slice(-2)
@@ -126,55 +149,92 @@ export default function DocumentPreviewModal({
   }
 
   const createDocument = async (): Promise<string> => {
-    const numero = await getNextNumero()
-    const now = new Date().toISOString()
-    const docId = generateId()
+    if (docIdRef.current) return docNumero
 
-    const docPayload = {
-      id: docId,
-      numero,
-      type_document: typeDoc,
-      statut: 'ACTIF',
-      shift_id: currentShift?.id ?? null,
-      vente_id: vente.id,
-      client_id: clientForm.clientId ?? null,
-      client_nom: clientForm.nom.trim() || 'Client Passager',
-      client_tel: clientForm.tel.trim() || null,
-      client_adresse: clientForm.adresse.trim() || null,
-      client_matricule: clientForm.matricule.trim() || null,
-      total_ht: lineSums.total_ht,
-      total_tva: lineSums.total_tva,
-      total_ttc: lineSums.total_ttc,
-      statut_paiement: 'PAYE',
-      montant_paye: lineSums.total_ttc,
-      timbre: previewDoc.timbre ?? 1,
-      created_at: now,
-      updated_at: now,
+    const rows = await api.documentsList({ vente_id: vente.id, type_document: typeDoc }) as { id: string; numero: string; statut?: string }[]
+    const existing = rows?.find(d => d.statut !== 'ANNULE' && d.statut !== 'REVOQUE')
+    if (existing) {
+      setDocId(existing.id)
+      docIdRef.current = existing.id
+      setDocNumero(existing.numero)
+      return existing.numero
     }
 
-    const builtLines = lignesItems.map((item, idx) => buildLineFromCart(item, idx))
-    const lignes = lignesItems.map((item, idx) => {
-      const line = builtLines[idx]
-      return {
-        id: generateId(),
-        document_id: docId,
-        produit_id: item.produit_id ?? null,
-        designation: line.designation,
-        quantite: line.quantite,
-        prix_unitaire: line.prix_unitaire,
-        remise_pct: line.remise_pct,
-        tva_taux: line.tva_taux,
-        total_ht: line.total_ht,
-        total_tva: line.total_tva,
-        total_ttc: line.total_ttc,
-        type_produit: item.type_produit,
-        numero_serie: line.numero_serie ?? null,
-      }
-    })
+    if (creatingRef.current) {
+      throw new Error('Création déjà en cours')
+    }
+    creatingRef.current = true
+    try {
+      const numero = await getNextNumero()
+      const now = new Date().toISOString()
+      const newDocId = generateId()
 
-    await api.documentsCreate(docPayload, lignes)
-    setDocId(docId)
-    return numero
+      const docPayload = {
+        id: newDocId,
+        numero,
+        type_document: typeDoc,
+        statut: 'ACTIF',
+        shift_id: currentShift?.id ?? null,
+        vente_id: vente.id,
+        client_id: clientForm.clientId ?? null,
+        client_nom: clientForm.nom.trim() || 'Client Passager',
+        client_tel: clientForm.tel.trim() || null,
+        client_adresse: clientForm.adresse.trim() || null,
+        client_matricule: clientForm.matricule.trim() || null,
+        total_ht: lineSums.total_ht,
+        total_tva: lineSums.total_tva,
+        total_ttc: lineSums.total_ttc,
+        statut_paiement: 'PAYE',
+        montant_paye: lineSums.total_ttc,
+        timbre: previewDoc.timbre ?? 1,
+        created_at: now,
+        updated_at: now,
+      }
+
+      const builtLines = lignesItems.map((item, idx) => buildLineFromCart(item, idx))
+      const lignes = lignesItems.map((item, idx) => {
+        const line = builtLines[idx]
+        return {
+          id: generateId(),
+          document_id: newDocId,
+          produit_id: item.produit_id ?? null,
+          designation: line.designation,
+          quantite: line.quantite,
+          prix_unitaire: line.prix_unitaire,
+          remise_pct: line.remise_pct,
+          tva_taux: line.tva_taux,
+          total_ht: line.total_ht,
+          total_tva: line.total_tva,
+          total_ttc: line.total_ttc,
+          type_produit: item.type_produit,
+          numero_serie: line.numero_serie ?? null,
+        }
+      })
+
+      const result = await api.documentsCreate(docPayload, lignes) as {
+        success?: boolean
+        error?: string
+        id?: string
+        numero?: string
+        alreadyExists?: boolean
+      }
+      if (result?.success === false) {
+        throw new Error(result.error || 'Échec création document')
+      }
+      const savedId = result?.id ?? newDocId
+      const savedNumero = result?.numero ?? numero
+      setDocId(savedId)
+      docIdRef.current = savedId
+      setDocNumero(savedNumero)
+      return savedNumero
+    } finally {
+      creatingRef.current = false
+    }
+  }
+
+  const ensureDocument = async (): Promise<string> => {
+    if (docIdRef.current) return docNumero
+    return createDocument()
   }
 
   const reloadDocLines = async () => {
@@ -184,7 +244,7 @@ export default function DocumentPreviewModal({
 
   const handleConfirm = async () => {
     await runAction('Création document', async () => {
-      const numero = await createDocument()
+      const numero = await ensureDocument()
       setDocNumero(numero)
       setDocCreated(true)
     }, { setLoading, successMessage: 'Document créé' })
@@ -192,10 +252,8 @@ export default function DocumentPreviewModal({
 
   const handlePrintClick = async () => {
     await runAction('Préparation impression', async () => {
-      if (!docId) {
-        const numero = await createDocument()
-        setDocNumero(numero)
-      }
+      const numero = await ensureDocument()
+      setDocNumero(numero)
       await new Promise<void>(resolve => setTimeout(resolve, 80))
       setShowPrintDialog(true)
     }, { setLoading })
@@ -206,13 +264,15 @@ export default function DocumentPreviewModal({
       <PrintDialog
         title={typeDoc === 'FACTURE_VENTE' ? 'Imprimer facture' : 'Imprimer bon de livraison'}
         subtitle={docNumero || previewDoc.numero}
-        getPrintHtml={() => previewRef.current?.innerHTML ?? ''}
+        getPrintHtml={() => printRef.current?.innerHTML ?? ''}
         preview={
-          <InvoicePrintTemplate
-            doc={{ ...previewDoc, numero: docNumero || previewDoc.numero }}
-            lignes={docLignes}
-            settings={settings}
-          />
+          <div ref={printRef}>
+            <InvoicePrintTemplate
+              doc={{ ...previewDoc, numero: docNumero || previewDoc.numero }}
+              lignes={docLignes}
+              settings={settings}
+            />
+          </div>
         }
         pageSize="A4"
         settingsKey="impression_printer_a4"

@@ -52,6 +52,13 @@ export default function PrintDialog({
     let cancelled = false
     let attempts = 0
 
+    const resolveHtml = (): string => {
+      if (documentHtml?.trim()) return documentHtml
+      const fromGetter = getPrintHtmlRef.current?.() ?? ''
+      if (fromGetter.trim()) return fromGetter
+      return hiddenRef.current?.innerHTML ?? ''
+    }
+
     const finish = (html: string) => {
       if (cancelled || openedRef.current) return
       openedRef.current = true
@@ -71,7 +78,7 @@ export default function PrintDialog({
 
     const tryOpen = () => {
       if (cancelled || openedRef.current) return
-      const html = documentHtml ?? getPrintHtmlRef.current?.() ?? hiddenRef.current?.innerHTML ?? ''
+      const html = resolveHtml()
       if (!html.trim() && preview && attempts < 12) {
         attempts += 1
         window.requestAnimationFrame(tryOpen)
