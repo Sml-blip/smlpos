@@ -253,15 +253,20 @@ export default function DocumentsTab() {
 
   useEffect(() => { load() }, [load])
 
-  const fuseIndex = useMemo(() => new Fuse(docs, {
+  const tabFiltered = useMemo(() => {
+    if (subTab === 'TOUS') return docs
+    return docs.filter(d => d.type_document === subTab)
+  }, [docs, subTab])
+
+  const fuseIndex = useMemo(() => new Fuse(tabFiltered, {
     keys: ['numero', 'client_nom', 'fournisseur_nom'],
     threshold: 0.4, minMatchCharLength: 2, ignoreLocation: true,
-  }), [docs])
+  }), [tabFiltered])
 
   const filtered = useMemo(() => {
     if (search.length >= 2) return fuseIndex.search(search, { limit: 200 }).map(r => r.item)
-    return docs
-  }, [search, docs, fuseIndex])
+    return tabFiltered
+  }, [search, tabFiltered, fuseIndex])
 
   const tiers = (d: DocRow) => d.client_nom || d.fournisseur_nom || '—'
 
@@ -380,7 +385,7 @@ export default function DocumentsTab() {
 
   // ── Export Format A — Bilan Factures Achat ──
   const exportAchats = () => {
-    const achats = docs.filter(d => d.type_document === 'FACTURE_ACHAT' || d.type_document === 'FACTURE_ACHAT_BL')
+    const achats = tabFiltered.filter(d => d.type_document === 'FACTURE_ACHAT' || d.type_document === 'FACTURE_ACHAT_BL')
     const rows = achats.map(f => ({
       'N° FACTURE':    f.numero,
       'DATE DE FACTURE': format(new Date(f.created_at), 'dd/MM/yyyy'),
@@ -419,7 +424,7 @@ export default function DocumentsTab() {
 
   // ── Export Format B — Bilan Factures Vente ──
   const exportVentes = () => {
-    const ventes = docs.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'DEVIS' || d.type_document === 'BON_LIVRAISON' || d.type_document === 'AVOIR'))
+    const ventes = tabFiltered.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'DEVIS' || d.type_document === 'BON_LIVRAISON' || d.type_document === 'AVOIR'))
     const rows = ventes.map(f => ({
       'DOCUMENT':  f.numero,
       'CLIENT':    f.client_nom ?? '',

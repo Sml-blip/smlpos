@@ -82,13 +82,17 @@ export function serialNumsForLine(
   return syncSerialNumsForQty(l.numeros_serie, l.quantite)
 }
 
+export function lineHasInventoryLink(l: FactureLigneState): boolean {
+  return !!l.produit_id || !!l.pendingProduct
+}
+
 export function validateSerialLines(
   lignes: FactureLigneState[],
   produits: { id: string; has_serial_number?: number; numero_serie?: string | null; nom?: string }[],
 ): string | null {
   for (const l of lignes) {
     if (!lineRequiresSerialValidation(l)) continue
-    if (!l.produit_id) {
+    if (!lineHasInventoryLink(l)) {
       return `Ligne « ${l.designation || 'sans nom'} » : liez un produit inventaire pour les numéros de série`
     }
     const nums = syncSerialNumsForQty(l.numeros_serie, l.quantite)

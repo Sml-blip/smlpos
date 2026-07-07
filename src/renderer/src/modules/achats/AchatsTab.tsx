@@ -13,6 +13,7 @@ import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePr
 import {
   emptyFactureLigne,
   ligneBarcodeInfo,
+  lineHasInventoryLink,
   lineTracksSerial,
   mergeProductIntoLine,
   newLineFromProduct,
@@ -57,6 +58,7 @@ export default function AchatsTab() {
   const [showFournisseurModal, setShowFournisseurModal] = useState(false)
   const [showFactureModal, setShowFactureModal] = useState(false)
   const [resumeDraftId, setResumeDraftId] = useState<string | null>(null)
+  const [showDraftPicker, setShowDraftPicker] = useState(false)
   const [draftCount, setDraftCount] = useState(0)
   const [editingFournisseur, setEditingFournisseur] = useState<Fournisseur | null>(null)
   const [showPaiementModal, setShowPaiementModal] = useState<FactureFournisseur | null>(null)
@@ -115,12 +117,7 @@ export default function AchatsTab() {
           </button>
           {draftCount > 0 && (
             <button
-              onClick={async () => {
-                const drafts = await api.facturesFournisseursListDrafts?.() as { id: string }[] | undefined
-                const first = drafts?.[0]
-                setResumeDraftId(first?.id ?? null)
-                setShowFactureModal(true)
-              }}
+              onClick={() => setShowDraftPicker(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm font-semibold text-blue-800 transition-colors"
             >
               <FileText size={14} /> Reprendre brouillon ({draftCount})
@@ -294,6 +291,71 @@ export default function AchatsTab() {
           onSaved={loadFournisseurs}
         />
       )}
+      {showDraftPicker && (
+        <DraftPickerModal
+          onClose={() => setShowDraftPicker(false)}
+          onSelect={(id) => {
+            setResumeDraftId(id)
+            setShowDraftPicker(false)
+            setShowFactureModal(true)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function DraftPickerModal({ onClose, onSelect }: { onClose: () => void; onSelect: (draftId: string) => void }) {
+  const [drafts, setDrafts] = useState<{
+    id: string
+    numero_facture?: string
+    fournisseur_nom?: string
+    ligne_count?: number
+    updated_at?: string
+    created_at?: string
+  }[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    void loadData('Chargement brouillons', async () => {
+      const rows = await api.facturesFournisseursListDrafts?.() as typeof drafts
+      setDrafts(rows ?? [])
+      return rows
+    }, { setLoading, silent: true })
+  }, [])
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[140] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h3 className="font-bold text-sm">Brouillons disponibles</h3>
+          <button type="button" onClick={onClose}><X size={18} className="text-text-muted" /></button>
+        </div>
+        <div className="max-h-[60vh] overflow-auto p-3 space-y-2">
+          {loading && <p className="text-sm text-text-muted text-center py-6">Chargement…</p>}
+          {!loading && drafts.length === 0 && (
+            <p className="text-sm text-text-muted text-center py-6">Aucun brouillon enregistré.</p>
+          )}
+          {drafts.map(d => {
+            const when = d.updated_at || d.created_at
+            return (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => onSelect(d.id)}
+                className="w-full text-left border border-border rounded-xl px-4 py-3 hover:bg-accent-50 hover:border-accent-400 transition-colors"
+              >
+                <div className="font-semibold text-sm text-text-primary">{d.numero_facture || 'Brouillon sans numéro'}</div>
+                <div className="text-xs text-text-secondary mt-1">
+                  {d.fournisseur_nom || 'Fournisseur non défini'}
+                  {d.ligne_count != null ? ` · ${d.ligne_count} ligne${d.ligne_count !== 1 ? 's' : ''}` : ''}
+                  {when ? ` · ${new Date(when).toLocaleString('fr-FR')}` : ''}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1344,14 +1406,37 @@ function FactureFournisseurModal({
   useEffect(() => {
     if (!produits.length) return
     setLignes(prev => prev.map(l => {
-      if (!l.produit_id || l.tracks_serial) return l
-      const p = produits.find(x => x.id === l.produit_id)
-      if (!p || !productTracksSerial(p)) return l
-      return {
-        ...l,
-        tracks_serial: true,
-        numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite),
+      if (l.produit_id) {
+        const p = produits.find(x => x.id === l.produit_id)
+        if (p) {
+          const merged = mergeProductIntoLine(l, p)
+          if (l.numeros_serie?.length) {
+            return {
+              ...merged,
+              tracks_serial: true,
+              numeros_serie: syncSerialNumsForQty(l.numeros_serie, merged.quantite),
+            }
+          }
+          return merged
+        }
       }
+      if (!l.produit_id && l.numeros_serie?.length && l.designation.trim()) {
+        const match = produits.find(p => p.nom.trim() === l.designation.trim())
+        if (match) {
+          return mergeProductIntoLine(
+            { ...l, tracks_serial: true, numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite) },
+            match,
+          )
+        }
+      }
+      if (l.numeros_serie?.length && (l.produit_id || l.pendingProduct)) {
+        return {
+          ...l,
+          tracks_serial: true,
+          numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite),
+        }
+      }
+      return l
     }))
   }, [produits])
 
@@ -1376,21 +1461,24 @@ function FactureFournisseurModal({
       setExoText(String(f.exo ?? ''))
       setTimbre(String(f.timbre ?? '1'))
       setRemiseGlobale(String(f.total_remise ?? '0'))
-      const loaded = (data.lignes ?? []).map((l) => ({
-        id: String(l.id),
-        designation: String(l.designation ?? ''),
-        quantite: Number(l.quantite) || 1,
-        nouveau_prix_achat: Number(l.nouveau_prix_achat) || 0,
-        tva_taux: Number(l.tva_taux) || 0,
-        produit_id: String(l.produit_id ?? ''),
-        pendingProduct: l.pending_product_json
-          ? JSON.parse(String(l.pending_product_json)) as PendingProduct
-          : undefined,
-        numeros_serie: l.numeros_serie_json
+      const loaded = (data.lignes ?? []).map((l) => {
+        const numeros_serie = l.numeros_serie_json
           ? JSON.parse(String(l.numeros_serie_json)) as string[]
-          : undefined,
-        tracks_serial: !!l.numeros_serie_json,
-      }))
+          : undefined
+        return {
+          id: String(l.id),
+          designation: String(l.designation ?? ''),
+          quantite: Number(l.quantite) || 1,
+          nouveau_prix_achat: Number(l.nouveau_prix_achat) || 0,
+          tva_taux: Number(l.tva_taux) || 0,
+          produit_id: String(l.produit_id ?? ''),
+          pendingProduct: l.pending_product_json
+            ? JSON.parse(String(l.pending_product_json)) as PendingProduct
+            : undefined,
+          numeros_serie,
+          tracks_serial: !!numeros_serie?.length,
+        } satisfies FactureLigneState
+      })
       setLignes(loaded.length > 0 ? loaded : [emptyFactureLigne()])
     }, { silent: true })
   }, [initialDraftId])
@@ -1631,6 +1719,11 @@ function FactureFournisseurModal({
   }
 
   const setLineSerialEnabled = (lineId: string, enabled: boolean, openModal = false) => {
+    const line = lignes.find(x => x.id === lineId)
+    if (enabled && line && !lineHasInventoryLink(line)) {
+      showToast('error', 'Liez d\'abord un produit inventaire avant d\'ajouter des numéros de série')
+      return
+    }
     setLignes(prev => prev.map(l => {
       if (l.id !== lineId) return l
       return {
@@ -1675,11 +1768,6 @@ function FactureFournisseurModal({
     if (!fournisseurId || !numeroFacture) return
     const filledLignes = lignes.filter(l => l.designation.trim())
     if (filledLignes.length === 0) return
-    const serialErr = validateSerialLines(filledLignes, produits)
-    if (serialErr) {
-      showToast('error', serialErr)
-      return
-    }
     const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
       const resolvedLignes: FactureLigneState[] = []
       let produitsSnapshot = [...produits]
@@ -1694,8 +1782,8 @@ function FactureFournisseurModal({
       }
       setProduits(produitsSnapshot)
 
-      const postCreateErr = validateSerialLines(resolvedLignes, produitsSnapshot)
-      if (postCreateErr) throw new Error(postCreateErr)
+      const serialErr = validateSerialLines(resolvedLignes, produitsSnapshot)
+      if (serialErr) throw new Error(serialErr)
 
       const factureId = generateId()
       const now = new Date().toISOString()

@@ -24,6 +24,7 @@ interface AchatLigne {
   nouveau_prix_achat: number
   tva_taux: number
   produit_id?: string
+  numeros_serie_json?: string | null
 }
 
 interface Props {
@@ -132,6 +133,7 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
             nouveau_prix_achat: Number(l.nouveau_prix_achat) || 0,
             tva_taux: Number(l.tva_taux) || 0,
             produit_id: l.produit_id ? String(l.produit_id) : undefined,
+            numeros_serie_json: l.numeros_serie_json ?? null,
           })))
         }
       } catch {
@@ -336,6 +338,7 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
           ancien_prix_achat: 0,
           nouveau_prix_achat: l.nouveau_prix_achat,
           tva_taux: exo ? 0 : l.tva_taux,
+          numeros_serie_json: l.numeros_serie_json ?? null,
         })), totals)
         if (res && !res.success) throw new Error(res.error || 'Échec enregistrement lignes')
       }
@@ -378,9 +381,19 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
           <button type="button" onClick={onClose}><X size={18} className="text-text-muted" /></button>
         </div>
 
-        {statutReception === 'ARRIVE' && mode === 'achat' && (
+        {mode === 'achat' && statutReception === 'NON_ARRIVE' && (
           <div className="mx-5 mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-            Correction d&apos;impression uniquement — stock non recalculé.
+            Bon de livraison non reçu — seules les lignes sont modifiées (stock à la réception).
+          </div>
+        )}
+        {mode === 'achat' && statutReception === 'ARRIVE' && (
+          <div className="mx-5 mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+            Les quantités modifiées mettent à jour le stock et les numéros de série liés.
+          </div>
+        )}
+        {mode === 'vente' && (
+          <div className="mx-5 mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+            Les lignes liées à une vente POS synchronisent automatiquement le stock et les S/N.
           </div>
         )}
 

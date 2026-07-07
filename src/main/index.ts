@@ -631,6 +631,81 @@ function setupIpcHandlers() {
   })
 
   // ─── Serial Numbers ───────────────────────────────────────────────────────
+  function parseSerialJson(numerosSerieJson: unknown): string[] {
+    if (!numerosSerieJson) return []
+    try {
+      const sns = typeof numerosSerieJson === 'string' ? JSON.parse(numerosSerieJson) : numerosSerieJson as string[]
+      return Array.isArray(sns) ? sns.map(s => String(s).trim()).filter(Boolean) : []
+    } catch {
+      return []
+    }
+  }
+
+  function achatLineAffectsInventory(facture: Record<string, unknown>): boolean {
+    if (facture.type === 'FACTURE_ACHAT_BL') return facture.statut_reception === 'ARRIVE'
+    return facture.statut_paiement !== 'BROUILLON' && facture.statut_paiement !== 'ANNULE'
+  }
+
+  function revertAchatLineInventory(line: Record<string, unknown>) {
+    const produitId = line.produit_id as string | null | undefined
+    const quantite = Number(line.quantite) || 0
+    if (!produitId || quantite <= 0) return
+    db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?').run(quantite, produitId)
+    for (const sn of parseSerialJson(line.numeros_serie_json)) {
+      db.prepare(`DELETE FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`).run(produitId, sn)
+    }
+  }
+
+  function applyAchatLineInventory(line: Record<string, unknown>) {
+    const produitId = line.produit_id as string | null | undefined
+    const quantite = Number(line.quantite) || 0
+    if (!produitId || quantite <= 0) return
+    db.prepare('UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?').run(quantite, produitId)
+    if (line.numeros_serie_json) {
+      addSerialNumbersToStock(produitId, line.numeros_serie_json, quantite)
+    }
+  }
+
+  function revertVenteLineInventory(venteId: string, ligne: Record<string, unknown>, now: string) {
+    const produitId = ligne.produit_id as string | null | undefined
+    const quantite = Number(ligne.quantite) || 0
+    if (!produitId || quantite <= 0) return
+    db.prepare('UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?').run(quantite, produitId)
+    const serials = String(ligne.numero_serie ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    if (serials.length) {
+      for (const sn of serials) {
+        db.prepare(`UPDATE serial_numbers SET statut = 'EN_STOCK', vente_id = NULL, updated_at = ? WHERE produit_id = ? AND numero_serie = ? AND vente_id = ?`)
+          .run(now, produitId, sn, venteId)
+      }
+    } else {
+      const sold = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND vente_id = ? AND statut = 'VENDU' ORDER BY updated_at DESC LIMIT ?`)
+        .all(produitId, venteId, quantite) as { id: string }[]
+      for (const sn of sold) {
+        db.prepare(`UPDATE serial_numbers SET statut = 'EN_STOCK', vente_id = NULL, updated_at = ? WHERE id = ?`).run(now, sn.id)
+      }
+    }
+  }
+
+  function applyVenteLineInventory(venteId: string, ligne: Record<string, unknown>, now: string) {
+    const produitId = ligne.produit_id as string | null | undefined
+    const quantite = Number(ligne.quantite) || 0
+    if (!produitId || quantite <= 0) return
+    db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?').run(quantite, produitId)
+    const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(produitId) as { has_serial_number?: number } | undefined
+    if (!prod?.has_serial_number) return
+    const serials = String(ligne.numero_serie ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    const toMark = serials.length ? serials : Array.from({ length: quantite }, () => null as string | null)
+    const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`)
+    const nextSn = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1`)
+    const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?`)
+    for (const snVal of toMark) {
+      const sn = snVal
+        ? snByValue.get(produitId, snVal) as { id: string } | undefined
+        : nextSn.get(produitId) as { id: string } | undefined
+      if (sn) markSnSold.run(venteId, now, sn.id)
+    }
+  }
+
   function addSerialNumbersToStock(produitId: string, numerosSerieJson: unknown, quantite: number) {
     if (!numerosSerieJson) return
     let sns: string[]
@@ -1447,7 +1522,8 @@ function setupIpcHandlers() {
     if (facture.statut_paiement === 'BROUILLON' || facture.statut_paiement === 'ANNULE') {
       return { success: false, error: 'Facture non modifiable' }
     }
-    const oldLines = db.prepare(`SELECT id FROM lignes_facture_fournisseur WHERE facture_id = ?`).all(factureId) as { id: string }[]
+    const oldLines = db.prepare(`SELECT * FROM lignes_facture_fournisseur WHERE facture_id = ?`).all(factureId) as Record<string, unknown>[]
+    const affectsInventory = achatLineAffectsInventory(facture)
     const insertLigne = db.prepare(`
       INSERT INTO lignes_facture_fournisseur (id, facture_id, produit_id, designation, quantite,
         ancien_prix_achat, nouveau_prix_achat, prix_vente_suggere, prix_vente_applique, tva_taux, numeros_serie_json)
@@ -1455,26 +1531,47 @@ function setupIpcHandlers() {
         @ancien_prix_achat, @nouveau_prix_achat, @prix_vente_suggere, @prix_vente_applique, @tva_taux, @numeros_serie_json)
     `)
     const now = new Date().toISOString()
-    db.transaction(() => {
-      db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(factureId)
-      for (const l of lignes) {
-        const nl = {
-          ancien_prix_achat: 0, prix_vente_suggere: null, prix_vente_applique: null, produit_id: null,
-          numeros_serie_json: null,
-          ...l, facture_id: factureId,
+    try {
+      db.transaction(() => {
+        if (affectsInventory) {
+          for (const ol of oldLines) revertAchatLineInventory(ol)
         }
-        insertLigne.run(nl)
-      }
-      db.prepare(`
-        UPDATE factures_fournisseurs SET
-          montant_ht=@montant_ht, montant_tva=@montant_tva, montant_ttc=@montant_ttc,
-          ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19,
-          updated_at=@updated_at WHERE id=@id
-      `).run({ id: factureId, updated_at: now, ...totals })
-    })()
-    for (const ol of oldLines) enqueueSync('lignes_facture_fournisseur', 'DELETE', { id: ol.id })
+        db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(factureId)
+        for (const l of lignes) {
+          const oldMatch = oldLines.find(ol => ol.id === l.id) as Record<string, unknown> | undefined
+          const nl = {
+            ancien_prix_achat: 0, prix_vente_suggere: null, prix_vente_applique: null, produit_id: null,
+            numeros_serie_json: oldMatch?.numeros_serie_json ?? null,
+            ...l, facture_id: factureId,
+          }
+          insertLigne.run(nl)
+        }
+        if (affectsInventory) {
+          for (const l of lignes) {
+            const oldMatch = oldLines.find(ol => ol.id === l.id) as Record<string, unknown> | undefined
+            applyAchatLineInventory({
+              ...l,
+              numeros_serie_json: (l as Record<string, unknown>).numeros_serie_json ?? oldMatch?.numeros_serie_json ?? null,
+            })
+          }
+        }
+        db.prepare(`
+          UPDATE factures_fournisseurs SET
+            montant_ht=@montant_ht, montant_tva=@montant_tva, montant_ttc=@montant_ttc,
+            ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19,
+            updated_at=@updated_at WHERE id=@id
+        `).run({ id: factureId, updated_at: now, ...totals })
+      })()
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Échec synchronisation stock' }
+    }
+    for (const ol of oldLines) enqueueSync('lignes_facture_fournisseur', 'DELETE', { id: ol.id as string })
     for (const l of lignes) enqueueSync('lignes_facture_fournisseur', 'INSERT', l as Record<string, unknown>)
     enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, ...totals, updated_at: now })
+    const touchedProducts = new Set<string>()
+    for (const ol of oldLines) if (ol.produit_id) touchedProducts.add(String(ol.produit_id))
+    for (const l of lignes) if (l.produit_id) touchedProducts.add(String(l.produit_id))
+    for (const pid of touchedProducts) enqueueProductSnapshot(pid)
     addActivityLog({ action: 'SUPPLIER_INVOICE_LINES_EDITED', details: { factureId, lineCount: lignes.length } })
     return { success: true }
   })
@@ -2356,32 +2453,73 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('documents:replaceLignes', (_e, documentId: string, lignes: Record<string, unknown>[], totals: { total_ht: number; total_tva: number; total_ttc: number; ht_7?: number; tva_7?: number; ht_19?: number; tva_19?: number; total_remise?: number }) => {
-    const doc = db.prepare(`SELECT id, statut, type_document FROM documents WHERE id = ?`).get(documentId) as { id: string; statut: string; type_document: string } | undefined
+    const doc = db.prepare(`SELECT id, statut, type_document, vente_id FROM documents WHERE id = ?`).get(documentId) as { id: string; statut: string; type_document: string; vente_id?: string | null } | undefined
     if (!doc) return { success: false, error: 'Document introuvable' }
     if (['ANNULE', 'REVOQUE'].includes(doc.statut) || doc.type_document === 'AVOIR') {
       return { success: false, error: 'Document non modifiable' }
     }
     const oldLines = db.prepare(`SELECT id FROM lignes_document WHERE document_id = ?`).all(documentId) as { id: string }[]
+    const oldVenteLines = doc.vente_id
+      ? db.prepare(`SELECT * FROM lignes_vente WHERE vente_id = ?`).all(doc.vente_id) as Record<string, unknown>[]
+      : []
     const insertLigne = db.prepare(`
       INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie)
       VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)
     `)
+    const insertVenteLigne = db.prepare(`
+      INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit, numero_serie)
+      VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit, @numero_serie)
+    `)
     const now = new Date().toISOString()
-    db.transaction(() => {
-      db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
-      for (const l of lignes) {
-        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l, document_id: documentId }
-        insertLigne.run(nl)
-      }
-      const extraSets = totals.ht_7 != null ? ', ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19' : ''
-      db.prepare(`UPDATE documents SET total_ht=@total_ht, total_tva=@total_tva, total_ttc=@total_ttc, updated_at=@updated_at${extraSets} WHERE id=@id`).run({
-        id: documentId, updated_at: now, ...totals,
-      })
-    })()
+    try {
+      db.transaction(() => {
+        if (doc.vente_id) {
+          for (const vl of oldVenteLines) revertVenteLineInventory(doc.vente_id!, vl, now)
+          db.prepare(`DELETE FROM lignes_vente WHERE vente_id = ?`).run(doc.vente_id)
+        }
+        db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
+        for (const l of lignes) {
+          const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l, document_id: documentId }
+          insertLigne.run(nl)
+          if (doc.vente_id) {
+            insertVenteLigne.run({
+              id: randomUUID(),
+              vente_id: doc.vente_id,
+              produit_id: nl.produit_id,
+              designation: nl.designation,
+              quantite: nl.quantite,
+              prix_unitaire: nl.prix_unitaire,
+              remise_pct: nl.remise_pct ?? 0,
+              total_ligne: nl.total_ttc ?? nl.total_ht,
+              type_produit: nl.type_produit ?? 'F',
+              numero_serie: nl.numero_serie ?? null,
+            })
+          }
+        }
+        if (doc.vente_id) {
+          const newVenteLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id = ?`).all(doc.vente_id) as Record<string, unknown>[]
+          for (const vl of newVenteLines) applyVenteLineInventory(doc.vente_id!, vl, now)
+        }
+        const extraSets = totals.ht_7 != null ? ', ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19' : ''
+        db.prepare(`UPDATE documents SET total_ht=@total_ht, total_tva=@total_tva, total_ttc=@total_ttc, updated_at=@updated_at${extraSets} WHERE id=@id`).run({
+          id: documentId, updated_at: now, ...totals,
+        })
+      })()
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Échec synchronisation stock' }
+    }
     for (const ol of oldLines) enqueueSync('lignes_document', 'DELETE', { id: ol.id })
     for (const l of lignes) {
       const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l, document_id: documentId }
       enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
+    }
+    if (doc.vente_id) {
+      const syncedVenteLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id = ?`).all(doc.vente_id) as Record<string, unknown>[]
+      for (const vl of oldVenteLines) enqueueSync('lignes_vente', 'DELETE', { id: vl.id as string })
+      for (const vl of syncedVenteLines) enqueueSync('lignes_vente', 'INSERT', vl)
+      const touched = new Set<string>()
+      for (const vl of [...oldVenteLines, ...syncedVenteLines]) if (vl.produit_id) touched.add(String(vl.produit_id))
+      for (const pid of touched) enqueueProductSnapshot(pid)
     }
     enqueueSync('documents', 'UPDATE', { id: documentId, ...totals, updated_at: now })
     addActivityLog({ action: 'DOCUMENT_LINES_EDITED', details: { documentId, lineCount: lignes.length } })
@@ -2523,6 +2661,12 @@ function setupIpcHandlers() {
 
   // ── Documents: list all (unified view — documents + factures_fournisseurs) ──
   ipcMain.handle('documents:listAll', (_e, filters: Record<string, unknown> = {}) => {
+    const typeStr = (filters.type_document ?? '') as string
+    const achatTypes = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
+    const venteTypes = new Set(['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F', 'DEVIS', 'BON_LIVRAISON', 'AVOIR'])
+    const fetchDocs = !typeStr || typeStr === 'TOUS' || venteTypes.has(typeStr)
+    const fetchFF = !typeStr || typeStr === 'TOUS' || achatTypes.has(typeStr)
+
     const params: unknown[] = []
     let typeCond = ''
     if (filters.type_document && filters.type_document !== 'TOUS') {
@@ -2533,23 +2677,25 @@ function setupIpcHandlers() {
     if (filters.dateFrom) { dateCond += ` AND created_at >= ?`; params.push(filters.dateFrom + 'T00:00:00.000Z') }
     if (filters.dateTo)   { dateCond += ` AND created_at <= ?`; params.push(filters.dateTo + 'T23:59:59.999Z') }
 
-    const docs = db.prepare(`
-      SELECT d.*, av.numero AS avoir_numero, NULL as fournisseur_nom, 'documents' AS _source
-      FROM documents d
-      LEFT JOIN documents av ON av.id = d.avoir_id
-      WHERE 1=1 ${typeCond} ${dateCond}
-      ORDER BY created_at DESC LIMIT 300
-    `).all(...params) as Record<string, unknown>[]
+    const docs = fetchDocs
+      ? db.prepare(`
+          SELECT d.*, av.numero AS avoir_numero, NULL as fournisseur_nom, 'documents' AS _source
+          FROM documents d
+          LEFT JOIN documents av ON av.id = d.avoir_id
+          WHERE 1=1 ${typeCond} ${dateCond}
+          ORDER BY created_at DESC LIMIT 300
+        `).all(...params) as Record<string, unknown>[]
+      : []
 
-    // If type filter is vente-only, skip fournisseur factures
-    const typeStr = (filters.type_document ?? '') as string
-    const fetchFF = !typeStr || typeStr === 'TOUS' || typeStr === 'FACTURE_ACHAT' || typeStr === 'FACTURE_ACHAT_BL'
     let ffDocs: Record<string, unknown>[] = []
     if (fetchFF) {
       const ffParams: unknown[] = []
       let ffTypeCond = ''
-      if (typeStr === 'FACTURE_ACHAT')    { ffTypeCond = ` AND type = ?`; ffParams.push('FACTURE_ACHAT') }
-      if (typeStr === 'FACTURE_ACHAT_BL') { ffTypeCond = ` AND type = ?`; ffParams.push('FACTURE_ACHAT_BL') }
+      let ffDateCond = ''
+      if (typeStr === 'FACTURE_ACHAT')    { ffTypeCond = ` AND ff.type = ?`; ffParams.push('FACTURE_ACHAT') }
+      if (typeStr === 'FACTURE_ACHAT_BL') { ffTypeCond = ` AND ff.type = ?`; ffParams.push('FACTURE_ACHAT_BL') }
+      if (filters.dateFrom) { ffDateCond += ` AND ff.created_at >= ?`; ffParams.push(filters.dateFrom + 'T00:00:00.000Z') }
+      if (filters.dateTo)   { ffDateCond += ` AND ff.created_at <= ?`; ffParams.push(filters.dateTo + 'T23:59:59.999Z') }
       ffDocs = db.prepare(`
         SELECT ff.id, ff.numero_facture AS numero, ff.type AS type_document,
           CASE WHEN ff.statut_reception = 'NON_ARRIVE' THEN 'NON_ARRIVE'
@@ -2563,7 +2709,7 @@ function setupIpcHandlers() {
           ff.created_at, ff.created_at AS updated_at, 'ff' AS _source
         FROM factures_fournisseurs ff
         LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
-        WHERE 1=1 ${ffTypeCond}
+        WHERE ff.statut_paiement != 'BROUILLON' ${ffTypeCond} ${ffDateCond}
         ORDER BY ff.created_at DESC LIMIT 300
       `).all(...ffParams) as Record<string, unknown>[]
     }
