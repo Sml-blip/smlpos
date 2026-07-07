@@ -2670,12 +2670,12 @@ function setupIpcHandlers() {
     const params: unknown[] = []
     let typeCond = ''
     if (filters.type_document && filters.type_document !== 'TOUS') {
-      typeCond = ` AND type_document = ?`
+      typeCond = ` AND d.type_document = ?`
       params.push(filters.type_document)
     }
     let dateCond = ''
-    if (filters.dateFrom) { dateCond += ` AND created_at >= ?`; params.push(filters.dateFrom + 'T00:00:00.000Z') }
-    if (filters.dateTo)   { dateCond += ` AND created_at <= ?`; params.push(filters.dateTo + 'T23:59:59.999Z') }
+    if (filters.dateFrom) { dateCond += ` AND d.created_at >= ?`; params.push(filters.dateFrom + 'T00:00:00.000Z') }
+    if (filters.dateTo)   { dateCond += ` AND d.created_at <= ?`; params.push(filters.dateTo + 'T23:59:59.999Z') }
 
     const docs = fetchDocs
       ? db.prepare(`
@@ -2683,7 +2683,7 @@ function setupIpcHandlers() {
           FROM documents d
           LEFT JOIN documents av ON av.id = d.avoir_id
           WHERE 1=1 ${typeCond} ${dateCond}
-          ORDER BY created_at DESC LIMIT 300
+          ORDER BY d.created_at DESC LIMIT 300
         `).all(...params) as Record<string, unknown>[]
       : []
 
