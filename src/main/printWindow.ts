@@ -2,12 +2,12 @@ import { BrowserWindow } from 'electron'
 import { writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { resolveElectronPageSize, type ElectronPageSize } from './printPageSize'
+import { resolveElectronPageSize, type ElectronPageSize, type CustomPageSizeMm } from './printPageSize'
 
 export interface PrintWindowOptions {
   printerName?: string
   silent?: boolean
-  pageSize?: string | ElectronPageSize
+  pageSize?: string | ElectronPageSize | CustomPageSizeMm
   printBackground?: boolean
   color?: boolean
   copies?: number

@@ -20,7 +20,7 @@ export function resolveElectronPageSize(pageSize?: string | ElectronPageSize | C
   }
   if (pageSize === '58mm') return { width: 58000, height: 297000 }
   if (pageSize === '80mm') return { width: 80000, height: 297000 }
-  if (pageSize === '40x20mm' || pageSize === 'label') return { width: 39000, height: 20000 }
+  if (pageSize === '40x20mm' || pageSize === 'label') return { width: 40000, height: 20000 }
   if (pageSize === 'Letter' || pageSize === 'Legal' || pageSize === 'Tabloid') return pageSize
   if (typeof pageSize === 'string' && pageSize.endsWith('mm')) {
     const n = parseFloat(pageSize)

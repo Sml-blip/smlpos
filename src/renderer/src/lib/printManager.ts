@@ -19,14 +19,14 @@ export interface LabelPrintConfig {
   dpi: number
   defaultCopies: number
   layout: LabelVisualLayout
-  /** Windows: native Gainscha GTSPL SDK vs HTML spooler */
-  labelEngine: 'gainscha' | 'html'
+  /** Windows: native Gainscha GTSPL SDK vs HTML spooler vs TSPL raw COPY /B */
+  labelEngine: 'gainscha' | 'html' | 'tspl_raw'
   labelConnection: 'driver' | 'usb'
   usbDevice: string
 }
 
 export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
-  widthMm: 39,
+  widthMm: 40,
   heightMm: 20,
   stripLeftMm: 1,
   stripRightMm: 1,
@@ -35,7 +35,7 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   rotationDeg: 0,
   dpi: 203,
   defaultCopies: 1,
-  labelEngine: 'gainscha',
+  labelEngine: 'tspl_raw',
   labelConnection: 'driver',
   usbDevice: '',
 }

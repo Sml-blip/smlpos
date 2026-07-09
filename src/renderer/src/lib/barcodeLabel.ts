@@ -166,7 +166,7 @@ export function buildBarcodeLabelHtml(
       width: 100%;
       height: auto;
     }
-    .barcode-bars svg rect { shape-rendering: crispEdges; }
+    .barcode-bars svg rect { shape-rendering: crispEdges; image-rendering: pixelated; }
     .barcode-caption {
       flex-shrink: 0;
       font-size: ${captionPt}pt;

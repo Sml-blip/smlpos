@@ -182,9 +182,8 @@ export default function HistoriqueTab() {
 
   const handleConvertVente = async (vente: Vente) => {
     const lignes = await api.ventesGetLignes(vente.id) as LigneVente[]
-    const hasF = lignes.some(l => l.type_produit === 'F')
-    if (!hasF) {
-      showToast('error', 'Conversion impossible : aucun produit facturé (F). Les produits NF ne peuvent pas être convertis.')
+    if (!lignes.length) {
+      showToast('error', 'Conversion impossible : vente sans lignes.')
       return
     }
     setConvertVente(vente)

@@ -8,6 +8,7 @@ interface CartState {
   updateItem: (index: number, item: Partial<CartItem>) => void
   removeItem: (index: number) => void
   clearCart: () => void
+  loadCart: (items: CartItem[], remiseTotale?: number) => void
   setRemiseTotale: (v: number) => void
   total: () => number
   totalRemises: () => number
@@ -55,6 +56,11 @@ export const useCartStore = create<CartState>((set, get) => ({
   },
 
   clearCart: () => set({ items: [], remiseTotale: 0 }),
+
+  loadCart: (items, remiseTotale = 0) => set({
+    items: items.map(i => ({ ...i })),
+    remiseTotale,
+  }),
 
   setRemiseTotale: (v) => set({ remiseTotale: v }),
 

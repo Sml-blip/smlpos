@@ -239,6 +239,7 @@ interface Window {
     gainschaDetectUsb?: () => Promise<{ success: boolean; devices?: string[]; error?: string }>
     gainschaVersion?: () => Promise<{ success: boolean; version?: string; error?: string }>
     gainschaPrintLabel?: (job: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>
+    printTsplLabel?: (data: Record<string, unknown>) => Promise<{ success: boolean; error?: string; printer?: string }>
 
     // Window
     windowMinimize: () => Promise<void>

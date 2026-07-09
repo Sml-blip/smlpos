@@ -358,7 +358,7 @@ export default function DocumentPreviewModal({
             <div className="bg-muted rounded-lg p-3 text-xs text-text-secondary">
               <div className="font-semibold mb-1">
                 {lignesItems.length} ligne{lignesItems.length !== 1 ? 's' : ''}
-                {typeVente === 'FACTURE' && ' (F uniquement)'}
+                {typeVente === 'FACTURE' ? ' (F uniquement)' : ' (F + NF)'}
               </div>
               <div>HT : {lineSums.total_ht.toFixed(3)} DT</div>
               {settings.invoice_show_tva !== 'false' && (

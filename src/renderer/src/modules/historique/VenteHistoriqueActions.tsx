@@ -7,6 +7,11 @@ import { usePrintThermal } from '../../lib/usePrint'
 import { X, Printer, FileText, FileCheck } from 'lucide-react'
 import DocumentPrintModal from './DocumentPrintModal'
 import type { Document as DocType } from '../../lib/types'
+import {
+  canCreateDocumentFromLignes,
+  documentAllowsNF,
+  filterLignesForDocument,
+} from '../../lib/documentProductRules'
 
 const api = window.api
 
@@ -84,15 +89,17 @@ export function ConvertVenteDocModal({
       .then(r => { if (r) setLignes(r) })
   }, [vente.id])
 
+  const eligibleLignes = filterLignesForDocument(type, lignes)
+  const nfLignes = lignes.filter(l => l.type_produit === 'NF')
   const fLignes = lignes.filter(l => l.type_produit === 'F')
-  const nfLignes = lignes.filter(l => l.type_produit !== 'F')
-  const canCreate = fLignes.length > 0
+  const canCreate = canCreateDocumentFromLignes(type, lignes)
+  const nfOnDoc = documentAllowsNF(type)
 
   const handleCreate = async () => {
     if (!canCreate) return
     await runAction('Création document', async () => {
-      const filtered = fLignes
-      if (!filtered.length) throw new Error('Aucun produit facturé (F) — conversion impossible')
+      const filtered = eligibleLignes
+      if (!filtered.length) throw new Error('Aucune ligne éligible pour ce document')
       const totalHT = filtered.reduce((s, l) => s + l.total_ligne, 0)
       const year = new Date().getFullYear()
       const yy = String(year).slice(-2)
@@ -130,11 +137,11 @@ export function ConvertVenteDocModal({
         quantite: l.quantite,
         prix_unitaire: l.prix_unitaire,
         remise_pct: l.remise_pct || 0,
-        tva_taux: 0,
+        tva_taux: l.type_produit === 'F' ? (l as LigneVente & { tva_taux?: number }).tva_taux ?? 0 : 0,
         total_ht: l.total_ligne,
         total_tva: 0,
         total_ttc: l.total_ligne,
-        type_produit: 'F' as const,
+        type_produit: l.type_produit,
       }))
       await api.documentsCreate(doc, docLignes)
       setCreatedDoc(doc as DocType)
@@ -166,15 +173,21 @@ export function ConvertVenteDocModal({
         </div>
         {!canCreate ? (
           <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mb-4">
-            Cette vente ne contient aucun produit facturé (F). Les produits NF ne peuvent pas être convertis en document.
+            {type === 'FACTURE_VENTE'
+              ? 'Cette vente ne contient aucun produit facturé (F). Les produits NF ne peuvent pas être convertis en facture.'
+              : 'Cette vente ne contient aucune ligne.'}
+          </p>
+        ) : nfOnDoc && nfLignes.length > 0 && type !== 'FACTURE_VENTE' ? (
+          <p className="text-xs text-green-800 bg-green-50 border border-green-200 rounded-xl px-3 py-2 mb-4">
+            BL / Devis : {eligibleLignes.length} ligne{eligibleLignes.length > 1 ? 's' : ''} incluant {nfLignes.length} NF.
           </p>
         ) : nfLignes.length > 0 ? (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-4">
-            {nfLignes.length} ligne{nfLignes.length > 1 ? 's' : ''} NF exclue{nfLignes.length > 1 ? 's' : ''} — seuls les produits F seront sur le document ({fLignes.length} ligne{fLignes.length > 1 ? 's' : ''}).
+            {nfLignes.length} ligne{nfLignes.length > 1 ? 's' : ''} NF exclue{nfLignes.length > 1 ? 's' : ''} — seuls les produits F seront sur la facture ({fLignes.length} ligne{fLignes.length > 1 ? 's' : ''}).
           </p>
         ) : (
           <p className="text-xs text-text-secondary mb-4">
-            {fLignes.length} produit{fLignes.length > 1 ? 's' : ''} facturé{fLignes.length > 1 ? 's' : ''} (F) seront inclus.
+            {eligibleLignes.length} ligne{eligibleLignes.length > 1 ? 's' : ''} seront incluses.
           </p>
         )}
         <div className="flex gap-2">

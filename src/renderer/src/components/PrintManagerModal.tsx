@@ -71,7 +71,7 @@ const PAGE_DIMS_MM: Record<NativePageSize, { w: number; h: number }> = {
   A5: { w: 148, h: 210 },
   '58mm': { w: 58, h: 200 },
   '80mm': { w: 80, h: 200 },
-  '40x20mm': { w: 39, h: 20 },
+  '40x20mm': { w: 40, h: 20 },
 }
 
 const MM_TO_PX = 3.7795275591
@@ -390,6 +390,7 @@ export default function PrintManagerModal({
   // ── Print ──────────────────────────────────────────────────────────────────
 
   async function handlePrint() {
+    const useTsplRaw = kind === 'label' && labelCfg.labelEngine === 'tspl_raw'
     const useGainscha = kind === 'label'
       && labelCfg.labelEngine === 'gainscha'
       && gainschaAvailable
@@ -401,7 +402,7 @@ export default function PrintManagerModal({
         setStatusOk(false)
         return
       }
-    } else if (!opts.printerName) {
+    } else if (!opts.printerName && !useTsplRaw) {
       setStatusMsg('Sélectionnez une imprimante')
       setStatusOk(false)
       return
@@ -418,6 +419,39 @@ export default function PrintManagerModal({
         } catch {
           // non-fatal
         }
+      }
+
+      if (useTsplRaw) {
+        await saveLabelPrintConfig(labelCfg)
+        const source = labelSource ?? {
+          code: '12345670',
+          nom: 'Produit test scanner',
+          prix: 12.5,
+          productRef: 'REF-TEST',
+        }
+        if (!api.printTsplLabel) {
+          setStatusMsg('TSPL raw indisponible')
+          setStatusOk(false)
+          return
+        }
+        const result = await api.printTsplLabel({
+          codeBarre: source.code,
+          nomProduit: source.nom || source.productRef || 'Produit',
+          prix: `${Number(source.prix).toFixed(3)} DT`,
+          copies: opts.copies,
+          printerName: opts.printerName || undefined,
+          widthMm: labelCfg.widthMm,
+          heightMm: labelCfg.heightMm,
+          rotationDeg: labelCfg.rotationDeg,
+        })
+        if (result.success) {
+          setStatusMsg(`Imprimé (TSPL raw${result.printer ? ` · ${result.printer}` : ''}) · ${opts.copies} copie(s)`)
+          setStatusOk(true)
+        } else {
+          setStatusMsg(`Erreur TSPL : ${result.error ?? 'inconnue'} — essayez SDK Gainscha ou HTML`)
+          setStatusOk(false)
+        }
+        return
       }
 
       if (useGainscha) {
@@ -674,19 +708,25 @@ export default function PrintManagerModal({
           <div style={{ fontSize: 11, color: 'var(--color-text-secondary, #666)', marginBottom: 8 }}>
             Éditeur visuel à droite — glisser / redimensionner les blocs (Code128)
           </div>
-          {gainschaAvailable && (
-            <div style={styles.field}>
-              <label style={styles.fieldLabel}>Moteur d&apos;impression</label>
-              <select
-                value={labelCfg.labelEngine}
-                onChange={(e) => patchLabelCfg({ labelEngine: e.target.value === 'html' ? 'html' : 'gainscha' })}
-                style={styles.select}
-              >
+          <div style={styles.field}>
+            <label style={styles.fieldLabel}>Moteur d&apos;impression</label>
+            <select
+              value={labelCfg.labelEngine}
+              onChange={(e) => {
+                const v = e.target.value
+                patchLabelCfg({
+                  labelEngine: v === 'html' ? 'html' : v === 'tspl_raw' ? 'tspl_raw' : 'gainscha',
+                })
+              }}
+              style={styles.select}
+            >
+              <option value="tspl_raw">TSPL raw (COPY /B) — recommandé</option>
+              {gainschaAvailable && (
                 <option value="gainscha">SDK Gainscha (TSPL){gainschaSdkVer ? ` v${gainschaSdkVer}` : ''}</option>
-                <option value="html">Windows / HTML (secours)</option>
-              </select>
-            </div>
-          )}
+              )}
+              <option value="html">Windows / HTML (Seagull, 203 DPI)</option>
+            </select>
+          </div>
           {gainschaAvailable && labelCfg.labelEngine === 'gainscha' && (
             <>
               <div style={styles.field}>

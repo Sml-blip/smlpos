@@ -56,7 +56,11 @@ export function labelConfigFromSettings(all: Record<string, string>): LabelPrint
     rotationDeg: rot === 180 ? 180 : 0,
     dpi: clamp(parseNum(all.impression_label_dpi, DEFAULT_LABEL_CONFIG.dpi), 72, 600),
     defaultCopies: clamp(parseInt(all.impression_label_copies ?? '1', 10) || 1, 1, 99),
-    labelEngine: all.impression_label_engine === 'html' ? 'html' : 'gainscha',
+    labelEngine: all.impression_label_engine === 'html'
+      ? 'html'
+      : all.impression_label_engine === 'tspl_raw'
+        ? 'tspl_raw'
+        : 'gainscha',
     labelConnection: all.impression_label_connection === 'usb' ? 'usb' : 'driver',
     usbDevice: all.impression_label_usb_device ?? '',
     layout: defaultVisualLayout(1, 1),
@@ -126,7 +130,13 @@ export function mergeLabelConfig(partial?: Partial<LabelPrintConfig>): LabelPrin
       ? { ...base.layout, ...partial.layout, name: { ...base.layout.name, ...partial.layout.name }, barcode: { ...base.layout.barcode, ...partial.layout.barcode }, price: { ...base.layout.price, ...partial.layout.price } }
       : base.layout,
     rotationDeg: partial?.rotationDeg === 180 ? 180 : partial?.rotationDeg === 0 ? 0 : (partial?.rotationDeg ?? base.rotationDeg),
-    labelEngine: partial?.labelEngine === 'html' ? 'html' : partial?.labelEngine === 'gainscha' ? 'gainscha' : base.labelEngine,
+    labelEngine: partial?.labelEngine === 'html'
+      ? 'html'
+      : partial?.labelEngine === 'tspl_raw'
+        ? 'tspl_raw'
+        : partial?.labelEngine === 'gainscha'
+          ? 'gainscha'
+          : base.labelEngine,
     labelConnection: partial?.labelConnection === 'usb' ? 'usb' : partial?.labelConnection === 'driver' ? 'driver' : base.labelConnection,
     usbDevice: partial?.usbDevice ?? base.usbDevice,
   }

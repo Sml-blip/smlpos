@@ -48,6 +48,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
 
   const handleConfirm = async () => {
     if (mode === 'ESPECES' && montantRecuNum < total) return
+    if (typeVente === 'BL_VENTE' && items.length === 0) return
+    if (typeVente === 'FACTURE' && !hasItemsF) {
+      setErrorMsg('Facture : au moins un produit F requis dans le panier.')
+      return
+    }
     setErrorMsg('')
     await runAction('Enregistrement vente', async () => {
       const prefix = `VTE-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
@@ -264,6 +269,16 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 <Package size={16} />Bon de Livraison
               </button>
             </div>
+            {typeVente === 'BL_VENTE' && (
+              <p className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded-lg px-2 py-1.5 mt-2">
+                BL vente : produits F et NF acceptés.
+              </p>
+            )}
+            {typeVente === 'FACTURE' && !hasItemsF && (
+              <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-2">
+                Facture : au moins un produit F requis (NF exclus).
+              </p>
+            )}
           </div>
 
           {/* Optional client info */}
@@ -297,7 +312,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={loading || (mode === 'ESPECES' && montantRecuNum < total)}
+            disabled={loading || (mode === 'ESPECES' && montantRecuNum < total) || (typeVente === 'FACTURE' && !hasItemsF)}
             className="w-full bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors"
           >
             {loading ? 'Traitement...' : 'Confirmer le Paiement'}

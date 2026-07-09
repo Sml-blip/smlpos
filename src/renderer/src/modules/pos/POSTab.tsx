@@ -7,7 +7,7 @@ import { cn, formatPrice } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
-import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock } from 'lucide-react'
 import ReparationModal from './ReparationModal'
 import RetourModal from './RetourModal'
 import SortieCaisseModal from './SortieCaisseModal'
@@ -16,12 +16,18 @@ import CheckoutModal from './CheckoutModal'
 import ServicePOSModal from './ServicePOSModal'
 import FactureClientModal from './FactureClientModal'
 import TicketModal from './TicketModal'
+import {
+  deleteSavedPanier,
+  listSavedPaniers,
+  savePanierHold,
+  type SavedPanier,
+} from '../../lib/panierHold'
 
 const api = window.api
 
 export default function POSTab() {
   const { currentShift, showShiftModal, sessionClient, setSessionClient } = useAppStore()
-  const { items, addItem, updateItem, removeItem, clearCart, total, totalRemises, sousTotal, remiseTotale, setRemiseTotale } = useCartStore()
+  const { items, addItem, updateItem, removeItem, clearCart, loadCart, total, totalRemises, sousTotal, remiseTotale, setRemiseTotale } = useCartStore()
 
   const [scanInput, setScanInput] = useState('')
   const [scannedProduct, setScannedProduct] = useState<Produit | null>(null)
@@ -42,6 +48,8 @@ export default function POSTab() {
   const [showLastTicket, setShowLastTicket] = useState(false)
   const [showRetour, setShowRetour] = useState(false)
   const [showProductBrowse, setShowProductBrowse] = useState(false)
+  const [showSavedPaniers, setShowSavedPaniers] = useState(false)
+  const [savedPanierCount, setSavedPanierCount] = useState(() => listSavedPaniers().length)
   const [availableSerials, setAvailableSerials] = useState<string[]>([])
   const [selectedSerials, setSelectedSerials] = useState<string[]>([])
   const [sessionClientForm, setSessionClientForm] = useState<ClientFormValue>(
@@ -364,6 +372,47 @@ export default function POSTab() {
     } else {
       setRemiseTotale(Math.min(cartTotal, num))
     }
+  }
+
+  const refreshSavedPanierCount = () => setSavedPanierCount(listSavedPaniers().length)
+
+  const handleSavePanier = () => {
+    if (!items.length) return
+    const saved = savePanierHold({
+      items,
+      remiseTotale,
+      clientForm: sessionClientForm,
+      shiftId: currentShift?.id,
+    })
+    clearCart()
+    setRemiseTotaleInput('')
+    setRemiseTotale(0)
+    refreshSavedPanierCount()
+    showNotif(`Panier en attente — ${saved.label}`)
+    refocusScanner()
+  }
+
+  const handleRestorePanier = (panier: SavedPanier) => {
+    if (items.length > 0 && !window.confirm('Remplacer le panier actuel par le panier en attente ?')) return
+    loadCart(panier.items, panier.remiseTotale)
+    if (panier.clientForm) {
+      setSessionClientForm(panier.clientForm)
+      setSessionClient(panier.clientForm.clientId ? {
+        id: panier.clientForm.clientId,
+        nom: panier.clientForm.nom,
+        telephone: panier.clientForm.tel,
+        adresse: panier.clientForm.adresse,
+        matricule_fiscal: panier.clientForm.matricule,
+        solde_credit: sessionClient?.id === panier.clientForm.clientId ? sessionClient.solde_credit : 0,
+        created_at: sessionClient?.created_at ?? new Date().toISOString(),
+      } : null)
+    }
+    setRemiseTotaleInput(panier.remiseTotale > 0 ? String(panier.remiseTotale) : '')
+    deleteSavedPanier(panier.id)
+    refreshSavedPanierCount()
+    setShowSavedPaniers(false)
+    showNotif(`Panier repris — ${panier.label}`)
+    refocusScanner()
   }
 
   return (
@@ -766,6 +815,20 @@ export default function POSTab() {
             <button onClick={() => setShowCheckout(true)} className="w-full bg-accent-500 hover:bg-accent-600 text-text-primary font-bold py-3 rounded-xl mb-2 transition-colors flex items-center justify-center gap-2">
               <ShoppingBag size={16} />Encaisser (F8)
             </button>
+            <button
+              onClick={handleSavePanier}
+              className="w-full bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-semibold py-2.5 rounded-xl mb-2 transition-colors flex items-center justify-center gap-2 text-sm"
+            >
+              <Save size={14} />Mettre en attente
+            </button>
+            {savedPanierCount > 0 && (
+              <button
+                onClick={() => setShowSavedPaniers(true)}
+                className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 font-semibold py-2 rounded-xl mb-2 transition-colors flex items-center justify-center gap-2 text-sm"
+              >
+                <Clock size={14} />Paniers en attente ({savedPanierCount})
+              </button>
+            )}
             <button onClick={clearCart} className="w-full bg-white hover:bg-red-50 border border-border hover:border-red-200 text-text-secondary hover:text-danger font-medium py-2 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm">
               <Trash2 size={14} />Vider le panier
             </button>
@@ -851,6 +914,82 @@ export default function POSTab() {
           }}
         />
       )}
+      {showSavedPaniers && (
+        <SavedPaniersModal
+          onClose={() => { setShowSavedPaniers(false); refocusScanner() }}
+          onRestore={handleRestorePanier}
+          onDelete={(id) => { deleteSavedPanier(id); refreshSavedPanierCount() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function SavedPaniersModal({
+  onClose,
+  onRestore,
+  onDelete,
+}: {
+  onClose: () => void
+  onRestore: (p: SavedPanier) => void
+  onDelete: (id: string) => void
+}) {
+  const [paniers, setPaniers] = useState(() => listSavedPaniers())
+
+  const refresh = () => setPaniers(listSavedPaniers())
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-slide-in">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="font-bold text-sm flex items-center gap-2">
+            <Clock size={15} className="text-amber-600" /> Paniers en attente
+          </h2>
+          <button type="button" onClick={onClose}><XIcon size={18} className="text-text-muted" /></button>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto p-3 space-y-2">
+          {paniers.length === 0 ? (
+            <p className="text-sm text-text-muted text-center py-8">Aucun panier en attente</p>
+          ) : paniers.map(p => {
+            const qty = p.items.reduce((s, i) => s + i.quantite, 0)
+            const totalPanier = p.items.reduce((s, i) => s + i.total_ligne, 0) - p.remiseTotale
+            return (
+              <div key={p.id} className="border border-border rounded-xl p-3 flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm truncate">{p.label}</div>
+                  <div className="text-xs text-text-muted mt-0.5">
+                    {new Date(p.savedAt).toLocaleString('fr-FR')} · {qty} art. · {formatPrice(Math.max(0, totalPanier))}
+                  </div>
+                  {p.clientForm?.nom && (
+                    <div className="text-[10px] text-text-secondary mt-1 truncate">Client : {p.clientForm.nom}</div>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onRestore(p)}
+                    className="px-3 py-1.5 bg-accent-500 hover:bg-accent-600 text-text-primary text-xs font-bold rounded-lg"
+                  >
+                    Reprendre
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { onDelete(p.id); refresh() }}
+                    className="px-3 py-1.5 bg-muted hover:bg-red-50 text-danger text-xs font-semibold rounded-lg"
+                  >
+                    Suppr.
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="px-5 py-3 border-t border-border">
+          <button type="button" onClick={onClose} className="w-full py-2 bg-muted hover:bg-border rounded-xl text-sm font-semibold">
+            Fermer
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -116,8 +116,8 @@ function Invoke-PrintJob {
         # SIZE takes mm values, not dots
         $wMm = [string][math]::Round([double]$job.widthMm)
         $hMm = [string][math]::Round([double]$job.heightMm)
-        $speed    = '4'
-        $density  = '8'
+        $speed    = '2'
+        $density  = '12'
         $sensor   = '0'  # 0 = gap sensor
         $gap      = '2'  # 2mm gap between labels
         $offset   = '0'

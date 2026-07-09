@@ -23,7 +23,7 @@ import {
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { importDefaultProductCatalog } from './seedProducts'
 import { printHtmlInHiddenWindow } from './printWindow'
-import { resolveElectronPageSize } from './printPageSize'
+import { printTsplLabel } from './printTspl'
 import {
   gainschaDetectUsb,
   gainschaPrintLabel,
@@ -2366,11 +2366,17 @@ function setupIpcHandlers() {
       ...doc,
     }
     let docLignes = lignes
-    if (normalizedDoc.vente_id) {
+    const typeDocStr = String(normalizedDoc.type_document ?? '')
+    const nfAllowed = typeDocStr === 'BON_LIVRAISON' || typeDocStr === 'DEVIS'
+    if (normalizedDoc.vente_id && !nfAllowed) {
       docLignes = lignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
       if (docLignes.length === 0) {
         return { success: false, error: 'Aucun produit facturé (F) — conversion impossible' }
       }
+    } else if (normalizedDoc.vente_id && docLignes.length === 0) {
+      return { success: false, error: 'Aucune ligne — ajoutez au moins un produit' }
+    }
+    if (normalizedDoc.vente_id) {
       const existing = db.prepare(
         `SELECT id, numero FROM documents WHERE vente_id = ? AND type_document = ? AND statut NOT IN ('ANNULE', 'REVOQUE') LIMIT 1`,
       ).get(normalizedDoc.vente_id, normalizedDoc.type_document) as { id: string; numero: string } | undefined
@@ -2877,7 +2883,13 @@ function setupIpcHandlers() {
 
   // ─── Print ───────────────────────────────────────────────────────────────────
   ipcMain.handle('print:label', async (_event, html: string) => {
-    const res = await printHtmlInHiddenWindow(html, { silent: false, printBackground: true, color: true, pageSize: 'A4' })
+    const res = await printHtmlInHiddenWindow(html, {
+      silent: false,
+      printBackground: true,
+      color: true,
+      pageSize: { widthMm: 40, heightMm: 20 },
+      dpi: { horizontal: 203, vertical: 203 },
+    })
     return res.success
   })
 
@@ -2915,6 +2927,30 @@ function setupIpcHandlers() {
   ipcMain.handle('gainscha:version', async () => gainschaSdkVersion())
 
   ipcMain.handle('gainscha:printLabel', async (_event, job: GainschaPrintJob) => gainschaPrintLabel(job))
+
+  ipcMain.handle('print:tsplLabel', async (_event, data: Record<string, unknown>) => {
+    const getPrinters = async () => {
+      if (!mainWindow) return []
+      try {
+        return await mainWindow.webContents.getPrintersAsync()
+      } catch {
+        return []
+      }
+    }
+    return printTsplLabel(
+      {
+        codeBarre: String(data.codeBarre ?? ''),
+        nomProduit: String(data.nomProduit ?? ''),
+        prix: String(data.prix ?? ''),
+        copies: typeof data.copies === 'number' ? data.copies : 1,
+        printerName: typeof data.printerName === 'string' ? data.printerName : undefined,
+        widthMm: typeof data.widthMm === 'number' ? data.widthMm : 40,
+        heightMm: typeof data.heightMm === 'number' ? data.heightMm : 20,
+        rotationDeg: data.rotationDeg === 180 ? 180 : 0,
+      },
+      getPrinters,
+    )
+  })
 
   // ─── Backup ───────────────────────────────────────────────────────────────────
   ipcMain.handle('backup:create', () => {
