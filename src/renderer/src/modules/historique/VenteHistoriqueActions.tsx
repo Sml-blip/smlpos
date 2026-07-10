@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import type { Vente, LigneVente } from '../../lib/types'
 import { formatPrice, generateId } from '../../lib/utils'
+import { calcInvoiceLineFromTtcUnit, sumInvoiceLines } from '../../lib/invoiceLineCalc'
+import { taxBucketsFromLines, documentCalculatesTva } from '../../lib/documentFromCart'
 import { runAction, loadData } from '../../lib/apiCall'
 import { printFullHtmlDocument } from '../../lib/nativePrint'
 import { usePrintThermal } from '../../lib/usePrint'
@@ -78,7 +80,11 @@ export function VenteTicketPrintModal({ vente, onClose }: { vente: Vente; onClos
 
 export function ConvertVenteDocModal({
   vente, onClose, onCreated,
-}: { vente: Vente; onClose: () => void; onCreated: () => void }) {
+}: {
+  vente: Vente
+  onClose: () => void
+  onCreated: () => void
+}) {
   const [type, setType] = useState<'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'>('FACTURE_VENTE')
   const [loading, setLoading] = useState(false)
   const [lignes, setLignes] = useState<LigneVente[]>([])
@@ -100,7 +106,46 @@ export function ConvertVenteDocModal({
     await runAction('Création document', async () => {
       const filtered = eligibleLignes
       if (!filtered.length) throw new Error('Aucune ligne éligible pour ce document')
-      const totalHT = filtered.reduce((s, l) => s + l.total_ligne, 0)
+      
+      const docId = generateId()
+      const calculateTva = documentCalculatesTva(type)
+      const docLignes = filtered.map(l => {
+        const rate = calculateTva ? ((l as any).tva_taux ?? 19.0) : 0
+        const calc = calcInvoiceLineFromTtcUnit({
+          quantite: l.quantite,
+          prix_unitaire_ttc: l.prix_unitaire,
+          remise_pct: l.remise_pct || 0,
+          tva_taux: rate,
+        })
+        return {
+          id: generateId(),
+          document_id: docId,
+          produit_id: l.produit_id || null,
+          designation: l.designation,
+          quantite: l.quantite,
+          prix_unitaire: calc.prix_unitaire,
+          remise_pct: l.remise_pct || 0,
+          tva_taux: calc.tva_taux,
+          total_ht: calc.total_ht,
+          total_tva: calc.total_tva,
+          total_ttc: calc.total_ttc,
+          type_produit: l.type_produit,
+          numero_serie: (l as any).numero_serie || null,
+        }
+      })
+
+      const sums = sumInvoiceLines(docLignes)
+      const tax = taxBucketsFromLines(docLignes)
+      
+      const lineRemiseTotal = filtered.reduce((s, l) => {
+        const brut = l.quantite * l.prix_unitaire
+        return s + brut * ((l.remise_pct || 0) / 100)
+      }, 0)
+      const remisePanier = Math.max(0, (vente.total_remises ?? 0) - lineRemiseTotal)
+      const isFacture = type === 'FACTURE_VENTE' || type === 'FACTURE_JOURNALIERE_F'
+      const timbre = isFacture ? 1.0 : 0.0
+      const netPay = Math.max(0, sums.total_ttc + timbre - remisePanier)
+
       const year = new Date().getFullYear()
       const yy = String(year).slice(-2)
       const seqKey = type === 'DEVIS' ? `devis_sequence_${year}` : type === 'BON_LIVRAISON' ? `bl_vente_sequence_${year}` : `facture_vente_sequence_${year}`
@@ -109,8 +154,8 @@ export function ConvertVenteDocModal({
       await api.settingsSet(seqKey, String(next))
       const prefix = type === 'BON_LIVRAISON' ? 'BL' : type === 'DEVIS' ? 'DEV' : ''
       const numero = `${prefix}${yy}/#${String(next).padStart(5, '0')}`
-      const docId = generateId()
       const now = new Date().toISOString()
+      
       const doc = {
         id: docId,
         numero,
@@ -121,28 +166,20 @@ export function ConvertVenteDocModal({
         client_tel: vente.client_tel || null,
         client_adresse: vente.client_adresse || null,
         client_matricule: vente.client_matricule || null,
-        total_ht: totalHT,
-        total_tva: 0,
-        total_ttc: totalHT,
+        total_ht: sums.total_ht,
+        total_tva: sums.total_tva,
+        total_ttc: sums.total_ttc,
         statut_paiement: 'PAYE',
-        montant_paye: totalHT,
+        montant_paye: netPay,
+        timbre,
+        total_remise: remisePanier,
+        exo: null,
+        tva_taux_principal: 19.0,
+        ...tax,
         created_at: now,
         updated_at: now,
       }
-      const docLignes = filtered.map(l => ({
-        id: generateId(),
-        document_id: docId,
-        produit_id: l.produit_id || null,
-        designation: l.designation,
-        quantite: l.quantite,
-        prix_unitaire: l.prix_unitaire,
-        remise_pct: l.remise_pct || 0,
-        tva_taux: l.type_produit === 'F' ? (l as LigneVente & { tva_taux?: number }).tva_taux ?? 0 : 0,
-        total_ht: l.total_ligne,
-        total_tva: 0,
-        total_ttc: l.total_ligne,
-        type_produit: l.type_produit,
-      }))
+      
       await api.documentsCreate(doc, docLignes)
       setCreatedDoc(doc as DocType)
     }, { setLoading, successMessage: 'Document créé' })

@@ -199,7 +199,7 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
 
   const productPickerFilter = useMemo((): ProductPickerFilter => {
     if (mode === 'achat') return 'all'
-    if (typeDoc === 'FACTURE_VENTE' || typeDoc === 'FACTURE_JOURNALIERE_F') return 'F'
+    if (typeDoc === 'FACTURE_VENTE' || typeDoc === 'FACTURE_JOURNALIERE_F' || typeDoc === 'DEVIS') return 'F'
     return 'all'
   }, [mode, typeDoc])
 

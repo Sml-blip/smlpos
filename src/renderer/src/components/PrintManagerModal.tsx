@@ -443,6 +443,7 @@ export default function PrintManagerModal({
           widthMm: labelCfg.widthMm,
           heightMm: labelCfg.heightMm,
           rotationDeg: labelCfg.rotationDeg,
+          layout: labelCfg.layout,
         })
         if (result.success) {
           setStatusMsg(`Imprimé (TSPL raw${result.printer ? ` · ${result.printer}` : ''}) · ${opts.copies} copie(s)`)

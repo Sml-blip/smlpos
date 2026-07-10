@@ -1,8 +1,8 @@
 import type { TypeDocument } from './types'
 
-/** BL vente and devis may include NF lines; invoices require F only. */
+/** Only BL vente may include NF lines; facture and devis require F. */
 export function documentAllowsNF(typeDocument: string): boolean {
-  return typeDocument === 'BON_LIVRAISON' || typeDocument === 'DEVIS'
+  return typeDocument === 'BON_LIVRAISON'
 }
 
 export function filterLignesForDocument<T extends { type_produit?: string }>(

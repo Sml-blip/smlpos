@@ -12,6 +12,7 @@ import {
   buildInvoiceLineFromCart,
   sumInvoiceLines,
 } from '../../lib/invoiceLineCalc'
+import { taxBucketsFromLines } from '../../lib/documentFromCart'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import PinUnlockModal from '../../components/PinUnlockModal'
 import InvoiceEditModal from '../../components/InvoiceEditModal'
@@ -91,20 +92,35 @@ export default function DocumentPreviewModal({
 
   const lineSums = useMemo(() => sumInvoiceLines(docLignes), [docLignes])
 
-  const previewDoc: InvoiceDocData = useMemo(() => applyTotalsToDoc({
-    numero: docNumero || '—',
-    type_document: typeDoc,
-    client_nom: clientForm.nom || 'Client Passager',
-    client_tel: clientForm.tel || null,
-    client_adresse: clientForm.adresse || null,
-    client_matricule: clientForm.matricule || null,
-    total_ht: lineSums.total_ht,
-    total_tva: lineSums.total_tva,
-    total_ttc: lineSums.total_ttc,
-    statut_paiement: 'PAYE',
-    created_at: vente.created_at || new Date().toISOString(),
-    timbre: settings.invoice_timbre_fiscal !== 'false' ? 1 : 0,
-  }, docLignes), [docNumero, typeDoc, clientForm, lineSums, vente.created_at, settings.invoice_timbre_fiscal, docLignes])
+  const previewDoc: InvoiceDocData = useMemo(() => {
+    const isFacture = typeDoc === 'FACTURE_VENTE' || typeDoc === 'FACTURE_JOURNALIERE_F'
+    const timbreVal = isFacture ? (settings.invoice_timbre_fiscal !== 'false' ? 1.0 : 0.0) : 0.0
+    const lineRemiseTotal = items.reduce((s, item) => {
+      const brut = item.quantite * item.prix_unitaire
+      return s + brut * ((item.remise_pct || 0) / 100)
+    }, 0)
+    const remisePanier = Math.max(0, (vente.total_remises ?? 0) - lineRemiseTotal)
+    const tax = taxBucketsFromLines(docLignes)
+    const baseDoc = {
+      numero: docNumero || '—',
+      type_document: typeDoc,
+      client_nom: clientForm.nom || 'Client Passager',
+      client_tel: clientForm.tel || null,
+      client_adresse: clientForm.adresse || null,
+      client_matricule: clientForm.matricule || null,
+      total_ht: lineSums.total_ht,
+      total_tva: lineSums.total_tva,
+      total_ttc: lineSums.total_ttc,
+      statut_paiement: 'PAYE',
+      created_at: vente.created_at || new Date().toISOString(),
+      timbre: timbreVal,
+      total_remise: remisePanier,
+      exo: null,
+      tva_taux_principal: defaultTva,
+      ...tax,
+    }
+    return applyTotalsToDoc(baseDoc as any, docLignes, { total_remise: remisePanier, timbre: timbreVal }) as InvoiceDocData
+  }, [docNumero, typeDoc, clientForm, lineSums, vente.created_at, settings.invoice_timbre_fiscal, docLignes, defaultTva, vente.total_remises, items])
 
   const totalTTC = lineSums.total_ttc
 
@@ -181,12 +197,19 @@ export default function DocumentPreviewModal({
         client_tel: clientForm.tel.trim() || null,
         client_adresse: clientForm.adresse.trim() || null,
         client_matricule: clientForm.matricule.trim() || null,
-        total_ht: lineSums.total_ht,
-        total_tva: lineSums.total_tva,
-        total_ttc: lineSums.total_ttc,
+        total_ht: previewDoc.total_ht,
+        total_tva: previewDoc.total_tva,
+        total_ttc: previewDoc.total_ttc,
         statut_paiement: 'PAYE',
-        montant_paye: lineSums.total_ttc,
-        timbre: previewDoc.timbre ?? 1,
+        montant_paye: (previewDoc as any).net_a_payer ?? previewDoc.total_ttc,
+        timbre: previewDoc.timbre ?? 0,
+        total_remise: (previewDoc as any).total_remise ?? 0,
+        exo: (previewDoc as any).exo ?? null,
+        ht_7: (previewDoc as any).ht_7 ?? 0,
+        tva_7: (previewDoc as any).tva_7 ?? 0,
+        ht_19: (previewDoc as any).ht_19 ?? 0,
+        tva_19: (previewDoc as any).tva_19 ?? 0,
+        tva_taux_principal: (previewDoc as any).tva_taux_principal ?? defaultTva,
         created_at: now,
         updated_at: now,
       }

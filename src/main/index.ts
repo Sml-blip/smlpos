@@ -22,15 +22,7 @@ import {
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { importDefaultProductCatalog } from './seedProducts'
-import { printHtmlInHiddenWindow } from './printWindow'
-import { printTsplLabel } from './printTspl'
-import {
-  gainschaDetectUsb,
-  gainschaPrintLabel,
-  gainschaSdkVersion,
-  isGainschaAvailable,
-  type GainschaPrintJob,
-} from './gainschaPrint'
+import { PrinterService, type GainschaPrintJob } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
 
@@ -948,7 +940,12 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('ventes:getLignes', (_e, venteId) => {
-    return db.prepare('SELECT * FROM lignes_vente WHERE vente_id = ?').all(venteId)
+    return db.prepare(`
+      SELECT lv.*, p.tva_taux AS tva_taux
+      FROM lignes_vente lv
+      LEFT JOIN produits p ON lv.produit_id = p.id
+      WHERE lv.vente_id = ?
+    `).all(venteId)
   })
 
   ipcMain.handle('ventes:getLastNumber', (_e, prefix) => {
@@ -2362,12 +2359,13 @@ function setupIpcHandlers() {
       client_nom: null, client_tel: null, client_adresse: null, client_matricule: null,
       shift_id: null, statut_paiement: 'PAYE', montant_paye: 0,
       date_echeance: null, layout_snapshot: null, contenu_json: null,
+      exo: null, timbre: 1.0, ht_7: 0.0, tva_7: 0.0, ht_19: 0.0, tva_19: 0.0, total_remise: 0.0, tva_taux_principal: 0.0,
       updated_at: now, created_at: now,
       ...doc,
     }
     let docLignes = lignes
     const typeDocStr = String(normalizedDoc.type_document ?? '')
-    const nfAllowed = typeDocStr === 'BON_LIVRAISON' || typeDocStr === 'DEVIS'
+    const nfAllowed = typeDocStr === 'BON_LIVRAISON'
     if (normalizedDoc.vente_id && !nfAllowed) {
       docLignes = lignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
       if (docLignes.length === 0) {
@@ -2385,7 +2383,21 @@ function setupIpcHandlers() {
       }
     }
     db.transaction(() => {
-      db.prepare(`INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at) VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)`).run(normalizedDoc)
+      db.prepare(`
+        INSERT INTO documents (
+          id, numero, type_document, statut, shift_id, vente_id, fournisseur_id, client_id,
+          client_nom, client_tel, client_adresse, client_matricule, total_ht, total_tva, total_ttc,
+          statut_paiement, montant_paye, date_echeance, layout_snapshot, contenu_json,
+          exo, timbre, ht_7, tva_7, ht_19, tva_19, total_remise, tva_taux_principal,
+          created_at, updated_at
+        ) VALUES (
+          @id, @numero, @type_document, @statut, @shift_id, @vente_id, @fournisseur_id, @client_id,
+          @client_nom, @client_tel, @client_adresse, @client_matricule, @total_ht, @total_tva, @total_ttc,
+          @statut_paiement, @montant_paye, @date_echeance, @layout_snapshot, @contenu_json,
+          @exo, @timbre, @ht_7, @tva_7, @ht_19, @tva_19, @total_remise, @tva_taux_principal,
+          @created_at, @updated_at
+        )
+      `).run(normalizedDoc)
       for (const l of docLignes) {
         const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l }
         db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)`).run(nl)
@@ -2394,7 +2406,7 @@ function setupIpcHandlers() {
     addActivityLog({ shift_id: doc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: doc.type_document, numero: doc.numero, client: doc.client_nom }, montant: doc.total_ttc as number })
     enqueueSync('documents', 'INSERT', normalizedDoc)
     for (const l of docLignes) {
-      const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l }
+      const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l }
       enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
     }
     return { success: true }
@@ -2883,7 +2895,7 @@ function setupIpcHandlers() {
 
   // ─── Print ───────────────────────────────────────────────────────────────────
   ipcMain.handle('print:label', async (_event, html: string) => {
-    const res = await printHtmlInHiddenWindow(html, {
+    const res = await PrinterService.printHtmlInHiddenWindow(html, {
       silent: false,
       printBackground: true,
       color: true,
@@ -2901,32 +2913,32 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('print:printContent', async (_event, html: string, printerName: string, options: Record<string, unknown> = {}) => {
-    let pageSize: Parameters<typeof resolveElectronPageSize>[0] = (options.pageSize as string) || 'A4'
+    let pageSize: Parameters<typeof PrinterService.resolveElectronPageSize>[0] = (options.pageSize as string) || 'A4'
     if (options.widthMm != null && options.heightMm != null) {
       pageSize = {
         widthMm: Number(options.widthMm),
         heightMm: Number(options.heightMm),
       }
     }
-    return printHtmlInHiddenWindow(html, {
+    return PrinterService.printHtmlInHiddenWindow(html, {
       printerName: printerName || undefined,
       silent: options.silent !== false && !!printerName,
       printBackground: options.printBackground !== false,
       color: options.color !== false,
       copies: typeof options.copies === 'number' ? options.copies : 1,
-      pageSize: resolveElectronPageSize(pageSize),
+      pageSize: PrinterService.resolveElectronPageSize(pageSize),
       scaleFactor: typeof options.scaleFactor === 'number' ? options.scaleFactor : undefined,
       dpi: options.dpi as { horizontal: number; vertical: number } | undefined,
     })
   })
 
-  ipcMain.handle('gainscha:isAvailable', () => isGainschaAvailable())
+  ipcMain.handle('gainscha:isAvailable', () => PrinterService.isGainschaAvailable())
 
-  ipcMain.handle('gainscha:detectUsb', async () => gainschaDetectUsb())
+  ipcMain.handle('gainscha:detectUsb', async () => PrinterService.gainschaDetectUsb())
 
-  ipcMain.handle('gainscha:version', async () => gainschaSdkVersion())
+  ipcMain.handle('gainscha:version', async () => PrinterService.gainschaSdkVersion())
 
-  ipcMain.handle('gainscha:printLabel', async (_event, job: GainschaPrintJob) => gainschaPrintLabel(job))
+  ipcMain.handle('gainscha:printLabel', async (_event, job: GainschaPrintJob) => PrinterService.gainschaPrintLabel(job))
 
   ipcMain.handle('print:tsplLabel', async (_event, data: Record<string, unknown>) => {
     const getPrinters = async () => {
@@ -2937,7 +2949,7 @@ function setupIpcHandlers() {
         return []
       }
     }
-    return printTsplLabel(
+    return PrinterService.printTsplLabel(
       {
         codeBarre: String(data.codeBarre ?? ''),
         nomProduit: String(data.nomProduit ?? ''),
@@ -2947,6 +2959,7 @@ function setupIpcHandlers() {
         widthMm: typeof data.widthMm === 'number' ? data.widthMm : 40,
         heightMm: typeof data.heightMm === 'number' ? data.heightMm : 20,
         rotationDeg: data.rotationDeg === 180 ? 180 : 0,
+        layout: data.layout as any,
       },
       getPrinters,
     )

@@ -990,8 +990,8 @@ function NewDocumentModal({
     })
   }, [])
 
-  // F-only products for FACTURE_VENTE, all for DEVIS / BON_LIVRAISON
-  const availableProduits = typeDoc === 'FACTURE_VENTE'
+  // F-only products for FACTURE_VENTE and DEVIS, all for BON_LIVRAISON
+  const availableProduits = (typeDoc === 'FACTURE_VENTE' || typeDoc === 'DEVIS')
     ? produits.filter(p => p.type === 'F')
     : produits
 
@@ -1007,25 +1007,42 @@ function NewDocumentModal({
       const updated = { ...l, [field]: value }
       if (field === 'produit_id' && value) {
         const p = produits.find(p => p.id === value)
-        if (p) { updated.designation = p.nom; updated.prix_unitaire = p.prix_vente }
+        if (p) {
+          updated.designation = p.nom
+          updated.prix_unitaire = p.prix_vente
+          updated.tva_taux = p.tva_taux ?? 19
+        }
       }
       return updated
     }))
   }
 
   const totalHT = lignes.reduce((s, l) => {
-    const ht = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
+    const ttc = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
+    const ht = ttc / (1 + (l.tva_taux || 0) / 100)
     return s + ht
   }, 0)
   const totalTVA = lignes.reduce((s, l) => {
-    const ht = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
-    return s + ht * (l.tva_taux / 100)
+    const ttc = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
+    const ht = ttc / (1 + (l.tva_taux || 0) / 100)
+    const tva = ttc - ht
+    return s + tva
   }, 0)
   const totalTTC = totalHT + totalTVA
 
   const handleSave = async () => {
     const filled = lignes.filter(l => l.designation.trim())
     if (filled.length === 0) { setError('Ajoutez au moins une ligne'); return }
+    if (typeDoc === 'DEVIS') {
+      const hasNf = filled.some(l => {
+        const p = produits.find(prod => prod.id === l.produit_id)
+        return p?.type === 'NF'
+      })
+      if (hasNf) {
+        setError('Les devis ne peuvent pas contenir de produits NF')
+        return
+      }
+    }
     setError('')
     await runAction('Création document', async () => {
       const docId = generateId()
@@ -1034,6 +1051,50 @@ function NewDocumentModal({
       const prefix = typeDoc === 'FACTURE_VENTE' ? 'FAC' : typeDoc === 'DEVIS' ? 'DEV' : 'BL'
       const date = now.slice(0, 10).replace(/-/g, '')
       const numero = `${prefix}-${date}-${String((lastNum ?? 0) + 1).padStart(3, '0')}`
+
+      const lignesData = filled.map(l => {
+        const ttc = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
+        const ht = ttc / (1 + (l.tva_taux || 0) / 100)
+        const tva = ttc - ht
+        const pu_ht = l.prix_unitaire / (1 + (l.tva_taux || 0) / 100)
+
+        const p = produits.find(prod => prod.id === l.produit_id)
+        const typeProduit = p?.type ?? 'F'
+
+        return {
+          id: generateId(), document_id: docId,
+          produit_id: l.produit_id || null,
+          designation: l.designation,
+          quantite: l.quantite,
+          prix_unitaire: Math.round(pu_ht * 1000) / 1000,
+          remise_pct: l.remise_pct,
+          tva_taux: l.tva_taux,
+          total_ht: Math.round(ht * 1000) / 1000,
+          total_tva: Math.round(tva * 1000) / 1000,
+          total_ttc: Math.round(ttc * 1000) / 1000,
+          type_produit: typeProduit,
+        }
+      })
+
+      let ht_7 = 0, tva_7 = 0, ht_19 = 0, tva_19 = 0
+      for (const line of lignesData) {
+        const rate = Math.round(line.tva_taux || 0)
+        if (rate <= 7) {
+          ht_7 += line.total_ht
+          tva_7 += line.total_tva
+        } else {
+          ht_19 += line.total_ht
+          tva_19 += line.total_tva
+        }
+      }
+
+      const isFacture = typeDoc === 'FACTURE_VENTE' || typeDoc === 'FACTURE_JOURNALIERE_F'
+      const timbre = isFacture ? 1.0 : 0.0
+      const totalHTRounded = Math.round(totalHT * 1000) / 1000
+      const totalTVARounded = Math.round(totalTVA * 1000) / 1000
+      const totalTTCRounded = Math.round((totalHTRounded + totalTVARounded) * 1000) / 1000
+      const netPay = Math.round((totalTTCRounded + timbre) * 1000) / 1000
+
       const doc = {
         id: docId, numero, type_document: typeDoc, statut: 'ACTIF',
         shift_id: currentShift?.id ?? null,
@@ -1042,30 +1103,25 @@ function NewDocumentModal({
         client_tel: selectedClient?.telephone ?? null,
         client_adresse: selectedClient?.adresse ?? null,
         client_matricule: selectedClient?.matricule_fiscal ?? null,
-        total_ht: totalHT, total_tva: totalTVA, total_ttc: totalTTC,
-        statut_paiement: 'PAYE', montant_paye: totalTTC,
+        total_ht: totalHTRounded,
+        total_tva: totalTVARounded,
+        total_ttc: totalTTCRounded,
+        statut_paiement: 'PAYE',
+        montant_paye: netPay,
         date_echeance: dateEcheance || null,
         notes: notes || null, imprimee: 0,
         layout_snapshot: JSON.stringify(currentSettings),
+        timbre,
+        total_remise: 0,
+        exo: null,
+        tva_taux_principal: 19.0,
+        ht_7: Math.round(ht_7 * 1000) / 1000,
+        tva_7: Math.round(tva_7 * 1000) / 1000,
+        ht_19: Math.round(ht_19 * 1000) / 1000,
+        tva_19: Math.round(tva_19 * 1000) / 1000,
         created_at: now,
       }
-      const lignesData = filled.map(l => {
-        const ht = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)
-        const tva = ht * (l.tva_taux / 100)
-        return {
-          id: generateId(), document_id: docId,
-          produit_id: l.produit_id || null,
-          designation: l.designation,
-          quantite: l.quantite,
-          prix_unitaire: l.prix_unitaire,
-          remise_pct: l.remise_pct,
-          tva_taux: l.tva_taux,
-          total_ht: ht,
-          total_tva: tva,
-          total_ttc: ht + tva,
-          type_produit: 'F',
-        }
-      })
+
       await api.documentsCreate(doc, lignesData)
       onSaved()
     }, { setSaving, silent: true, onError: setError, successMessage: 'Document créé' })
