@@ -80,22 +80,33 @@ const getGainscha = async () => {
 }
 
 // ─── Print a label from PNG blob bytes ───────────────────────────────────────
+// labels.Image.create() requires a file path string, NOT a Buffer —
+// write to a temp file, pass the path, then clean up in finally.
 const printLabelFromPNG = async (pngBase64: string, copies: number) => {
   const T = Label40x20
 
-  // Decode base64 PNG → Buffer
   const pngBuffer = Buffer.from(pngBase64, 'base64')
+  const tempImagePath = join(tmpdir(), `smlpos-label-${Date.now()}.png`)
 
-  // label-printer handles: 1-bit conversion, TSPL BITMAP command, USB transport
-  const image = await labels.Image.create(pngBuffer, 0, 0, T.canvasW, T.canvasH)
+  try {
+    writeFileSync(tempImagePath, pngBuffer)
 
-  // Label dimensions in mm (label-printer default unit = mm)
-  const label = new labels.Label(40, 19.9)
-  label.add(image)
+    const image = await labels.Image.create(tempImagePath, 0, 0, T.canvasW, T.canvasH)
 
-  const printer = await getGainscha()
-  await printer.print(label, copies, T.gapMm)
-  await printer.close()
+    const label = new labels.Label(40, 19.9)
+    label.add(image)
+
+    const printersList = await printers.PrinterService.getPrinters()
+    if (printersList.length === 0) {
+      throw new Error('Aucune imprimante thermique détectée — vérifier USB et alimentation')
+    }
+
+    const printer = printersList[0]
+    await printer.print(label, copies, T.gapMm)
+    await printer.close()
+  } finally {
+    try { unlinkSync(tempImagePath) } catch { /* ignore */ }
+  }
 }
 
 export class PrinterService {
