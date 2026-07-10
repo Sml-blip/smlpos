@@ -1,11 +1,12 @@
 import { spawn, exec } from 'child_process';
-import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { BrowserWindow } from 'electron';
-import { configToTemplate, type LabelTemplateData } from './LabelTemplate';
-import { TsplRenderer } from './TsplRenderer';
+import { BrowserWindow, ipcMain } from 'electron';
+import { labels, printers } from 'label-printer';
+import { Label40x20 } from './LabelTemplate';
 
+// ─── Legacy/Hidden Window Types ──────────────────────────────────────────────
 export type ElectronPageSize = string | { width: number; height: number };
 
 export interface CustomPageSizeMm {
@@ -68,6 +69,33 @@ export interface TsplPrintResult {
   success: boolean;
   error?: string;
   printer?: string;
+}
+
+// ─── Find Gainscha in connected USB devices ──────────────────────────────────
+const getGainscha = async () => {
+  // Auto-discover all connected TSPL printers (USB + network)
+  const list = await printers.PrinterService.getPrinters()
+  if (list.length === 0) throw new Error('Aucune imprimante trouvée — vérifier USB et alimentation')
+  return list[0]
+}
+
+// ─── Print a label from PNG blob bytes ───────────────────────────────────────
+const printLabelFromPNG = async (pngBase64: string, copies: number) => {
+  const T = Label40x20
+
+  // Decode base64 PNG → Buffer
+  const pngBuffer = Buffer.from(pngBase64, 'base64')
+
+  // label-printer handles: 1-bit conversion, TSPL BITMAP command, USB transport
+  const image = await labels.Image.create(pngBuffer, 0, 0, T.canvasW, T.canvasH)
+
+  // Label dimensions in mm (label-printer default unit = mm)
+  const label = new labels.Label(40, 19.9)
+  label.add(image)
+
+  const printer = await getGainscha()
+  await printer.print(label, copies, T.gapMm)
+  await printer.close()
 }
 
 export class PrinterService {
@@ -174,188 +202,51 @@ export class PrinterService {
     });
   }
 
-  // ─── Gainscha Windows driver/USB PowerShell SDK ────────────────────────────
-  static resolveGainschaRoot(): string | null {
-    const candidates = [
-      join(process.resourcesPath, 'resources', 'gainscha'),
-      join(process.resourcesPath, 'gainscha'),
-      join(__dirname, '../../resources/gainscha'),
-    ];
-    for (const dir of candidates) {
-      const script = join(dir, 'gainscha-print.ps1');
-      const dll = join(dir, 'x64', 'GTSPL_SDK.dll');
-      if (existsSync(script) && existsSync(dll)) return dir;
-    }
-    return null;
-  }
-
-  static runPowerShell(args: string[]): Promise<GainschaScriptResult> {
-    return new Promise((resolve) => {
-      const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args];
-      const child = spawn('powershell.exe', psArgs, { windowsHide: true });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
-      });
-      child.on('error', (err) => {
-        resolve({ success: false, error: err.message });
-      });
-      child.on('close', (code) => {
-        const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? '';
-        try {
-          const parsed = JSON.parse(line) as GainschaScriptResult;
-          if (!parsed.success && !parsed.error && stderr) parsed.error = stderr.trim();
-          resolve(parsed);
-        } catch {
-          resolve({
-            success: code === 0,
-            error:
-              stderr.trim() || stdout.trim() || `Script PowerShell échoué (code ${code ?? '?'})`,
-          });
-        }
-      });
-    });
-  }
-
+  // ─── Deprecated / Stubbed Legacy Functions ─────────────────────────────────
   static isGainschaAvailable(): boolean {
-    return process.platform === 'win32' && this.resolveGainschaRoot() !== null;
+    return false;
   }
 
   static async gainschaDetectUsb(): Promise<GainschaScriptResult> {
-    const root = this.resolveGainschaRoot();
-    if (!root) return { success: false, error: 'SDK Gainscha non installé', devices: [] };
-    const script = join(root, 'gainscha-print.ps1');
-    return this.runPowerShell(['-File', script, '-Detect']);
+    return { success: false, error: 'SDK Gainscha déprécié au profit du mode Canvas Bitmap', devices: [] };
   }
 
   static async gainschaSdkVersion(): Promise<GainschaScriptResult> {
-    const root = this.resolveGainschaRoot();
-    if (!root) return { success: false, error: 'SDK Gainscha non installé' };
-    const script = join(root, 'gainscha-print.ps1');
-    return this.runPowerShell(['-File', script, '-Version']);
+    return { success: false, error: 'SDK Gainscha déprécié' };
   }
 
-  static async gainschaPrintLabel(job: GainschaPrintJob): Promise<GainschaScriptResult> {
-    if (process.platform !== 'win32') {
-      return { success: false, error: 'SDK Gainscha disponible uniquement sur Windows' };
-    }
-    const root = this.resolveGainschaRoot();
-    if (!root) {
-      return { success: false, error: 'SDK Gainscha introuvable dans resources/gainscha' };
-    }
-
-    const tmpDir = mkdtempSync(join(tmpdir(), 'smlpos-gainscha-'));
-    const jobPath = join(tmpDir, 'job.json');
-    writeFileSync(jobPath, JSON.stringify(job), 'utf8');
-
-    try {
-      const script = join(root, 'gainscha-print.ps1');
-      return await this.runPowerShell(['-File', script, '-JobJsonPath', jobPath]);
-    } finally {
-      try {
-        unlinkSync(jobPath);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  // ─── TSPL Raw Printing ─────────────────────────────────────────────────────
-  static findGainschaPrinterName(printers: { name: string }[]): string | null {
-    const match = printers.find((p) => {
-      const n = p.name.toLowerCase();
-      return n.includes('gainscha') || n.includes('gs-24') || n.includes('gs2408');
-    });
-    return match?.name ?? null;
-  }
-
-  static sendTsplRaw(tspl: string, printerName: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const tmp = join(tmpdir(), `smlpos_tspl_${Date.now()}.prn`);
-      writeFileSync(tmp, tspl, 'latin1');
-      const cmd = `COPY /B "${tmp}" "${printerName}"`;
-      exec(cmd, { shell: 'cmd.exe', windowsHide: true }, (err, _stdout, stderr) => {
-        try {
-          unlinkSync(tmp);
-        } catch {
-          /* ignore */
-        }
-        if (err) reject(new Error(stderr?.trim() || err.message));
-        else resolve();
-      });
-    });
+  static async gainschaPrintLabel(_job: GainschaPrintJob): Promise<GainschaScriptResult> {
+    return { success: false, error: 'SDK Gainscha déprécié' };
   }
 
   static async printTsplLabel(
-    data: {
-      codeBarre: string;
-      nomProduit: string;
-      prix: string;
-      copies?: number;
-      printerName?: string;
-      widthMm?: number;
-      heightMm?: number;
-      rotationDeg?: 0 | 180;
-      layout?: {
-        name: { x: number; y: number; w: number; h: number; visible: boolean };
-        barcode: { x: number; y: number; w: number; h: number; visible: boolean };
-        price: { x: number; y: number; w: number; h: number; visible: boolean };
-        showBarcodeText: boolean;
-      };
-    },
-    getPrinters: () => Promise<{ name: string }[]>
+    _data: Record<string, unknown>,
+    _getPrinters: () => Promise<{ name: string }[]>
   ): Promise<TsplPrintResult> {
-    if (process.platform !== 'win32') {
-      return { success: false, error: 'TSPL raw disponible uniquement sur Windows' };
-    }
-    try {
-      const printers = await getPrinters();
-      const printer = data.printerName?.trim() || this.findGainschaPrinterName(printers);
-      if (!printer) {
-        return {
-          success: false,
-          error: 'Imprimante Gainscha introuvable — vérifiez connexion USB et driver Seagull',
-        };
-      }
-
-      // Convert configured layout to template dots geometry or use default Compact40x20
-      const rotationDeg = data.rotationDeg === 180 ? 180 : 0;
-      const widthMm = data.widthMm ?? 40;
-      const heightMm = data.heightMm ?? 20;
-
-      const layout = data.layout ?? {
-        name: { x: 10 / 8, y: 8 / 8, w: 300 / 8, h: 24 / 8, visible: true },
-        barcode: { x: 10 / 8, y: 36 / 8, w: 300 / 8, h: 55 / 8, visible: true },
-        price: { x: 10 / 8, y: 108 / 8, w: 300 / 8, h: 36 / 8, visible: true },
-        showBarcodeText: false,
-      };
-
-      const template = configToTemplate({
-        widthMm,
-        heightMm,
-        rotationDeg,
-        layout,
-      });
-
-      const renderer = new TsplRenderer();
-      const tspl = renderer.render(
-        template,
-        {
-          nom: data.nomProduit,
-          code: data.codeBarre,
-          prix: data.prix,
-        },
-        data.copies ?? 1
-      );
-
-      await this.sendTsplRaw(tspl, printer);
-      return { success: true, printer };
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
-    }
+    return { success: false, error: 'TSPL brut déprécié au profit du mode Canvas Bitmap' };
   }
+}
+
+// ─── IPC Handlers ────────────────────────────────────────────────────────────
+export const registerPrinterIPC = () => {
+  ipcMain.handle('printer:print', async (_, { pngBase64, copies }: {
+    pngBase64: string
+    copies:    number
+  }) => {
+    try {
+      await printLabelFromPNG(pngBase64, copies)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('printer:list', async () => {
+    try {
+      const list = await printers.PrinterService.getPrinters()
+      return list.map((_p, i) => ({ id: i, name: `Printer ${i + 1}` }))
+    } catch {
+      return []
+    }
+  })
 }

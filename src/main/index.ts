@@ -22,7 +22,7 @@ import {
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { importDefaultProductCatalog } from './seedProducts'
-import { PrinterService, type GainschaPrintJob } from './printer/PrinterService'
+import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
 
@@ -2904,6 +2904,8 @@ function setupIpcHandlers() {
     })
     return res.success
   })
+
+  registerPrinterIPC()
 
   ipcMain.handle('print:getPrinters', async () => {
     if (!mainWindow) return []

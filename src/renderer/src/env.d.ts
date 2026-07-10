@@ -240,6 +240,8 @@ interface Window {
     gainschaVersion?: () => Promise<{ success: boolean; version?: string; error?: string }>
     gainschaPrintLabel?: (job: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>
     printTsplLabel?: (data: Record<string, unknown>) => Promise<{ success: boolean; error?: string; printer?: string }>
+    printerPrint?: (pngBase64: string, copies: number) => Promise<{ success: boolean; error?: string }>
+    printerList?: () => Promise<{ id: number; name: string }[]>
 
     // Window
     windowMinimize: () => Promise<void>

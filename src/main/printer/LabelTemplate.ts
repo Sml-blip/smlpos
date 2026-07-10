@@ -1,68 +1,51 @@
-export interface LabelItemGeometry {
-  x: number; // in dots
-  y: number; // in dots
-  w: number; // in dots
-  h: number; // in dots
-  visible: boolean;
-}
+export const PRINTER_DPI   = 203
+export const MM            = (mm: number) => Math.round(mm * PRINTER_DPI / 25.4)
 
-export interface LabelTemplateData {
-  widthMm: number;
-  heightMm: number;
-  widthDots: number;
-  heightDots: number;
-  rotationDeg: 0 | 180;
-  showBarcodeText: boolean;
-  name: LabelItemGeometry;
-  barcode: LabelItemGeometry;
-  price: LabelItemGeometry;
-}
+// ── Label dimensions ─────────────────────────────────────────────────────────
+const W   = MM(40)      // 320 dots  — full label width
+const H   = MM(19.9)    // 159 dots  — full label height
+const SL  = MM(1.3)     // 10 dots   — left strip (non-printable)
+const UW  = W - SL - MM(1.3)  // 300 dots — usable width
 
-export const DPI = 203;
-export const MM_PER_INCH = 25.4;
+export const Label40x20 = {
+  // Canvas size (dots = pixels at 203 DPI, 1:1 mapping)
+  canvasW:   W,    // 320
+  canvasH:   H,    // 159
 
-export function mmToDots(mm: number): number {
-  return Math.round(mm * (DPI / MM_PER_INCH));
-}
+  // Printer settings
+  density:   12,   // 1–15, 12 = solid black
+  speed:     2,    // 1 = slow/best, 14 = fast/low quality
+  gapMm:     3,    // mm between labels
 
-export function configToTemplate(cfg: {
-  widthMm: number;
-  heightMm: number;
-  rotationDeg: 0 | 180;
-  layout: {
-    name: { x: number; y: number; w: number; h: number; visible: boolean };
-    barcode: { x: number; y: number; w: number; h: number; visible: boolean };
-    price: { x: number; y: number; w: number; h: number; visible: boolean };
-    showBarcodeText: boolean;
-  };
-}): LabelTemplateData {
-  return {
-    widthMm: cfg.widthMm,
-    heightMm: cfg.heightMm,
-    widthDots: mmToDots(cfg.widthMm),
-    heightDots: mmToDots(cfg.heightMm),
-    rotationDeg: cfg.rotationDeg,
-    showBarcodeText: cfg.layout.showBarcodeText,
-    name: {
-      x: mmToDots(cfg.layout.name.x),
-      y: mmToDots(cfg.layout.name.y),
-      w: mmToDots(cfg.layout.name.w),
-      h: mmToDots(cfg.layout.name.h),
-      visible: cfg.layout.name.visible,
-    },
-    barcode: {
-      x: mmToDots(cfg.layout.barcode.x),
-      y: mmToDots(cfg.layout.barcode.y),
-      w: mmToDots(cfg.layout.barcode.w),
-      h: mmToDots(cfg.layout.barcode.h),
-      visible: cfg.layout.barcode.visible,
-    },
-    price: {
-      x: mmToDots(cfg.layout.price.x),
-      y: mmToDots(cfg.layout.price.y),
-      w: mmToDots(cfg.layout.price.w),
-      h: mmToDots(cfg.layout.price.h),
-      visible: cfg.layout.price.visible,
-    },
-  };
+  // Element positions — all in dots, origin = top-left of canvas
+  name: {
+    x:       SL,
+    y:       3,
+    maxW:    UW,
+    fontPt:  6,
+    weight:  'bold'  as const,
+    maxLines: 2,
+  },
+  barcode: {
+    x:       SL,
+    y:       MM(5.2),      // 42 dots from top
+    w:       UW,
+    barH:    MM(8),        // 64 dots — bars only, not including human-readable text
+    narrow:  2,            // narrow bar width in dots
+    wide:    4,            // wide bar width in dots
+    textPt:  7,
+  },
+  price: {
+    x:       SL,
+    y:       H - MM(3.2), // 133 dots from top
+    maxW:    UW,
+    fontPt:  8.5,
+    weight:  '900' as const,
+  },
+} as const
+
+export interface LabelData {
+  nom:       string   // full product name, never truncated
+  codeBarre: string   // barcode value (CODE128)
+  prix:      number   // selling price
 }

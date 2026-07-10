@@ -27,6 +27,7 @@ import {
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
 import { buildGainschaPrintJob } from '../lib/gainschaLabelJob'
+import { renderLabel } from '../lib/labelRenderer'
 import LabelVisualEditor from './LabelVisualEditor'
 
 const api = window.api
@@ -429,27 +430,33 @@ export default function PrintManagerModal({
           prix: 12.5,
           productRef: 'REF-TEST',
         }
-        if (!api.printTsplLabel) {
-          setStatusMsg('TSPL raw indisponible')
+        if (!api.printerPrint) {
+          setStatusMsg('Mode Canvas Bitmap non disponible')
           setStatusOk(false)
           return
         }
-        const result = await api.printTsplLabel({
-          codeBarre: source.code,
-          nomProduit: source.nom || source.productRef || 'Produit',
-          prix: `${Number(source.prix).toFixed(3)} DT`,
-          copies: opts.copies,
-          printerName: opts.printerName || undefined,
-          widthMm: labelCfg.widthMm,
-          heightMm: labelCfg.heightMm,
-          rotationDeg: labelCfg.rotationDeg,
-          layout: labelCfg.layout,
-        })
-        if (result.success) {
-          setStatusMsg(`Imprimé (TSPL raw${result.printer ? ` · ${result.printer}` : ''}) · ${opts.copies} copie(s)`)
-          setStatusOk(true)
-        } else {
-          setStatusMsg(`Erreur TSPL : ${result.error ?? 'inconnue'} — essayez SDK Gainscha ou HTML`)
+        try {
+          const { blob } = await renderLabel({
+            nom: (source.nom || source.productRef || 'Produit').trim(),
+            codeBarre: (source.code || source.productRef || '').trim(),
+            prix: Number(source.prix),
+          })
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve((reader.result as string).split(',')[1])
+            reader.onerror = reject
+            reader.readAsDataURL(blob)
+          })
+          const result = await api.printerPrint(base64, opts.copies)
+          if (result.success) {
+            setStatusMsg(`Imprimé (Canvas Bitmap) · ${opts.copies} copie(s)`)
+            setStatusOk(true)
+          } else {
+            setStatusMsg(`Erreur : ${result.error ?? 'inconnue'}`)
+            setStatusOk(false)
+          }
+        } catch (e) {
+          setStatusMsg(`Erreur rendu canvas : ${e instanceof Error ? e.message : String(e)}`)
           setStatusOk(false)
         }
         return
