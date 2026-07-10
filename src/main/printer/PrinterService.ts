@@ -1,4 +1,4 @@
-import { spawn, exec } from 'child_process';
+import { spawn } from 'child_process';
 import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -71,18 +71,42 @@ export interface TsplPrintResult {
   printer?: string;
 }
 
-// ─── Find Gainscha in connected USB devices ──────────────────────────────────
-const getGainscha = async () => {
-  // Auto-discover all connected TSPL printers (USB + network)
-  const list = await printers.PrinterService.getPrinters()
-  if (list.length === 0) throw new Error('Aucune imprimante trouvée — vérifier USB et alimentation')
-  return list[0]
+interface TsplElementBox {
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  visible?: boolean;
+}
+
+interface TsplLayout {
+  name?: TsplElementBox;
+  barcode?: TsplElementBox;
+  price?: TsplElementBox;
+  showBarcodeText?: boolean;
+}
+
+interface TsplLabelData {
+  codeBarre: string;
+  nomProduit: string;
+  prix: string;
+  copies: number;
+  printerName: string;
+  widthMm?: number;
+  heightMm?: number;
+  stripLeftMm?: number;
+  stripRightMm?: number;
+  stripTopMm?: number;
+  stripBottomMm?: number;
+  rotationDeg?: 0 | 180;
+  layout?: TsplLayout;
 }
 
 // ─── Print a label from PNG blob bytes ───────────────────────────────────────
 // labels.Image.create() requires a file path string, NOT a Buffer —
 // write to a temp file, pass the path, then clean up in finally.
-const printLabelFromPNG = async (pngBase64: string, copies: number) => {
+// printerName is passed from the UI (Windows printer name) as a display hint.
+const printLabelFromPNG = async (pngBase64: string, copies: number, _printerName?: string) => {
   const T = Label40x20
 
   const pngBuffer = Buffer.from(pngBase64, 'base64')
@@ -98,14 +122,169 @@ const printLabelFromPNG = async (pngBase64: string, copies: number) => {
 
     const printersList = await printers.PrinterService.getPrinters()
     if (printersList.length === 0) {
-      throw new Error('Aucune imprimante thermique détectée — vérifier USB et alimentation')
+      throw new Error(
+        'Aucune imprimante TSPL accessible via USB.\n' +
+        'Vérifiez que l\'imprimante est allumée et branchée en USB.\n' +
+        'Si elle est installée via driver Windows (Seagull), le mode accès direct USB (WinUSB/Zadig) est requis par le mode Canvas Bitmap.'
+      )
     }
 
+    // label-printer auto-selects the USB printer; use first available
     const printer = printersList[0]
     await printer.print(label, copies, T.gapMm)
     await printer.close()
   } finally {
     try { unlinkSync(tempImagePath) } catch { /* ignore */ }
+  }
+}
+
+const mmToDots = (mm: number, dpi = 203): number => Math.round((mm * dpi) / 25.4)
+
+const escapeTsplText = (value: unknown): string =>
+  String(value ?? '').replace(/"/g, "'").replace(/[\r\n]+/g, ' ').trim()
+
+const isVisible = (box?: TsplElementBox): boolean => box?.visible !== false
+
+const pickBarcodeFormat = (value: string): '128' | 'EAN13' | 'EAN8' => {
+  if (/^\d{13}$/.test(value)) return 'EAN13'
+  if (/^\d{8}$/.test(value)) return 'EAN8'
+  return '128'
+}
+
+const buildTSPL = (data: TsplLabelData): string => {
+  const widthMm = Number(data.widthMm) || 40
+  const heightMm = Number(data.heightMm) || 20
+  const dpi = 203
+  const contentLeft = Number(data.stripLeftMm) || 1
+  const contentTop = Number(data.stripTopMm) || 0.35
+  const layout = data.layout ?? {}
+  const name = layout.name ?? { x: 11.5, y: 0.5, w: 25, h: 3, visible: true }
+  const barcode = layout.barcode ?? { x: 0.6, y: 4.7, w: 37, h: 13.2, visible: true }
+  const price = layout.price ?? { x: 0.6, y: 0.5, w: 10.5, h: 3, visible: true }
+  const barcodeValue = escapeTsplText(data.codeBarre)
+  const readable = layout.showBarcodeText === false ? 0 : 1
+  const barcodeHeight = readable ? (barcode.h ?? 10) * 0.78 : (barcode.h ?? 10)
+  const copies = Math.min(99, Math.max(1, Number(data.copies) || 1))
+  const direction = data.rotationDeg === 180 ? 0 : 1
+  const lines = [
+    `SIZE ${widthMm} mm,${heightMm} mm`,
+    'GAP 3 mm,0 mm',
+    'CODEPAGE UTF-8',
+    'DENSITY 12',
+    'SPEED 2',
+    `DIRECTION ${direction}`,
+    'REFERENCE 0,0',
+    'CLS',
+  ]
+
+  if (isVisible(name)) {
+    lines.push(
+      `TEXT ${mmToDots(contentLeft + (name.x ?? 0), dpi)},${mmToDots(contentTop + (name.y ?? 0), dpi)},"0",0,1,1,"${escapeTsplText(data.nomProduit)}"`,
+    )
+  }
+
+  if (isVisible(price)) {
+    lines.push(
+      `TEXT ${mmToDots(contentLeft + (price.x ?? 0), dpi)},${mmToDots(contentTop + (price.y ?? 0), dpi)},"0",0,2,2,"${escapeTsplText(data.prix)}"`,
+    )
+  }
+
+  if (isVisible(barcode) && barcodeValue) {
+    lines.push(
+      `BARCODE ${mmToDots(contentLeft + (barcode.x ?? 0), dpi)},${mmToDots(contentTop + (barcode.y ?? 0), dpi)},"${pickBarcodeFormat(barcodeValue)}",${mmToDots(barcodeHeight, dpi)},${readable},0,2,4,"${barcodeValue}"`,
+    )
+  }
+
+  lines.push(`PRINT ${copies},1`)
+  return `${lines.join('\r\n')}\r\n`
+}
+
+const sendTSPL = async (tspl: string, printerName: string): Promise<void> => {
+  const safePrinterName = printerName.trim()
+  if (!safePrinterName) throw new Error('Veuillez selectionner une imprimante dans la liste.')
+
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const dataPath = join(tmpdir(), `smlpos-label-${stamp}.tspl`)
+  const psPath = join(tmpdir(), `smlpos-raw-print-${stamp}.ps1`)
+  const script = `
+param([string]$PrinterName, [string]$DataPath)
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class RawPrinterHelper {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+  public class DOCINFOA {
+    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+  }
+  [DllImport("winspool.Drv", EntryPoint="OpenPrinterA", SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+  [DllImport("winspool.Drv", EntryPoint="ClosePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool ClosePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartDocPrinterA", SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+  [DllImport("winspool.Drv", EntryPoint="EndDocPrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool EndDocPrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool StartPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="EndPagePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool EndPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="WritePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, int dwCount, out int dwWritten);
+}
+"@
+$bytes = [System.IO.File]::ReadAllBytes($DataPath)
+$handle = [IntPtr]::Zero
+if (-not [RawPrinterHelper]::OpenPrinter($PrinterName, [ref]$handle, [IntPtr]::Zero)) { throw "Impossible d'ouvrir l'imprimante: $PrinterName" }
+try {
+  $doc = New-Object RawPrinterHelper+DOCINFOA
+  $doc.pDocName = "SMLPOS Label TSPL"
+  $doc.pDataType = "RAW"
+  if (-not [RawPrinterHelper]::StartDocPrinter($handle, 1, $doc)) { throw "StartDocPrinter a echoue" }
+  try {
+    if (-not [RawPrinterHelper]::StartPagePrinter($handle)) { throw "StartPagePrinter a echoue" }
+    try {
+      $written = 0
+      if (-not [RawPrinterHelper]::WritePrinter($handle, $bytes, $bytes.Length, [ref]$written)) { throw "WritePrinter a echoue" }
+      if ($written -ne $bytes.Length) { throw "Ecriture incomplete vers l'imprimante" }
+    } finally {
+      [void][RawPrinterHelper]::EndPagePrinter($handle)
+    }
+  } finally {
+    [void][RawPrinterHelper]::EndDocPrinter($handle)
+  }
+} finally {
+  [void][RawPrinterHelper]::ClosePrinter($handle)
+}
+`
+
+  try {
+    writeFileSync(dataPath, Buffer.from(tspl, 'utf8'))
+    writeFileSync(psPath, script, 'utf8')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        psPath,
+        '-PrinterName',
+        safePrinterName,
+        '-DataPath',
+        dataPath,
+      ], { windowsHide: true })
+      let stderr = ''
+      child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(stderr.trim() || `PowerShell raw print failed (${code})`))
+      })
+    })
+  } finally {
+    try { unlinkSync(dataPath) } catch { /* ignore */ }
+    try { unlinkSync(psPath) } catch { /* ignore */ }
   }
 }
 
@@ -231,31 +410,46 @@ export class PrinterService {
   }
 
   static async printTsplLabel(
-    _data: Record<string, unknown>,
+    data: TsplLabelData,
     _getPrinters: () => Promise<{ name: string }[]>
   ): Promise<TsplPrintResult> {
-    return { success: false, error: 'TSPL brut déprécié au profit du mode Canvas Bitmap' };
+    try {
+      if (!data.printerName?.trim()) {
+        return { success: false, error: 'Veuillez selectionner une imprimante dans la liste.' };
+      }
+      const tspl = buildTSPL(data);
+      await sendTSPL(tspl, data.printerName);
+      return { success: true, printer: data.printerName };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
   }
 }
 
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
 export const registerPrinterIPC = () => {
-  ipcMain.handle('printer:print', async (_, { pngBase64, copies }: {
-    pngBase64: string
-    copies:    number
+  // printerName comes from the Windows printer dropdown in the UI
+  ipcMain.handle('printer:print', async (_, { pngBase64, copies, printerName }: {
+    pngBase64:    string
+    copies:       number
+    printerName?: string
   }) => {
     try {
-      await printLabelFromPNG(pngBase64, copies)
+      await printLabelFromPNG(pngBase64, copies, printerName)
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }
     }
   })
 
+  // Returns label-printer auto-detected USB TSPL printers
   ipcMain.handle('printer:list', async () => {
     try {
       const list = await printers.PrinterService.getPrinters()
-      return list.map((_p, i) => ({ id: i, name: `Printer ${i + 1}` }))
+      return list.map((p: any, i: number) => ({
+        id:   i,
+        name: (p as any).name ?? (p as any).deviceName ?? (p as any).description ?? `Imprimante USB ${i + 1}`,
+      }))
     } catch {
       return []
     }

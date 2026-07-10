@@ -468,10 +468,14 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
             <Field label="Moteur étiquette">
               <select
                 value={labelCfg.labelEngine}
-                onChange={(e) => patchLabelCfg({ labelEngine: e.target.value === 'html' ? 'html' : 'gainscha' })}
+                onChange={(e) => {
+                  const v = e.target.value
+                  patchLabelCfg({ labelEngine: v === 'html' ? 'html' : v === 'tspl_raw' ? 'tspl_raw' : 'gainscha' })
+                }}
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white"
               >
-                <option value="gainscha">SDK Gainscha (recommandé)</option>
+                <option value="tspl_raw">TSPL raw (recommandé)</option>
+                <option value="gainscha">SDK Gainscha</option>
                 <option value="html">Windows / HTML (secours)</option>
               </select>
             </Field>

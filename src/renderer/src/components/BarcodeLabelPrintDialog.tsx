@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
-import { renderLabel } from '../lib/labelRenderer'
+import { useEffect, useState } from 'react'
 import { showToast } from '../lib/toast'
 import { Printer, X, AlertCircle } from 'lucide-react'
-import type { LabelData } from '../../../main/printer/LabelTemplate'
+import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
+import { loadLabelPrintConfig, mergeLabelConfig } from '../lib/labelSettings'
+import type { LabelPrintConfig } from '../lib/printManager'
 
 interface Props {
   code: string
@@ -20,44 +21,85 @@ export default function BarcodeLabelPrintDialog({
   onClose,
 }: Props) {
   const [preview, setPreview] = useState('')
-  const [pngB64, setPngB64] = useState('')
   const [copies, setCopies] = useState(1)
   const [printing, setPrinting] = useState(false)
   const [error, setError] = useState('')
+  const [printers, setPrinters] = useState<string[]>([])
+  const [selectedPrinter, setSelectedPrinter] = useState('')
+  const [labelCfg, setLabelCfg] = useState<LabelPrintConfig>(() => mergeLabelConfig())
 
-  const data: LabelData = {
-    nom: nom.trim() || productRef || 'Produit',
-    codeBarre: code.trim() || productRef,
-    prix: prix,
-  }
-
-  // Render preview on open
   useEffect(() => {
-    setError('')
-    renderLabel(data)
-      .then(({ dataURL, blob }) => {
-        setPreview(dataURL)
-        const reader = new FileReader()
-        reader.onload = () => {
-          const res = reader.result as string
-          setPngB64(res.split(',')[1])
+    let cancelled = false
+
+    async function load() {
+      setError('')
+      try {
+        const [cfg, printerList, settings] = await Promise.all([
+          loadLabelPrintConfig(),
+          window.api.getPrinters?.() ?? Promise.resolve([]),
+          window.api.settingsGetAll?.() ?? Promise.resolve({} as Record<string, string>),
+        ])
+        if (cancelled) return
+
+        const merged = mergeLabelConfig(cfg)
+        const names = printerList.map((p) => p.name).filter(Boolean)
+        const savedPrinter = String((settings as Record<string, string>).impression_printer_label ?? '')
+
+        setLabelCfg(merged)
+        setCopies(merged.defaultCopies || 1)
+        setPrinters(names)
+        setSelectedPrinter(savedPrinter && names.includes(savedPrinter) ? savedPrinter : names[0] ?? '')
+        setPreview(buildBarcodeLabelHtml(code, nom, prix, productRef, merged, 1))
+      } catch (e) {
+        if (!cancelled) {
+          setPreview(buildBarcodeLabelHtml(code, nom, prix, productRef, labelCfg, 1))
+          setError(e instanceof Error ? e.message : String(e))
         }
-        reader.readAsDataURL(blob)
-      })
-      .catch((e) => setError(String(e)))
+      }
+    }
+
+    void load()
+    return () => { cancelled = true }
+    // labelCfg is only a fallback for the catch path; reloading on every cfg set would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, nom, prix, productRef])
 
   const handlePrint = async () => {
-    if (!pngB64) return
+    if (!selectedPrinter) {
+      setError('Selectionnez une imprimante')
+      return
+    }
+
     setPrinting(true)
     setError('')
     try {
-      if (!window.api.printerPrint) {
-        throw new Error('IPC printerPrint non disponible')
+      if (!window.api.printTsplLabel) {
+        throw new Error('IPC printTsplLabel non disponible')
       }
-      const result = await window.api.printerPrint(pngB64, copies)
+      try {
+        await window.api.settingsSet?.('impression_printer_label', selectedPrinter)
+      } catch {
+        // non-fatal
+      }
+
+      const result = await window.api.printTsplLabel({
+        codeBarre: code.trim() || productRef,
+        nomProduit: nom.trim() || productRef || 'Produit',
+        prix: `${Number(prix).toFixed(3)} DT`,
+        copies,
+        printerName: selectedPrinter,
+        widthMm: labelCfg.widthMm,
+        heightMm: labelCfg.heightMm,
+        stripLeftMm: labelCfg.stripLeftMm,
+        stripRightMm: labelCfg.stripRightMm,
+        stripTopMm: labelCfg.stripTopMm,
+        stripBottomMm: labelCfg.stripBottomMm,
+        rotationDeg: labelCfg.rotationDeg,
+        layout: labelCfg.layout,
+      })
+
       if (result.success) {
-        showToast('success', `✅ ${copies} étiquette(s) imprimée(s)`)
+        showToast('success', `${copies} etiquette(s) imprimee(s)`)
         onClose()
       } else {
         setError(result.error ?? 'Erreur inconnue')
@@ -72,7 +114,6 @@ export default function BarcodeLabelPrintDialog({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-6 animate-slide-in relative flex flex-col">
-        {/* Close Button */}
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1.5 text-text-secondary hover:text-text-primary hover:bg-muted rounded-lg transition-colors"
@@ -81,40 +122,46 @@ export default function BarcodeLabelPrintDialog({
           <X size={18} />
         </button>
 
-        {/* Title */}
         <div className="flex items-center gap-2.5 mb-4">
           <div className="p-2 bg-accent-50 text-accent-500 rounded-xl">
             <Printer size={20} />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-text-primary">Imprimer Étiquette</h2>
-            <p className="text-xs text-text-secondary">Aperçu pixel-exact (40 × 19.9 mm — 203 DPI)</p>
+            <h2 className="text-lg font-bold text-text-primary">Imprimer etiquette</h2>
+            <p className="text-xs text-text-secondary">Apercu 40 x 20 mm - TSPL brut</p>
           </div>
         </div>
 
-        {/* Canvas Preview Container */}
         <div className="flex flex-col items-center gap-2.5 my-4 bg-gray-50 border border-border/60 rounded-xl p-4">
           {preview ? (
-            <img
-              src={preview}
-              alt="Label preview"
+            <iframe
+              title="Apercu etiquette"
+              srcDoc={preview}
               className="border border-border/80 bg-white"
-              style={{
-                width: 320, // 320 dots at 203 DPI
-                height: 159, // 159 dots at 203 DPI
-                imageRendering: 'pixelated', // no blurring
-              }}
+              style={{ width: 320, height: 159 }}
             />
           ) : (
             <div className="w-[320px] h-[159px] bg-gray-200 rounded-lg animate-pulse" />
           )}
           <span className="text-[10px] text-text-secondary font-mono bg-white px-2 py-0.5 border border-border rounded">
-            DPI: 203 | Size: 320x159 px
+            40 x 20 mm | 203 DPI
           </span>
         </div>
 
-        {/* Controls */}
         <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-xs font-semibold text-text-primary mb-1.5">Imprimante</label>
+            <select
+              value={selectedPrinter}
+              onChange={(e) => setSelectedPrinter(e.target.value)}
+              className="w-full bg-muted rounded-xl px-4 py-2.5 border border-border focus:border-accent-500 focus:bg-accent-50 transition-all font-semibold outline-none"
+              disabled={printing}
+            >
+              {printers.length === 0 && <option value="">Aucune imprimante detectee</option>}
+              {printers.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-text-primary mb-1.5">Nombre d'exemplaires</label>
             <input
@@ -136,7 +183,6 @@ export default function BarcodeLabelPrintDialog({
           )}
         </div>
 
-        {/* Footer actions */}
         <div className="flex items-center gap-2">
           <button
             onClick={onClose}
@@ -147,7 +193,7 @@ export default function BarcodeLabelPrintDialog({
           </button>
           <button
             onClick={handlePrint}
-            disabled={printing || !pngB64}
+            disabled={printing || !selectedPrinter}
             className="flex-1 py-3 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-100 disabled:text-gray-400 disabled:border-transparent text-text-primary font-bold rounded-xl transition-all flex items-center justify-center gap-1.5"
           >
             {printing ? (

@@ -225,8 +225,8 @@ const api = {
   gainschaVersion: () => ipcRenderer.invoke('gainscha:version') as Promise<{ success: boolean; version?: string; error?: string }>,
   gainschaPrintLabel: (job: Record<string, unknown>) => ipcRenderer.invoke('gainscha:printLabel', job) as Promise<{ success: boolean; error?: string }>,
   printTsplLabel: (data: Record<string, unknown>) => ipcRenderer.invoke('print:tsplLabel', data) as Promise<{ success: boolean; error?: string; printer?: string }>,
-  printerPrint: (pngBase64: string, copies: number) =>
-    ipcRenderer.invoke('printer:print', { pngBase64, copies }),
+  printerPrint: (pngBase64: string, copies: number, printerName?: string) =>
+    ipcRenderer.invoke('printer:print', { pngBase64, copies, printerName }),
   printerList: () =>
     ipcRenderer.invoke('printer:list'),
 

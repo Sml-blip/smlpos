@@ -27,7 +27,6 @@ import {
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
 import { buildGainschaPrintJob } from '../lib/gainschaLabelJob'
-import { renderLabel } from '../lib/labelRenderer'
 import LabelVisualEditor from './LabelVisualEditor'
 
 const api = window.api
@@ -403,7 +402,7 @@ export default function PrintManagerModal({
         setStatusOk(false)
         return
       }
-    } else if (!opts.printerName && !useTsplRaw) {
+    } else if (!opts.printerName) {
       setStatusMsg('Sélectionnez une imprimante')
       setStatusOk(false)
       return
@@ -430,33 +429,36 @@ export default function PrintManagerModal({
           prix: 12.5,
           productRef: 'REF-TEST',
         }
-        if (!api.printerPrint) {
-          setStatusMsg('Mode Canvas Bitmap non disponible')
+        if (!api.printTsplLabel) {
+          setStatusMsg('Mode TSPL brut non disponible')
           setStatusOk(false)
           return
         }
         try {
-          const { blob } = await renderLabel({
-            nom: (source.nom || source.productRef || 'Produit').trim(),
+          const result = await api.printTsplLabel({
             codeBarre: (source.code || source.productRef || '').trim(),
-            prix: Number(source.prix),
+            nomProduit: (source.nom || source.productRef || 'Produit').trim(),
+            prix: `${Number(source.prix).toFixed(3)} DT`,
+            copies: opts.copies,
+            printerName: opts.printerName,
+            widthMm: labelCfg.widthMm,
+            heightMm: labelCfg.heightMm,
+            stripLeftMm: labelCfg.stripLeftMm,
+            stripRightMm: labelCfg.stripRightMm,
+            stripTopMm: labelCfg.stripTopMm,
+            stripBottomMm: labelCfg.stripBottomMm,
+            rotationDeg: labelCfg.rotationDeg,
+            layout: labelCfg.layout,
           })
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve((reader.result as string).split(',')[1])
-            reader.onerror = reject
-            reader.readAsDataURL(blob)
-          })
-          const result = await api.printerPrint(base64, opts.copies)
           if (result.success) {
-            setStatusMsg(`Imprimé (Canvas Bitmap) · ${opts.copies} copie(s)`)
+            setStatusMsg(`Imprimé (TSPL brut) · ${opts.copies} copie(s)`)
             setStatusOk(true)
           } else {
             setStatusMsg(`Erreur : ${result.error ?? 'inconnue'}`)
             setStatusOk(false)
           }
         } catch (e) {
-          setStatusMsg(`Erreur rendu canvas : ${e instanceof Error ? e.message : String(e)}`)
+          setStatusMsg(`Erreur TSPL : ${e instanceof Error ? e.message : String(e)}`)
           setStatusOk(false)
         }
         return
@@ -788,7 +790,7 @@ export default function PrintManagerModal({
           </div>
         </div>
 
-        {labelCfg.labelConnection !== 'usb' && renderPrinterSelect()}
+        {!(labelCfg.labelEngine === 'gainscha' && gainschaAvailable && labelCfg.labelConnection === 'usb') && renderPrinterSelect()}
         {renderCopiesControl()}
 
         <div style={styles.section}>
