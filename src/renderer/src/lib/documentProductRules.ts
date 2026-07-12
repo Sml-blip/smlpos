@@ -28,6 +28,6 @@ export function documentCreateBlockedMessage(typeDocument: string): string {
 
 export type PosDocType = 'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'
 
-export function posDocTypeFromVente(typeVente: 'FACTURE' | 'BL_VENTE'): TypeDocument {
-  return typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
+export function posDocTypeFromVente(typeVente: 'FACTURE' | 'BL_VENTE' | 'DEVIS'): TypeDocument {
+  return typeVente === 'FACTURE' ? 'FACTURE_VENTE' : typeVente === 'DEVIS' ? 'DEVIS' : 'BON_LIVRAISON'
 }

@@ -480,6 +480,7 @@ const mockApi = {
     facture_layout: 'professionnel', invoice_prefix_facture: 'FAC', invoice_prefix_vente: 'VTE',
     invoice_footer: 'Merci pour votre confiance !', invoice_show_tva: 'true', invoice_timbre_fiscal: 'true', tva_defaut_pct: '19',
     fond_de_caisse_defaut: '100', frais_retour_colis: '4', credit_max_client: '500',
+    shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
     marge_defaut_pct: '30', pos_show_calculator: 'true', pos_confirm_sortie: 'true',
     impression_largeur: '80', impression_copies: '1', impression_auto_print: 'false',
     caisse_interne_pin: 'sml2023', securite_require_shift: 'true', currency: 'DT', currency_decimals: '3',
@@ -489,6 +490,7 @@ const mockApi = {
   settingsGet: async (key: string) => {
     const defaults: Record<string, string> = {
       caisse_interne_pin: 'sml2023', frais_retour_colis: '4', fond_de_caisse_defaut: '100',
+      shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
     }
     return defaults[key] ?? null
   },

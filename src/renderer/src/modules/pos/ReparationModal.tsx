@@ -4,8 +4,9 @@ import type { TypeAppareil, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReparationNumber } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
+import InventoryProductPickerModal from '../../components/InventoryProductPickerModal'
 import { printLabelHtml } from '../../lib/nativePrint'
-import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench, AlertTriangle } from 'lucide-react'
+import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench, AlertTriangle, PackageSearch } from 'lucide-react'
 
 const api = window.api
 
@@ -52,6 +53,8 @@ interface PieceInput {
   quantite: number
   prix_achat: number
   prix_unitaire: number
+  prix_achat_input?: string
+  prix_unitaire_input?: string
   destock_stock: boolean
   type: 'F' | 'NF'
   stock_actuel?: number
@@ -65,6 +68,8 @@ interface DegatPromptPiece {
 }
 
 const parseMoney = (s: string) => parseFloat(String(s).replace(',', '.')) || 0
+const sanitizeMoneyInput = (s: string) => s.replace(/[^0-9.,]/g, '')
+const formatMoneyInput = (n: number) => (n ? String(n) : '')
 
 function DegatPriceModal({
   pieces,
@@ -146,8 +151,10 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [pieceResults, setPieceResults] = useState<Produit[]>([])
   const [loading, setLoading] = useState(false)
   const [degatPrompt, setDegatPrompt] = useState<{ repId: string; pieces: DegatPromptPiece[] } | null>(null)
+  const [showInventoryPicker, setShowInventoryPicker] = useState(false)
 
   const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
+  const piecesClientTotal = pieces.reduce((s, p) => s + p.quantite * p.prix_unitaire, 0)
   const totalFinalNum = parseMoney(totalFinal)
   const acompteNum = parseMoney(acompte)
   const benefice = totalFinalNum - piecesAchat
@@ -167,6 +174,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         quantite: 1,
         prix_achat: p.prix_achat ?? 0,
         prix_unitaire: p.prix_vente ?? 0,
+        prix_achat_input: formatMoneyInput(p.prix_achat ?? 0),
+        prix_unitaire_input: formatMoneyInput(p.prix_vente ?? 0),
         destock_stock: false,
         type: p.type,
         stock_actuel: p.stock_actuel,
@@ -178,12 +187,18 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         quantite: 1,
         prix_achat: 0,
         prix_unitaire: 0,
+        prix_achat_input: '',
+        prix_unitaire_input: '',
         destock_stock: false,
         type: 'NF',
       }])
     }
     setPieceSearch('')
     setPieceResults([])
+  }
+
+  const updatePiece = (index: number, patch: Partial<PieceInput>) => {
+    setPieces(prev => prev.map((piece, i) => (i === index ? { ...piece, ...patch } : piece)))
   }
 
   const canSave = panne.trim() && pieces.length > 0 && totalFinalNum > 0
@@ -307,7 +322,12 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-text-secondary">Pièces / composants</label>
-              <button type="button" onClick={() => addPiece()} className="text-xs text-accent-600 font-semibold flex items-center gap-1"><Plus size={12} /> Ligne libre</button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setShowInventoryPicker(true)} className="text-xs text-blue-700 font-semibold flex items-center gap-1">
+                  <PackageSearch size={12} /> Inventory
+                </button>
+                <button type="button" onClick={() => addPiece()} className="text-xs text-accent-600 font-semibold flex items-center gap-1"><Plus size={12} /> Ligne libre</button>
+              </div>
             </div>
             <div className="relative mb-2">
               <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-2 bg-muted">
@@ -330,18 +350,19 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
 
             {pieces.map((p, i) => (
               <div key={p.id} className="flex flex-wrap items-center gap-2 mb-2 p-2 border border-border rounded-lg bg-muted/30">
-                <input value={p.designation} onChange={e => { const u = [...pieces]; u[i].designation = e.target.value; setPieces(u) }}
+                <input value={p.designation} onChange={e => updatePiece(i, { designation: e.target.value })}
                   className="flex-1 min-w-[100px] border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation" />
-                <input type="text" inputMode="numeric" value={p.quantite} onChange={e => { const u = [...pieces]; u[i].quantite = parseInt(e.target.value.replace(/\D/g, '')) || 1; setPieces(u) }}
+                <input type="text" inputMode="numeric" value={p.quantite} onChange={e => updatePiece(i, { quantite: parseInt(e.target.value.replace(/\D/g, '')) || 1 })}
                   className="w-11 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
-                <input type="text" inputMode="decimal" value={p.prix_unitaire || ''} onChange={e => { const u = [...pieces]; u[i].prix_unitaire = parseMoney(e.target.value); setPieces(u) }}
+                <input type="text" inputMode="decimal" value={p.prix_unitaire_input ?? formatMoneyInput(p.prix_unitaire)} onFocus={e => e.currentTarget.select()} onChange={e => { const val = sanitizeMoneyInput(e.target.value); updatePiece(i, { prix_unitaire_input: val, prix_unitaire: parseMoney(val) }) }}
                   className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix pièce client (TND)" placeholder="Prix client" />
-                <input type="text" inputMode="decimal" value={p.prix_achat || ''}
-                  onChange={e => { const u = [...pieces]; u[i].prix_achat = parseMoney(e.target.value); setPieces(u) }}
+                <input type="text" inputMode="decimal" value={p.prix_achat_input ?? formatMoneyInput(p.prix_achat)}
+                  onFocus={e => e.currentTarget.select()}
+                  onChange={e => { const val = sanitizeMoneyInput(e.target.value); updatePiece(i, { prix_achat_input: val, prix_achat: parseMoney(val) }) }}
                   className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price"
                   title="Prix achat TND" placeholder="Prix achat" />
                 <label className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 cursor-pointer whitespace-nowrap">
-                  <input type="checkbox" checked={p.destock_stock} onChange={e => { const u = [...pieces]; u[i].destock_stock = e.target.checked; setPieces(u) }} />
+                  <input type="checkbox" checked={p.destock_stock} onChange={e => updatePiece(i, { destock_stock: e.target.checked })} />
                   <AlertTriangle size={11} /> Dégât
                 </label>
                 {p.produit_id && p.destock_stock && (
@@ -353,18 +374,30 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {pieces.length > 0 && (
+              <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
+                <div className="text-xs text-blue-900">
+                  <span className="font-semibold">Suggested client total from pieces:</span>{' '}
+                  <strong className="font-price">{formatPrice(piecesClientTotal)}</strong>
+                </div>
+                <button type="button" onClick={() => setTotalFinal(piecesClientTotal.toFixed(3))}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs font-bold hover:bg-blue-100">
+                  Use this total
+                </button>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Pièces achat (TND)</label>
               <div className="border border-border bg-muted rounded-lg px-3 py-2 font-price text-sm">{formatPrice(piecesAchat)}</div>
             </div>
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Acompte client (TND)</label>
-              <input type="text" inputMode="decimal" value={acompte} onChange={e => setAcompte(e.target.value.replace(/[^0-9.,]/g, ''))}
+              <input type="text" inputMode="decimal" value={acompte} onFocus={e => e.currentTarget.select()} onChange={e => setAcompte(sanitizeMoneyInput(e.target.value))}
                 className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price" placeholder="0.000" />
             </div>
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Total client (TND) *</label>
-              <input type="text" inputMode="decimal" value={totalFinal} onChange={e => setTotalFinal(e.target.value.replace(/[^0-9.,]/g, ''))}
+              <input type="text" inputMode="decimal" value={totalFinal} onFocus={e => e.currentTarget.select()} onChange={e => setTotalFinal(sanitizeMoneyInput(e.target.value))}
                 className="w-full border border-accent-400 rounded-lg px-3 py-2 text-sm font-price font-bold" placeholder="0.000" />
             </div>
             <div>
@@ -391,6 +424,14 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+      {showInventoryPicker && (
+        <InventoryProductPickerModal
+          title="Add repair part from inventory"
+          productFilter="all"
+          onAddProduct={addPiece}
+          onClose={() => setShowInventoryPicker(false)}
+        />
+      )}
     </div>
   )
 }

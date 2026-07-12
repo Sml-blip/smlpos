@@ -755,6 +755,8 @@ export function initDatabase() {
     marge_defaut_pct:        '30',
     pos_show_calculator:     'true',
     pos_confirm_sortie:      'true',
+    shift_close_reminder_enabled: 'true',
+    shift_close_reminder_time:    '21:00',
     // Impression
     impression_largeur:      '80',
     impression_copies:       '1',

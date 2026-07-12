@@ -19,7 +19,7 @@ import InvoiceEditModal from '../../components/InvoiceEditModal'
 
 const api = window.api
 
-type TypeVente = 'FACTURE' | 'BL_VENTE'
+type TypeVente = 'FACTURE' | 'BL_VENTE' | 'DEVIS'
 
 interface Props {
   items: CartItem[]
@@ -62,9 +62,10 @@ export default function DocumentPreviewModal({
   const docIdRef = useRef('')
   const creatingRef = useRef(false)
 
-  const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : 'BON_LIVRAISON'
+  const typeDoc = typeVente === 'FACTURE' ? 'FACTURE_VENTE' : typeVente === 'DEVIS' ? 'DEVIS' : 'BON_LIVRAISON'
+  const docLabel = typeDoc === 'FACTURE_VENTE' ? 'Facture Client' : typeDoc === 'DEVIS' ? 'Devis' : 'Bon de Livraison'
   const lignesItems = useMemo(
-    () => (typeVente === 'FACTURE' ? items.filter(i => i.type_produit === 'F') : items),
+    () => (typeVente === 'BL_VENTE' ? items : items.filter(i => i.type_produit === 'F')),
     [items, typeVente],
   )
 
@@ -155,12 +156,14 @@ export default function DocumentPreviewModal({
     const yy = String(year).slice(-2)
     const seqKey = typeVente === 'FACTURE'
       ? `facture_vente_sequence_${year}`
-      : `bl_vente_sequence_${year}`
+      : typeVente === 'DEVIS'
+        ? `devis_sequence_${year}`
+        : `bl_vente_sequence_${year}`
     const prevSeqRaw = await api.settingsGet(seqKey) as string | null
     const prevSeq = parseInt(prevSeqRaw ?? '0') || 0
     const nextSeq = prevSeq + 1
     await api.settingsSet(seqKey, String(nextSeq))
-    const prefix = typeVente === 'BL_VENTE' ? 'BL' : ''
+    const prefix = typeVente === 'BL_VENTE' ? 'BL' : typeVente === 'DEVIS' ? 'DEV' : ''
     return `${prefix}${yy}/#${String(nextSeq).padStart(5, '0')}`
   }
 
@@ -285,7 +288,7 @@ export default function DocumentPreviewModal({
   if (showPrintDialog) {
     return (
       <PrintDialog
-        title={typeDoc === 'FACTURE_VENTE' ? 'Imprimer facture' : 'Imprimer bon de livraison'}
+        title={`Imprimer ${docLabel.toLowerCase()}`}
         subtitle={docNumero || previewDoc.numero}
         getPrintHtml={() => printRef.current?.innerHTML ?? ''}
         preview={
@@ -363,7 +366,7 @@ export default function DocumentPreviewModal({
           <div className="flex items-center gap-2">
             <FileText size={16} className="text-accent-500" />
             <h2 className="font-bold text-base">
-              {typeDoc === 'FACTURE_VENTE' ? 'Facture Client' : 'Bon de Livraison'}
+              {docLabel}
             </h2>
           </div>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
@@ -381,7 +384,7 @@ export default function DocumentPreviewModal({
             <div className="bg-muted rounded-lg p-3 text-xs text-text-secondary">
               <div className="font-semibold mb-1">
                 {lignesItems.length} ligne{lignesItems.length !== 1 ? 's' : ''}
-                {typeVente === 'FACTURE' ? ' (F uniquement)' : ' (F + NF)'}
+                {typeVente === 'BL_VENTE' ? ' (F + NF)' : ' (F uniquement)'}
               </div>
               <div>HT : {lineSums.total_ht.toFixed(3)} DT</div>
               {settings.invoice_show_tva !== 'false' && (

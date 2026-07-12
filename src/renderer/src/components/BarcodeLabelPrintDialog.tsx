@@ -132,19 +132,31 @@ export default function BarcodeLabelPrintDialog({
           </div>
         </div>
 
-        <div className="flex flex-col items-center gap-2.5 my-4 bg-gray-50 border border-border/60 rounded-xl p-4">
+        <div className="flex flex-col items-center gap-2.5 my-4 bg-gray-50 border border-border/60 rounded-xl p-6">
           {preview ? (
-            <iframe
-              title="Apercu etiquette"
-              srcDoc={preview}
-              className="border border-border/80 bg-white"
-              style={{ width: 320, height: 159 }}
-            />
+            <div
+              className="border-2 border-dashed border-slate-200 bg-white overflow-hidden shadow-sm"
+              style={{ width: 280, height: 140 }}
+            >
+              <iframe
+                title="Label preview"
+                srcDoc={preview}
+                style={{
+                  width: 151.2,
+                  height: 75.6,
+                  border: 'none',
+                  display: 'block',
+                  transform: 'scale(1.85)',
+                  transformOrigin: 'top left',
+                  pointerEvents: 'none',
+                }}
+              />
+            </div>
           ) : (
-            <div className="w-[320px] h-[159px] bg-gray-200 rounded-lg animate-pulse" />
+            <div className="w-[280px] h-[140px] bg-gray-200 rounded-lg animate-pulse" />
           )}
           <span className="text-[10px] text-text-secondary font-mono bg-white px-2 py-0.5 border border-border rounded">
-            40 x 20 mm | 203 DPI
+            Screen preview - real 40 x 20 mm ratio
           </span>
         </div>
 

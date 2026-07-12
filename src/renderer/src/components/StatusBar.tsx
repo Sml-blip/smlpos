@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
-import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info } from 'lucide-react'
+import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
 import { getPendingCount, getFailedCount, processSyncQueue, pullSyncFromRemote, resetFailedItems, purgeFailedItems } from '../lib/sync'
@@ -10,6 +10,20 @@ import { runAction } from '../lib/apiCall'
 const api = window.api
 
 type SyncErrorRow = { id: string; table_name: string; operation: string; attempts: number; last_error: string | null; created_at: string }
+
+const todayKey = () => {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+const isPastReminderTime = (now: Date, timeValue: string) => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(timeValue || '21:00')
+  const hours = match ? Math.min(23, Math.max(0, Number(match[1]))) : 21
+  const minutes = match ? Math.min(59, Math.max(0, Number(match[2]))) : 0
+  return now.getHours() * 60 + now.getMinutes() >= hours * 60 + minutes
+}
 
 export default function StatusBar() {
   const { isOnline, currentShift } = useAppStore()
@@ -23,6 +37,9 @@ export default function StatusBar() {
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [errorRows, setErrorRows] = useState<SyncErrorRow[]>([])
   const [dbHealth, setDbHealth] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [shiftReminderSettings, setShiftReminderSettings] = useState({ enabled: true, time: '21:00' })
+  const [showShiftReminder, setShowShiftReminder] = useState(false)
+  const [shiftReminderSnoozedUntil, setShiftReminderSnoozedUntil] = useState(0)
 
   useEffect(() => {
     api.appHealth?.().then((h: { ok?: boolean; error?: string }) => {
@@ -41,6 +58,28 @@ export default function StatusBar() {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    api.settingsGetAll().then((settings: Record<string, string>) => {
+      if (cancelled) return
+      setShiftReminderSettings({
+        enabled: settings.shift_close_reminder_enabled !== 'false',
+        time: settings.shift_close_reminder_time || '21:00',
+      })
+    }).catch(() => { /* settings may not be ready during startup */ })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!currentShift || showFermeture || showShiftReminder) return
+    if (!shiftReminderSettings.enabled) return
+    if (Date.now() < shiftReminderSnoozedUntil) return
+    if (!isPastReminderTime(time, shiftReminderSettings.time)) return
+    const dismissed = window.localStorage.getItem(`smlpos-shift-close-dismissed-${todayKey()}`)
+    if (dismissed === 'true') return
+    setShowShiftReminder(true)
+  }, [currentShift, showFermeture, showShiftReminder, shiftReminderSettings, shiftReminderSnoozedUntil, time])
 
   const refreshCounts = useCallback(async () => {
     if (!isSupabaseEnabled || !window.api?.syncQueuePendingCount) return
@@ -227,6 +266,56 @@ export default function StatusBar() {
 
       {showFermeture && (
         <FermetureCaisseModal onClose={() => setShowFermeture(false)} />
+      )}
+
+      {showShiftReminder && currentShift && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[190] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-slide-in">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h3 className="font-bold text-sm flex items-center gap-2">
+                <FileText size={15} className="text-teal-600" /> Close shift reminder
+              </h3>
+              <button onClick={() => setShowShiftReminder(false)} className="text-text-muted hover:text-text-primary">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
+                It is past <strong>{shiftReminderSettings.time}</strong>. Close the current shift to create the end-of-day Client Passager invoice for F-product sales.
+                Mixed sales are handled automatically: NF lines stay out of the invoice.
+              </div>
+              <p className="text-xs text-text-secondary">
+                Current shift: <strong>{currentShift.operateur_nom}</strong>
+              </p>
+            </div>
+            <div className="flex gap-2 px-5 py-4 border-t border-border">
+              <button
+                onClick={() => {
+                  window.localStorage.setItem(`smlpos-shift-close-dismissed-${todayKey()}`, 'true')
+                  setShowShiftReminder(false)
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-muted hover:bg-border text-sm font-semibold"
+              >
+                Dismiss today
+              </button>
+              <button
+                onClick={() => {
+                  setShiftReminderSnoozedUntil(Date.now() + 15 * 60 * 1000)
+                  setShowShiftReminder(false)
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-white border border-border hover:bg-muted text-sm font-semibold"
+              >
+                Remind later
+              </button>
+              <button
+                onClick={() => { setShowShiftReminder(false); setShowFermeture(true) }}
+                className="flex-1 py-2.5 rounded-xl bg-danger hover:bg-red-700 text-white text-sm font-bold"
+              >
+                Close shift
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showErrorModal && (

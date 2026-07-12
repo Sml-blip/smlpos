@@ -55,6 +55,8 @@ const DEFAULTS: Record<string, string> = {
   marge_defaut_pct:      '30',
   pos_show_calculator:   'true',
   pos_confirm_sortie:    'true',
+  shift_close_reminder_enabled: 'true',
+  shift_close_reminder_time: '21:00',
   // Impression
   impression_largeur:    '80',
   impression_copies:     '1',
@@ -351,6 +353,21 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
           <div className="space-y-3">
             <Toggle checked={values['pos_show_calculator'] === 'true'} onChange={() => toggle('pos_show_calculator')} label="Afficher la calculette dans le POS" />
             <Toggle checked={values['pos_confirm_sortie'] === 'true'} onChange={() => toggle('pos_confirm_sortie')} label="Demander confirmation avant sortie de caisse" />
+          </div>
+        </Section>
+      </Card>
+      <Card>
+        <Section title="End-of-day closing">
+          <div className="space-y-3">
+            <Toggle checked={values['shift_close_reminder_enabled'] !== 'false'} onChange={() => toggle('shift_close_reminder_enabled')} label="Show close-shift reminder for daily F invoice" />
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Reminder time" hint="Default is 21:00. After this time, the status bar shows a close-shift popup.">
+                <TextInput value={values['shift_close_reminder_time']} onChange={v => set('shift_close_reminder_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="21:00" />
+              </Field>
+            </div>
+            <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
+              On the second cash close of the day, the app creates one Client Passager invoice from F-product sales only. NF lines from mixed sales are excluded automatically.
+            </div>
           </div>
         </Section>
       </Card>

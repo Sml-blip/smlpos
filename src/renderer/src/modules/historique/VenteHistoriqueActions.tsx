@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import type { Vente, LigneVente } from '../../lib/types'
-import { formatPrice, generateId } from '../../lib/utils'
+import { generateId } from '../../lib/utils'
 import { calcInvoiceLineFromTtcUnit, sumInvoiceLines } from '../../lib/invoiceLineCalc'
 import { taxBucketsFromLines, documentCalculatesTva } from '../../lib/documentFromCart'
 import { runAction, loadData } from '../../lib/apiCall'
 import { printFullHtmlDocument } from '../../lib/nativePrint'
-import { usePrintThermal } from '../../lib/usePrint'
+import { buildReceiptTicketHtml } from '../../lib/ticketHtml'
 import { X, Printer, FileText, FileCheck } from 'lucide-react'
 import DocumentPrintModal from './DocumentPrintModal'
 import type { Document as DocType } from '../../lib/types'
@@ -17,34 +17,17 @@ import {
 
 const api = window.api
 
-const MODE_LABELS: Record<string, string> = {
-  ESPECES: 'Espèces', CARTE: 'Carte', CHEQUE: 'Chèque', MIXTE: 'Mixte',
-}
-
-function buildTicketHtml(vente: Vente, lignes: LigneVente[]): string {
-  const date = new Date(vente.created_at)
-  const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-  const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-  const itemsHtml = lignes.map(l => `
-    <div style="margin-bottom:6px">
-      <div style="display:flex;justify-content:space-between"><span>${l.designation}</span><span>${l.total_ligne.toFixed(3)}</span></div>
-      <div style="color:#666;padding-left:8px">${l.quantite} × ${l.prix_unitaire.toFixed(3)}</div>
-    </div>`).join('')
-  return `<!DOCTYPE html><html><head><style>@page{size:58mm auto;margin:2mm}body{font-family:monospace;font-size:11px;margin:0;padding:8px}</style></head><body>
-    <div style="text-align:center;font-weight:bold">SMLPOS</div>
-    <div style="text-align:center;font-size:10px">${dateStr} ${timeStr}</div>
-    <div style="text-align:center;font-size:10px">Ticket ${vente.numero}</div>
-    <hr style="border:none;border-top:1px dashed #999;margin:8px 0"/>
-    ${itemsHtml}
-    <hr style="border:none;border-top:1px dashed #999;margin:8px 0"/>
-    <div style="display:flex;justify-content:space-between;font-weight:bold"><span>TOTAL</span><span>${vente.total_ttc.toFixed(3)} DT</span></div>
-    <div style="font-size:10px;margin-top:4px">${MODE_LABELS[vente.mode_paiement] || vente.mode_paiement}</div>
-  </body></html>`
-}
-
 export function VenteTicketPrintModal({ vente, onClose }: { vente: Vente; onClose: () => void }) {
   const [lignes, setLignes] = useState<LigneVente[]>([])
-  const { printRef, handlePrint } = usePrintThermal(`Ticket-${vente.numero}`)
+  const ticketHtml = buildReceiptTicketHtml(vente, lignes)
+
+  const handlePrint = async () => {
+    await printFullHtmlDocument(ticketHtml, {
+      pageSize: '58mm',
+      settingsKey: 'impression_printer_ticket',
+      printKind: 'ticket',
+    })
+  }
 
   useEffect(() => {
     loadData('Lignes', () => api.ventesGetLignes(vente.id) as Promise<LigneVente[]>, { silent: true }).then(r => {
@@ -59,13 +42,13 @@ export function VenteTicketPrintModal({ vente, onClose }: { vente: Vente; onClos
           <h3 className="font-bold text-sm">Ticket {vente.numero}</h3>
           <button onClick={onClose}><X size={18} /></button>
         </div>
-        <div ref={printRef} className="bg-white font-mono text-xs p-3 border border-border rounded-lg max-h-64 overflow-auto">
-          {lignes.map(l => (
-            <div key={l.id} className="mb-2">
-              <div className="flex justify-between"><span>{l.designation}</span><span>{formatPrice(l.total_ligne)}</span></div>
-            </div>
-          ))}
-          <div className="font-bold border-t pt-2 mt-2">Total: {formatPrice(vente.total_ttc)}</div>
+        <div className="bg-gray-50 border border-border rounded-lg p-3 max-h-80 overflow-auto">
+          <iframe
+            title="Ticket preview"
+            srcDoc={ticketHtml}
+            className="bg-white border border-gray-200 rounded"
+            style={{ width: 280, height: 430, display: 'block', margin: '0 auto' }}
+          />
         </div>
         <div className="flex gap-2 mt-4">
           <button onClick={onClose} className="flex-1 py-2 bg-muted rounded-xl text-sm font-semibold">Fermer</button>
@@ -240,7 +223,7 @@ export function ConvertVenteDocModal({
 
 export async function printVenteTicketQuick(vente: Vente): Promise<void> {
   const lignes = await api.ventesGetLignes(vente.id) as LigneVente[]
-  await printFullHtmlDocument(buildTicketHtml(vente, lignes || []), {
+  await printFullHtmlDocument(buildReceiptTicketHtml(vente, lignes || []), {
     pageSize: '58mm',
     settingsKey: 'impression_printer_ticket',
     printKind: 'ticket',

@@ -10,7 +10,7 @@ import { runAction } from '../../lib/apiCall'
 
 const api = window.api
 
-type TypeVente = 'TICKET' | 'FACTURE' | 'BL_VENTE'
+type TypeVente = 'TICKET' | 'FACTURE' | 'BL_VENTE' | 'DEVIS'
 
 interface Props {
   items: CartItem[]
@@ -49,8 +49,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const handleConfirm = async () => {
     if (mode === 'ESPECES' && montantRecuNum < total) return
     if (typeVente === 'BL_VENTE' && items.length === 0) return
-    if (typeVente === 'FACTURE' && !hasItemsF) {
-      setErrorMsg('Facture : au moins un produit F requis dans le panier.')
+    if ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF) {
+      setErrorMsg(`${typeVente === 'DEVIS' ? 'Devis' : 'Facture'} : au moins un produit F requis dans le panier.`)
       return
     }
     setErrorMsg('')
@@ -98,7 +98,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
 
       await api.ventesCreate(vente, lignes)
       setVenteEnregistree(vente)
-      if (typeVente === 'FACTURE' || typeVente === 'BL_VENTE') {
+      if (typeVente === 'FACTURE' || typeVente === 'BL_VENTE' || typeVente === 'DEVIS') {
         setShowFacture(true)
       }
     }, { setLoading, silent: true, onError: setErrorMsg, successMessage: 'Vente enregistrée' })
@@ -111,7 +111,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         <DocumentPreviewModal
           items={items}
           vente={venteEnregistree}
-          typeVente={typeVente === 'BL_VENTE' ? 'BL_VENTE' : 'FACTURE'}
+          typeVente={typeVente === 'BL_VENTE' ? 'BL_VENTE' : typeVente === 'DEVIS' ? 'DEVIS' : 'FACTURE'}
           initialClientNom={clientForm.nom}
           initialClientTel={clientForm.tel}
           initialClientAdresse={clientForm.adresse}
@@ -255,7 +255,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           {/* Type de vente */}
           <div className="mb-5">
             <label className="block text-sm font-semibold mb-2">Type de document</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <button onClick={() => setTypeVente('TICKET')}
                 className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all text-xs font-semibold ${typeVente === 'TICKET' ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted'}`}>
                 <Printer size={16} />Ticket
@@ -268,6 +268,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all text-xs font-semibold ${typeVente === 'BL_VENTE' ? 'border-green-500 bg-green-50 text-green-700' : 'border-border hover:bg-muted'}`}>
                 <Package size={16} />Bon de Livraison
               </button>
+              <button onClick={() => { setTypeVente('DEVIS'); setShowClientFields(true) }}
+                className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all text-xs font-semibold ${typeVente === 'DEVIS' ? 'border-yellow-500 bg-yellow-50 text-yellow-700' : 'border-border hover:bg-muted'}`}>
+                <FileCheck size={16} />Devis
+              </button>
             </div>
             {typeVente === 'BL_VENTE' && (
               <p className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded-lg px-2 py-1.5 mt-2">
@@ -277,6 +281,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
             {typeVente === 'FACTURE' && !hasItemsF && (
               <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-2">
                 Facture : au moins un produit F requis (NF exclus).
+              </p>
+            )}
+            {typeVente === 'DEVIS' && !hasItemsF && (
+              <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-2">
+                Devis : au moins un produit F requis (NF exclus).
               </p>
             )}
           </div>
@@ -312,7 +321,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={loading || (mode === 'ESPECES' && montantRecuNum < total) || (typeVente === 'FACTURE' && !hasItemsF)}
+            disabled={loading || (mode === 'ESPECES' && montantRecuNum < total) || ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF)}
             className="w-full bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors"
           >
             {loading ? 'Traitement...' : 'Confirmer le Paiement'}
