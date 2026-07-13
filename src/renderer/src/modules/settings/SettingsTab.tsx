@@ -479,7 +479,7 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
             </p>
           )}
           <p className="text-xs text-text-secondary mb-3">
-            Glissez les blocs pour positionner nom, code-barres et prix. Sur Windows, l&apos;impression utilise le SDK Gainscha GTSPL (GS-2408D, GI-2408T, etc.).
+            Glissez les blocs pour positionner nom, code-barres et prix. Pour GS-2408D, utilisez le driver Windows Gprinter/Seagull.
           </p>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <Field label="Moteur étiquette">
@@ -491,9 +491,9 @@ function ImpressionSection({ values, set, toggle }: { values: Record<string, str
                 }}
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white"
               >
-                <option value="tspl_raw">TSPL raw (recommandé)</option>
+                <option value="html">Windows / Gprinter-Seagull (recommandé)</option>
+                <option value="tspl_raw">TSPL raw (secours)</option>
                 <option value="gainscha">SDK Gainscha</option>
-                <option value="html">Windows / HTML (secours)</option>
               </select>
             </Field>
             {labelCfg.labelEngine === 'gainscha' && (

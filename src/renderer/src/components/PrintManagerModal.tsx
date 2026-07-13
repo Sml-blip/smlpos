@@ -740,11 +740,11 @@ export default function PrintManagerModal({
               }}
               style={styles.select}
             >
-              <option value="tspl_raw">TSPL raw (COPY /B) — recommandé</option>
+              <option value="html">Windows / Gprinter-Seagull — recommandé</option>
+              <option value="tspl_raw">TSPL raw (COPY /B) — secours</option>
               {gainschaAvailable && (
                 <option value="gainscha">SDK Gainscha (TSPL){gainschaSdkVer ? ` v${gainschaSdkVer}` : ''}</option>
               )}
-              <option value="html">Windows / HTML (Seagull, 203 DPI)</option>
             </select>
           </div>
           {gainschaAvailable && labelCfg.labelEngine === 'gainscha' && (

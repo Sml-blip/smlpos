@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { loadLabelPrintConfig, mergeLabelConfig, saveLabelPrintConfig } from '../lib/labelSettings'
 import { renderBarcodeLabelRaster, type RenderedBarcodeLabel } from '../lib/labelRaster'
+import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
 import { DEFAULT_LABEL_CONFIG, type LabelPrintConfig } from '../lib/printManager'
 import { showToast } from '../lib/toast'
 
@@ -173,33 +174,25 @@ export default function BarcodeLabelPrintDialog({
     setPrinting(true)
     setError('')
     try {
-      if (!window.api.printTsplLabel) throw new Error('Impression TSPL indisponible')
-      const raster = renderBarcodeLabelRaster({ code, nom, prix, productRef }, labelCfg)
       try {
         await Promise.all([
           window.api.settingsSet?.('impression_printer_label', selectedPrinter),
-          saveLabelPrintConfig({ ...labelCfg, defaultCopies: copies }),
+          saveLabelPrintConfig({ ...labelCfg, defaultCopies: copies, labelEngine: 'html' }),
         ])
       } catch {
         // Saving preferences must never prevent the current label from printing.
       }
 
-      const result = await window.api.printTsplLabel({
-        codeBarre: raster.barcodeValue,
-        nomProduit: nom.trim() || productRef || 'Produit',
-        prix: `${Number(prix).toFixed(3)} DT`,
+      if (!window.api.printContent) throw new Error('Impression Windows indisponible')
+      const html = buildBarcodeLabelHtml(code, nom, prix, productRef, { ...labelCfg, labelEngine: 'html' }, copies)
+      const result = await window.api.printContent(html, selectedPrinter, {
+        silent: true,
+        printBackground: true,
+        color: false,
         copies,
-        printerName: selectedPrinter,
         widthMm: labelCfg.widthMm,
         heightMm: labelCfg.heightMm,
-        dpi: labelCfg.dpi,
-        density: labelCfg.density,
-        speed: labelCfg.speed,
-        gapMm: labelCfg.gapMm,
-        bitmapBase64: raster.bitmapBase64,
-        bitmapWidthDots: raster.widthDots,
-        bitmapHeightDots: raster.heightDots,
-        bitmapWidthBytes: raster.widthBytes,
+        dpi: { horizontal: labelCfg.dpi, vertical: labelCfg.dpi },
       })
 
       if (result.success) {

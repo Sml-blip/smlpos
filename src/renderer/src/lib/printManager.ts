@@ -24,7 +24,7 @@ export interface LabelPrintConfig {
   offsetYmm: number
   defaultCopies: number
   layout: LabelVisualLayout
-  /** Windows: native Gainscha GTSPL SDK vs HTML spooler vs TSPL raw COPY /B */
+  /** Windows: Seagull/Gprinter driver HTML spooler vs raw TSC/TSPL fallback. */
   labelEngine: 'gainscha' | 'html' | 'tspl_raw'
   labelConnection: 'driver' | 'usb'
   usbDevice: string
@@ -45,7 +45,7 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   offsetXmm: 0,
   offsetYmm: 0,
   defaultCopies: 1,
-  labelEngine: 'tspl_raw',
+  labelEngine: 'html',
   labelConnection: 'driver',
   usbDevice: '',
 }
