@@ -61,6 +61,7 @@ function drawTextBox(
   dpi: number,
   weight: number,
   maxPt: number,
+  align: CanvasTextAlign = 'left',
 ): void {
   if (!text || box.w <= 2 || box.h <= 2) return
   ctx.save()
@@ -68,10 +69,11 @@ function drawTextBox(
   ctx.rect(box.x, box.y, box.w, box.h)
   ctx.clip()
   ctx.fillStyle = '#000000'
-  ctx.textAlign = 'left'
+  ctx.textAlign = align
   ctx.textBaseline = 'middle'
-  setFittedFont(ctx, text, weight, (fontPtForBox((box.h * 25.4) / dpi, maxPt) * dpi) / 72, box.w - 2)
-  ctx.fillText(textThatFits(ctx, text, box.w - 2), box.x + 1, box.y + box.h / 2)
+  setFittedFont(ctx, text, weight, (fontPtForBox((box.h * 25.4) / dpi, maxPt) * dpi) / 72, box.w - 3)
+  const x = align === 'center' ? box.x + box.w / 2 : align === 'right' ? box.x + box.w - 1.5 : box.x + 1.5
+  ctx.fillText(textThatFits(ctx, text, box.w - 3), x, box.y + box.h / 2)
   ctx.restore()
 }
 
@@ -181,21 +183,23 @@ export function renderBarcodeLabelRaster(
   const parsedPrice = Number(source.prix)
   const priceText = `${(Number.isFinite(parsedPrice) ? parsedPrice : 0).toFixed(3)} DT`
   const nameText = (source.nom || source.productRef || 'Produit').trim()
-  if (layout.price.visible) drawTextBox(ctx, priceText, toDotBox(layout.price), dpi, 900, 10)
-  if (layout.name.visible) drawTextBox(ctx, nameText, toDotBox(layout.name), dpi, 700, 8)
+  if (layout.price.visible) drawTextBox(ctx, priceText, toDotBox(layout.price), dpi, 900, 11)
+  if (layout.name.visible) drawTextBox(ctx, nameText, toDotBox(layout.name), dpi, 800, 8.5)
 
   const barcode = pickLabelBarcodePayload(source.code, source.productRef ?? '')
   let moduleDots = 0
   if (layout.barcode.visible) {
     const box = toDotBox(layout.barcode)
-    const captionHeight = layout.showBarcodeText ? Math.max(12, Math.floor(box.h * 0.22)) : 0
+    const compactLabel = cfg.widthMm <= 45 && cfg.heightMm <= 25
+    const showBarcodeCaption = layout.showBarcodeText && !compactLabel
+    const captionHeight = showBarcodeCaption ? Math.max(12, Math.floor(box.h * 0.22)) : 0
     const barHeight = Math.max(24, box.h - captionHeight)
     const rendered = pickBarcodeCanvas(barcode.value, barcode.format, box.w, barHeight)
     moduleDots = rendered.moduleDots
     const barcodeX = box.x + Math.floor((box.w - rendered.canvas.width) / 2)
     ctx.drawImage(rendered.canvas, barcodeX, box.y)
 
-    if (layout.showBarcodeText) {
+    if (showBarcodeCaption) {
       drawTextBox(
         ctx,
         barcode.value,
@@ -203,6 +207,7 @@ export function renderBarcodeLabelRaster(
         dpi,
         700,
         7,
+        'center',
       )
     }
   }

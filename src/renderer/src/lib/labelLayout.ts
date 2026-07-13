@@ -23,15 +23,15 @@ export interface LabelVisualLayout {
 export const LABEL_ELEMENT_IDS: LabelElementId[] = ['name', 'barcode', 'price']
 
 const BOX_LIMITS: Record<LabelElementId, { minW: number; minH: number; maxH: number }> = {
-  name: { minW: 8, minH: 2.5, maxH: 6 },
-  barcode: { minW: 14, minH: 6, maxH: 15 },
-  price: { minW: 8, minH: 2.5, maxH: 6 },
+  name: { minW: 8, minH: 3, maxH: 7 },
+  barcode: { minW: 14, minH: 6, maxH: 13 },
+  price: { minW: 10, minH: 3, maxH: 7 },
 }
 
 const DEFAULT_H: Record<LabelElementId, number> = {
-  name: 3,
-  barcode: 13.2,
-  price: 3,
+  name: 4.2,
+  barcode: 12,
+  price: 4.2,
 }
 
 function maxBoxWidth(contentW: number): number {
@@ -53,10 +53,11 @@ export function printableArea(cfg: Pick<LabelPrintConfig, 'widthMm' | 'heightMm'
 export function defaultVisualLayout(contentW: number, _contentH: number): LabelVisualLayout {
   const w = defaultBoxWidth(contentW)
   const inset = LABEL_SAFE_INSET_MM
+  const priceW = Math.min(14.5, Math.max(12, w * 0.38))
   return {
-    price: { x: inset, y: 0.5, w: 10.5, h: DEFAULT_H.price, visible: true },
-    name: { x: 11.5, y: 0.5, w: Math.max(12, w - 11), h: DEFAULT_H.name, visible: true },
-    barcode: { x: inset, y: 4.7, w, h: DEFAULT_H.barcode, visible: true },
+    price: { x: inset, y: 0.45, w: priceW, h: DEFAULT_H.price, visible: true },
+    name: { x: inset + priceW + 1, y: 0.45, w: Math.max(12, w - priceW - 1), h: DEFAULT_H.name, visible: true },
+    barcode: { x: inset, y: 5.65, w, h: DEFAULT_H.barcode, visible: true },
     showBarcodeText: false,
   }
 }
@@ -83,7 +84,7 @@ export function clampBox(
 
 export function clampLayout(layout: LabelVisualLayout, contentW: number, contentH: number): LabelVisualLayout {
   return {
-    showBarcodeText: layout.showBarcodeText !== false,
+    showBarcodeText: layout.showBarcodeText === true,
     name: clampBox('name', layout.name, contentW, contentH),
     barcode: clampBox('barcode', layout.barcode, contentW, contentH),
     price: clampBox('price', layout.price, contentW, contentH),
@@ -99,13 +100,15 @@ export function parseVisualLayout(raw: string | undefined, contentW: number, con
       name: { ...fallback.name, ...j.name },
       barcode: { ...fallback.barcode, ...j.barcode },
       price: { ...fallback.price, ...j.price },
-      showBarcodeText: j.showBarcodeText ?? fallback.showBarcodeText,
+      showBarcodeText: j.showBarcodeText === true,
     }
-    // Replace old cramped/overlapping label layouts with the scannable full-width template.
+    // Replace old cramped/overlapping label layouts with the readable compact template.
     if (
-      merged.barcode.h < DEFAULT_H.barcode * 0.85 ||
+      merged.price.h < DEFAULT_H.price * 0.8 ||
+      merged.name.h < DEFAULT_H.name * 0.8 ||
+      merged.barcode.h < DEFAULT_H.barcode * 0.8 ||
       merged.barcode.w < contentW * 0.86 ||
-      merged.barcode.y < 4.4 ||
+      merged.barcode.y < 5 ||
       merged.price.y > contentH - 5
     ) {
       return fallback
@@ -137,7 +140,7 @@ export function resetVisualLayout(cfg: LabelPrintConfig): LabelVisualLayout {
 
 /** Font size (pt) derived from box height. */
 export function fontPtForBox(hMm: number, maxPt: number): number {
-  return Math.min(maxPt, Math.max(4, hMm * 1.45))
+  return Math.min(maxPt, Math.max(6, hMm * 2.35))
 }
 
 export function labelConfigWithLayout(cfg: LabelPrintConfig, layout: LabelVisualLayout): LabelPrintConfig {
