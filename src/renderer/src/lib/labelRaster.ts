@@ -1,6 +1,6 @@
 import JsBarcode from 'jsbarcode'
 import { pickLabelBarcodePayload } from './barcode'
-import { clampLayout, fontPtForBox } from './labelLayout'
+import { clampLayout, defaultVisualLayout, fontPtForBox } from './labelLayout'
 import { mergeLabelConfig } from './labelSettings'
 import { effectiveLabelMargins, type LabelPrintConfig } from './printManager'
 
@@ -170,7 +170,10 @@ export function renderBarcodeLabelRaster(
   ctx.fillRect(0, 0, widthDots, heightDots)
 
   const margins = effectiveLabelMargins(cfg)
-  const layout = clampLayout(cfg.layout, margins.contentW, margins.contentH)
+  const compactLabel = cfg.widthMm <= 45 && cfg.heightMm <= 25
+  const layout = compactLabel
+    ? defaultVisualLayout(margins.contentW, margins.contentH)
+    : clampLayout(cfg.layout, margins.contentW, margins.contentH)
   const originX = mmToDots(margins.stripLeftMm + cfg.offsetXmm, dpi)
   const originY = mmToDots(margins.stripTopMm + cfg.offsetYmm, dpi)
   const toDotBox = (box: { x: number; y: number; w: number; h: number }) => ({
@@ -190,7 +193,6 @@ export function renderBarcodeLabelRaster(
   let moduleDots = 0
   if (layout.barcode.visible) {
     const box = toDotBox(layout.barcode)
-    const compactLabel = cfg.widthMm <= 45 && cfg.heightMm <= 25
     const showBarcodeCaption = layout.showBarcodeText && !compactLabel
     const captionHeight = showBarcodeCaption ? Math.max(12, Math.floor(box.h * 0.22)) : 0
     const barHeight = Math.max(24, box.h - captionHeight)

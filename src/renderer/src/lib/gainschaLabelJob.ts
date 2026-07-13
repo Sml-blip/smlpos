@@ -51,9 +51,9 @@ export function buildGainschaPrintJob(
   const barcode = pickLabelBarcodePayload(source.code, source.productRef)
   const sdkLayout = compactSdkTemplate
     ? {
-        name: { x: 16.1, y: 0.45, w: Math.max(12, margins.contentW - 16.1), h: 4.2, visible: true },
-        price: { x: 0.6, y: 0.45, w: 14.5, h: 4.2, visible: true },
-        barcode: { x: 0.6, y: 5.65, w: Math.max(24, margins.contentW - 1.2), h: 12, visible: true },
+        price: { x: 0.6, y: 0.35, w: Math.max(24, margins.contentW - 1.2), h: 4.2, visible: true },
+        name: { x: 0.6, y: 4.25, w: Math.max(24, margins.contentW - 1.2), h: 3.1, visible: true },
+        barcode: { x: 0.6, y: 8.2, w: Math.max(24, margins.contentW - 1.2), h: 10.2, visible: true },
         showBarcodeText: false,
       }
     : layout

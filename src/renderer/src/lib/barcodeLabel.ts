@@ -1,7 +1,7 @@
 import { labelBarcodeBarHeightMm, labelBarcodeSvg, pickLabelBarcodePayload } from './barcode'
 import type { LabelPrintConfig } from './printManager'
 import { effectiveLabelMargins } from './printManager'
-import { clampLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
+import { clampLayout, defaultVisualLayout, fontPtForBox, mergeVisualLayout } from './labelLayout'
 import type { LabelVisualLayout } from './labelLayout'
 import { mergeLabelConfig } from './labelSettings'
 
@@ -43,7 +43,10 @@ export function buildBarcodeLabelHtml(
   const margins = effectiveLabelMargins(cfg)
   const contentW = margins.contentW
   const contentH = margins.contentH
-  const layout = clampLayout(cfg.layout, contentW, contentH)
+  const compactLabel = cfg.widthMm <= 45 && cfg.heightMm <= 25
+  const layout = compactLabel
+    ? defaultVisualLayout(contentW, contentH)
+    : clampLayout(cfg.layout, contentW, contentH)
 
   const barcode = pickLabelBarcodePayload(code, productRef)
   const barcodeValue = barcode.value
@@ -75,7 +78,7 @@ export function buildBarcodeLabelHtml(
   const barcodeBlock = layout.barcode.visible && svg
     ? `<div class="el el-barcode" style="${elementStyle(layout.barcode)}">
         <div class="barcode-bars">${svg}</div>
-        ${layout.showBarcodeText ? `<div class="barcode-caption">${safeBarcode}</div>` : ''}
+        ${layout.showBarcodeText && !compactLabel ? `<div class="barcode-caption">${safeBarcode}</div>` : ''}
       </div>`
     : ''
   const priceBlock = layout.price.visible

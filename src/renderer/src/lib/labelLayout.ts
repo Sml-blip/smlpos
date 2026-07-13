@@ -29,8 +29,8 @@ const BOX_LIMITS: Record<LabelElementId, { minW: number; minH: number; maxH: num
 }
 
 const DEFAULT_H: Record<LabelElementId, number> = {
-  name: 4.2,
-  barcode: 12,
+  name: 3.1,
+  barcode: 10.2,
   price: 4.2,
 }
 
@@ -53,11 +53,10 @@ export function printableArea(cfg: Pick<LabelPrintConfig, 'widthMm' | 'heightMm'
 export function defaultVisualLayout(contentW: number, _contentH: number): LabelVisualLayout {
   const w = defaultBoxWidth(contentW)
   const inset = LABEL_SAFE_INSET_MM
-  const priceW = Math.min(14.5, Math.max(12, w * 0.38))
   return {
-    price: { x: inset, y: 0.45, w: priceW, h: DEFAULT_H.price, visible: true },
-    name: { x: inset + priceW + 1, y: 0.45, w: Math.max(12, w - priceW - 1), h: DEFAULT_H.name, visible: true },
-    barcode: { x: inset, y: 5.65, w, h: DEFAULT_H.barcode, visible: true },
+    price: { x: inset, y: 0.35, w, h: DEFAULT_H.price, visible: true },
+    name: { x: inset, y: 4.25, w, h: DEFAULT_H.name, visible: true },
+    barcode: { x: inset, y: 8.2, w, h: DEFAULT_H.barcode, visible: true },
     showBarcodeText: false,
   }
 }
@@ -108,7 +107,9 @@ export function parseVisualLayout(raw: string | undefined, contentW: number, con
       merged.name.h < DEFAULT_H.name * 0.8 ||
       merged.barcode.h < DEFAULT_H.barcode * 0.8 ||
       merged.barcode.w < contentW * 0.86 ||
-      merged.barcode.y < 5 ||
+      merged.barcode.y < 7.4 ||
+      merged.price.w < contentW * 0.86 ||
+      merged.name.w < contentW * 0.86 ||
       merged.price.y > contentH - 5
     ) {
       return fallback
