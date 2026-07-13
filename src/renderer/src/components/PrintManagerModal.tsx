@@ -26,6 +26,7 @@ import {
   scheduleSaveLabelPrintConfig,
 } from '../lib/labelSettings'
 import { buildBarcodeLabelHtml } from '../lib/barcodeLabel'
+import { renderBarcodeLabelRaster } from '../lib/labelRaster'
 import { buildGainschaPrintJob } from '../lib/gainschaLabelJob'
 import LabelVisualEditor from './LabelVisualEditor'
 
@@ -435,8 +436,9 @@ export default function PrintManagerModal({
           return
         }
         try {
+          const raster = renderBarcodeLabelRaster(source, labelCfg)
           const result = await api.printTsplLabel({
-            codeBarre: (source.code || source.productRef || '').trim(),
+            codeBarre: raster.barcodeValue,
             nomProduit: (source.nom || source.productRef || 'Produit').trim(),
             prix: `${Number(source.prix).toFixed(3)} DT`,
             copies: opts.copies,
@@ -449,6 +451,14 @@ export default function PrintManagerModal({
             stripBottomMm: labelCfg.stripBottomMm,
             rotationDeg: labelCfg.rotationDeg,
             layout: labelCfg.layout,
+            dpi: labelCfg.dpi,
+            density: labelCfg.density,
+            speed: labelCfg.speed,
+            gapMm: labelCfg.gapMm,
+            bitmapBase64: raster.bitmapBase64,
+            bitmapWidthDots: raster.widthDots,
+            bitmapHeightDots: raster.heightDots,
+            bitmapWidthBytes: raster.widthBytes,
           })
           if (result.success) {
             setStatusMsg(`Imprimé (TSPL brut) · ${opts.copies} copie(s)`)

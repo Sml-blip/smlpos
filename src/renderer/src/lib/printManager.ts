@@ -17,6 +17,11 @@ export interface LabelPrintConfig {
   stripBottomMm: number
   rotationDeg: 0 | 180
   dpi: number
+  density: number
+  speed: number
+  gapMm: number
+  offsetXmm: number
+  offsetYmm: number
   defaultCopies: number
   layout: LabelVisualLayout
   /** Windows: native Gainscha GTSPL SDK vs HTML spooler vs TSPL raw COPY /B */
@@ -34,6 +39,11 @@ export const DEFAULT_LABEL_CONFIG: Omit<LabelPrintConfig, 'layout'> = {
   stripBottomMm: 0.35,
   rotationDeg: 0,
   dpi: 203,
+  density: 9,
+  speed: 2,
+  gapMm: 3,
+  offsetXmm: 0,
+  offsetYmm: 0,
   defaultCopies: 1,
   labelEngine: 'tspl_raw',
   labelConnection: 'driver',
@@ -65,6 +75,11 @@ export const LABEL_SETTING_KEYS = [
   'impression_label_strip_bottom',
   'impression_label_rotation',
   'impression_label_dpi',
+  'impression_label_density',
+  'impression_label_speed',
+  'impression_label_gap',
+  'impression_label_offset_x',
+  'impression_label_offset_y',
   'impression_label_copies',
   'impression_label_layout_json',
   'impression_label_engine',

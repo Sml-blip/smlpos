@@ -17,10 +17,16 @@ function eanCheckDigit(digits: string): string {
   const nums = digits.split('').map(Number)
   let sum = 0
   for (let i = 0; i < nums.length; i++) {
-    sum += nums[i] * (i % 2 === 0 ? 1 : 3)
+    const distanceFromRight = nums.length - 1 - i
+    sum += nums[i] * (distanceFromRight % 2 === 0 ? 3 : 1)
   }
   const mod = sum % 10
   return mod === 0 ? '0' : String(10 - mod)
+}
+
+function hasValidEanCheckDigit(value: string): boolean {
+  if (!/^\d{8}$|^\d{13}$/.test(value)) return false
+  return eanCheckDigit(value.slice(0, -1)) === value.slice(-1)
 }
 
 export function resolveBarcodeFormat(text: string, mode: BarcodeFormatMode = 'auto'): { value: string; format: string } {
@@ -80,14 +86,11 @@ export function pickLabelBarcodePayload(code: string, productRef = ''): { value:
   const picked = candidates[0] ?? normalizeBarcodeText(code)
   if (!picked) return { value: '0', format: 'CODE128' }
   const trimmed = picked.trim()
-  const digitsOnly = trimmed.replace(/\D/g, '')
 
   // Prefer real EAN formats for numeric retail barcodes: they scan much better
   // than dense CODE128 on 39x20mm labels.
-  if (/^\d{13}$/.test(trimmed)) return { value: trimmed, format: 'EAN13' }
-  if (/^\d{8}$/.test(trimmed)) return { value: trimmed, format: 'EAN8' }
-  if (digitsOnly.length === 13) return { value: digitsOnly, format: 'EAN13' }
-  if (digitsOnly.length === 8) return { value: digitsOnly, format: 'EAN8' }
+  if (/^\d{13}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, format: 'EAN13' }
+  if (/^\d{8}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, format: 'EAN8' }
 
   return { value: resolveBarcodeFormat(picked, 'CODE128').value, format: 'CODE128' }
 }

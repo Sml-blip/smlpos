@@ -100,6 +100,13 @@ interface TsplLabelData {
   stripBottomMm?: number;
   rotationDeg?: 0 | 180;
   layout?: TsplLayout;
+  density?: number;
+  speed?: number;
+  gapMm?: number;
+  bitmapBase64?: string;
+  bitmapWidthDots?: number;
+  bitmapHeightDots?: number;
+  bitmapWidthBytes?: number;
 }
 
 // ─── Print a label from PNG blob bytes ───────────────────────────────────────
@@ -223,7 +230,44 @@ const buildTSPL = (data: TsplLabelData): string => {
   return `${lines.join('\r\n')}\r\n`
 }
 
-const sendTSPL = async (tspl: string, printerName: string): Promise<void> => {
+const buildTSPLBitmap = (data: TsplLabelData): Buffer => {
+  const widthMm = Number(data.widthMm) || 40
+  const heightMm = Number(data.heightMm) || 20
+  const dpi = Math.min(600, Math.max(72, Math.round(Number(data.bitmapWidthDots) * 25.4 / widthMm) || 203))
+  const widthDots = Math.max(1, Math.round(Number(data.bitmapWidthDots) || 0))
+  const heightDots = Math.max(1, Math.round(Number(data.bitmapHeightDots) || 0))
+  const widthBytes = Math.max(1, Math.round(Number(data.bitmapWidthBytes) || 0))
+  const expectedWidthBytes = Math.ceil(widthDots / 8)
+  const bitmap = Buffer.from(String(data.bitmapBase64 ?? ''), 'base64')
+  const maxWidthDots = mmToDots(widthMm, dpi) + 1
+  const maxHeightDots = mmToDots(heightMm, dpi) + 1
+
+  if (!data.bitmapBase64 || widthBytes !== expectedWidthBytes || bitmap.length !== widthBytes * heightDots) {
+    throw new Error('Le bitmap de l\'etiquette est incomplet ou invalide.')
+  }
+  if (widthDots > maxWidthDots || heightDots > maxHeightDots) {
+    throw new Error(`Le bitmap ${widthDots}x${heightDots} depasse l'etiquette ${widthMm}x${heightMm} mm.`)
+  }
+
+  const density = Math.min(15, Math.max(1, Math.round(Number(data.density) || 9)))
+  const speed = Math.min(8, Math.max(2, Math.round(Number(data.speed) || 2)))
+  const gapMm = Math.min(10, Math.max(0, Number(data.gapMm) || 0))
+  const copies = Math.min(99, Math.max(1, Number(data.copies) || 1))
+  const prefix = Buffer.from([
+    `SIZE ${widthMm} mm,${heightMm} mm`,
+    `GAP ${gapMm} mm,0 mm`,
+    `DENSITY ${density}`,
+    `SPEED ${speed}`,
+    'DIRECTION 1',
+    'REFERENCE 0,0',
+    'CLS',
+    `BITMAP 0,0,${widthBytes},${heightDots},0,`,
+  ].join('\r\n'), 'ascii')
+  const suffix = Buffer.from(`\r\nPRINT ${copies},1\r\n`, 'ascii')
+  return Buffer.concat([prefix, bitmap, suffix])
+}
+
+const sendTSPL = async (tspl: string | Buffer, printerName: string): Promise<void> => {
   const safePrinterName = printerName.trim()
   if (!safePrinterName) throw new Error('Veuillez selectionner une imprimante dans la liste.')
 
@@ -284,7 +328,7 @@ try {
 `
 
   try {
-    writeFileSync(dataPath, Buffer.from(tspl, 'utf8'))
+    writeFileSync(dataPath, Buffer.isBuffer(tspl) ? tspl : Buffer.from(tspl, 'utf8'))
     writeFileSync(psPath, script, 'utf8')
     await new Promise<void>((resolve, reject) => {
       const child = spawn('powershell.exe', [
@@ -441,7 +485,7 @@ export class PrinterService {
       if (!data.printerName?.trim()) {
         return { success: false, error: 'Veuillez selectionner une imprimante dans la liste.' };
       }
-      const tspl = buildTSPL(data);
+      const tspl = data.bitmapBase64 ? buildTSPLBitmap(data) : buildTSPL(data);
       await sendTSPL(tspl, data.printerName);
       return { success: true, printer: data.printerName };
     } catch (err) {

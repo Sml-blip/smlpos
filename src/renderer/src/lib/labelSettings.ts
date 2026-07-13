@@ -55,6 +55,11 @@ export function labelConfigFromSettings(all: Record<string, string>): LabelPrint
     stripBottomMm,
     rotationDeg: rot === 180 ? 180 : 0,
     dpi: clamp(parseNum(all.impression_label_dpi, DEFAULT_LABEL_CONFIG.dpi), 72, 600),
+    density: clamp(parseNum(all.impression_label_density, DEFAULT_LABEL_CONFIG.density), 1, 15),
+    speed: clamp(parseNum(all.impression_label_speed, DEFAULT_LABEL_CONFIG.speed), 2, 8),
+    gapMm: clamp(parseNum(all.impression_label_gap, DEFAULT_LABEL_CONFIG.gapMm), 0, 10),
+    offsetXmm: clamp(parseNum(all.impression_label_offset_x, DEFAULT_LABEL_CONFIG.offsetXmm), -3, 3),
+    offsetYmm: clamp(parseNum(all.impression_label_offset_y, DEFAULT_LABEL_CONFIG.offsetYmm), -3, 3),
     defaultCopies: clamp(parseInt(all.impression_label_copies ?? '1', 10) || 1, 1, 99),
     labelEngine: all.impression_label_engine === 'html'
       ? 'html'
@@ -83,6 +88,11 @@ export function settingsFromLabelConfig(cfg: LabelPrintConfig): Record<string, s
     impression_label_strip_bottom: String(cfg.stripBottomMm),
     impression_label_rotation: String(cfg.rotationDeg),
     impression_label_dpi: String(cfg.dpi),
+    impression_label_density: String(cfg.density),
+    impression_label_speed: String(cfg.speed),
+    impression_label_gap: String(cfg.gapMm),
+    impression_label_offset_x: String(cfg.offsetXmm),
+    impression_label_offset_y: String(cfg.offsetYmm),
     impression_label_copies: String(cfg.defaultCopies),
     impression_label_layout_json: serializeVisualLayout(layout),
     impression_label_engine: cfg.labelEngine,
