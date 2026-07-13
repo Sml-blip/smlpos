@@ -203,9 +203,9 @@ export function labelBarcodeSvg(
   }
 
   svg.setAttribute('width', '100%')
-  svg.setAttribute('height', 'auto')
+  svg.setAttribute('height', '100%')
   svg.setAttribute('class', 'label-barcode')
-  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+  svg.setAttribute('preserveAspectRatio', 'none')
   applyCrispEdges(svg)
   return svg.outerHTML
 }

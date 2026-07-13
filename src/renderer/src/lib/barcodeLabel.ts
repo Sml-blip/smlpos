@@ -152,7 +152,7 @@ export function buildBarcodeLabelHtml(
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      overflow: visible;
+      overflow: hidden;
     }
     .barcode-bars {
       flex: 1;
@@ -160,11 +160,12 @@ export function buildBarcodeLabelHtml(
       display: flex;
       align-items: flex-end;
       width: 100%;
+      overflow: hidden;
     }
     .barcode-bars svg {
       display: block;
       width: 100%;
-      height: auto;
+      height: 100%;
     }
     .barcode-bars svg rect { shape-rendering: crispEdges; image-rendering: pixelated; }
     .barcode-caption {

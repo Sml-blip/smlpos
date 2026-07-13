@@ -151,6 +151,25 @@ const pickBarcodeFormat = (value: string): '128' | 'EAN13' | 'EAN8' => {
   return '128'
 }
 
+const estimateBarcodeModules = (value: string, format: '128' | 'EAN13' | 'EAN8'): number => {
+  if (format === 'EAN13') return 95
+  if (format === 'EAN8') return 67
+  // CODE128: start + data + checksum + stop, with a small quiet-zone allowance.
+  return 35 + Math.max(1, value.length) * 11 + 20
+}
+
+const pickTsplBarcodeWidth = (
+  value: string,
+  format: '128' | 'EAN13' | 'EAN8',
+  boxWidthMm: number,
+  dpi = 203,
+): { narrow: number; wide: number; fits: boolean; modules: number; availableDots: number } => {
+  const availableDots = Math.max(1, mmToDots(boxWidthMm, dpi) - 8)
+  const modules = estimateBarcodeModules(value, format)
+  const narrow = Math.max(1, Math.min(2, Math.floor(availableDots / modules)))
+  return { narrow, wide: Math.max(2, narrow * 2), fits: modules <= availableDots, modules, availableDots }
+}
+
 const buildTSPL = (data: TsplLabelData): string => {
   const widthMm = Number(data.widthMm) || 40
   const heightMm = Number(data.heightMm) || 20
@@ -190,8 +209,13 @@ const buildTSPL = (data: TsplLabelData): string => {
   }
 
   if (isVisible(barcode) && barcodeValue) {
+    const format = pickBarcodeFormat(barcodeValue)
+    const widths = pickTsplBarcodeWidth(barcodeValue, format, Number(barcode.w) || 30, dpi)
+    if (!widths.fits) {
+      throw new Error(`Code-barres trop long pour une etiquette ${widthMm}x${heightMm} mm (${barcodeValue.length} caracteres). Utilisez un code plus court ou un vrai EAN.`)
+    }
     lines.push(
-      `BARCODE ${mmToDots(contentLeft + (barcode.x ?? 0), dpi)},${mmToDots(contentTop + (barcode.y ?? 0), dpi)},"${pickBarcodeFormat(barcodeValue)}",${mmToDots(barcodeHeight, dpi)},${readable},0,2,4,"${barcodeValue}"`,
+      `BARCODE ${mmToDots(contentLeft + (barcode.x ?? 0), dpi)},${mmToDots(contentTop + (barcode.y ?? 0), dpi)},"${format}",${mmToDots(barcodeHeight, dpi)},${readable},0,${widths.narrow},${widths.wide},"${barcodeValue}"`,
     )
   }
 

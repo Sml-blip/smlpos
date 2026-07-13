@@ -112,8 +112,8 @@ export default function BarcodeLabelPrintDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-6 animate-slide-in relative flex flex-col">
+    <div className="fixed inset-0 bg-black/55 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[440px] p-6 animate-slide-in relative flex flex-col">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1.5 text-text-secondary hover:text-text-primary hover:bg-muted rounded-lg transition-colors"
@@ -128,15 +128,19 @@ export default function BarcodeLabelPrintDialog({
           </div>
           <div>
             <h2 className="text-lg font-bold text-text-primary">Imprimer etiquette</h2>
-            <p className="text-xs text-text-secondary">Apercu 40 x 20 mm - TSPL brut</p>
+            <p className="text-xs text-text-secondary">Clean 40 x 20 mm preview - TSPL raw</p>
           </div>
         </div>
 
-        <div className="flex flex-col items-center gap-2.5 my-4 bg-gray-50 border border-border/60 rounded-xl p-6">
+        <div className="flex flex-col items-center gap-3 my-4 bg-gradient-to-br from-slate-50 to-white border border-border/70 rounded-2xl p-5">
+          <div className="w-full flex items-center justify-between text-[11px] text-text-secondary">
+            <span className="font-semibold">Label preview</span>
+            <span className="font-mono bg-white border border-border rounded-md px-2 py-0.5">40 x 20 mm</span>
+          </div>
           {preview ? (
             <div
-              className="border-2 border-dashed border-slate-200 bg-white overflow-hidden shadow-sm"
-              style={{ width: 280, height: 140 }}
+              className="border border-slate-300 bg-white overflow-hidden shadow-md ring-4 ring-white"
+              style={{ width: 320, height: 160 }}
             >
               <iframe
                 title="Label preview"
@@ -146,18 +150,15 @@ export default function BarcodeLabelPrintDialog({
                   height: 75.6,
                   border: 'none',
                   display: 'block',
-                  transform: 'scale(1.85)',
+                  transform: 'scale(2.116)',
                   transformOrigin: 'top left',
                   pointerEvents: 'none',
                 }}
               />
             </div>
           ) : (
-            <div className="w-[280px] h-[140px] bg-gray-200 rounded-lg animate-pulse" />
+            <div className="w-[320px] h-[160px] bg-gray-200 rounded-lg animate-pulse" />
           )}
-          <span className="text-[10px] text-text-secondary font-mono bg-white px-2 py-0.5 border border-border rounded">
-            Screen preview - real 40 x 20 mm ratio
-          </span>
         </div>
 
         <div className="space-y-4 mb-6">

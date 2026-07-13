@@ -99,7 +99,7 @@ export function parseVisualLayout(raw: string | undefined, contentW: number, con
       name: { ...fallback.name, ...j.name },
       barcode: { ...fallback.barcode, ...j.barcode },
       price: { ...fallback.price, ...j.price },
-      showBarcodeText: j.showBarcodeText !== false,
+      showBarcodeText: j.showBarcodeText ?? fallback.showBarcodeText,
     }
     // Replace old cramped/overlapping label layouts with the scannable full-width template.
     if (
