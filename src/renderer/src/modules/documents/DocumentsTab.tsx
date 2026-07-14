@@ -306,7 +306,8 @@ export default function DocumentsTab() {
 
   const marquerRecu = async (d: DocRow) => {
     await runAction('Marquage réception', async () => {
-      await api.facturesFournisseursMarquerRecu(d.id)
+      const res = await api.facturesFournisseursMarquerRecu(d.id) as { success?: boolean; error?: string }
+      if (!res?.success) throw new Error(res?.error || 'Echec marquage reception')
       load()
     }, { successMessage: 'Facture marquée comme reçue' })
   }

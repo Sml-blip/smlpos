@@ -256,7 +256,8 @@ export default function AchatsTab() {
               onPayer={f => setShowPaiementModal(f)}
               onMarquerRecu={async (f) => {
                 const ok = await runAction('Réception marchandise', async () => {
-                  await api.facturesFournisseursMarquerRecu(f.id)
+                  const res = await api.facturesFournisseursMarquerRecu(f.id) as { success?: boolean; error?: string }
+                  if (!res?.success) throw new Error(res?.error || 'Echec reception marchandise')
                 }, { successMessage: 'Marchandise marquée comme reçue' })
                 if (ok) loadFournisseurs()
               }}

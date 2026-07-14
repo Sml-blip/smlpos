@@ -652,10 +652,16 @@ function setupIpcHandlers() {
     const produitId = line.produit_id as string | null | undefined
     const quantite = Number(line.quantite) || 0
     if (!produitId || quantite <= 0) return
-    db.prepare('UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?').run(quantite, produitId)
     if (line.numeros_serie_json) {
-      addSerialNumbersToStock(produitId, line.numeros_serie_json, quantite)
+      const serialResult = addSerialNumbersToStock(produitId, line.numeros_serie_json, quantite, {
+        skipExistingInStockForSameProduct: true,
+      })
+      if (serialResult.inserted > 0) {
+        db.prepare('UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?').run(serialResult.inserted, produitId)
+      }
+      return
     }
+    db.prepare('UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?').run(quantite, produitId)
   }
 
   function revertVenteLineInventory(venteId: string, ligne: Record<string, unknown>, now: string) {
@@ -698,22 +704,42 @@ function setupIpcHandlers() {
     }
   }
 
-  function addSerialNumbersToStock(produitId: string, numerosSerieJson: unknown, quantite: number) {
-    if (!numerosSerieJson) return
+  function addSerialNumbersToStock(
+    produitId: string,
+    numerosSerieJson: unknown,
+    quantite: number,
+    options: { skipExistingInStockForSameProduct?: boolean } = {},
+  ): { inserted: number; skipped: string[] } {
+    if (!numerosSerieJson) return { inserted: 0, skipped: [] }
     let sns: string[]
     try {
       sns = typeof numerosSerieJson === 'string' ? JSON.parse(numerosSerieJson) : numerosSerieJson as string[]
     } catch {
-      return
+      return { inserted: 0, skipped: [] }
     }
-    if (!Array.isArray(sns)) return
+    if (!Array.isArray(sns)) return { inserted: 0, skipped: [] }
     const filled = sns.map(s => String(s).trim()).filter(Boolean)
+    const seenInPayload = new Set<string>()
+    for (const sn of filled) {
+      const key = sn.toLowerCase()
+      if (seenInPayload.has(key)) {
+        throw new Error(`Numero de serie saisi plusieurs fois dans cette facture : ${sn}`)
+      }
+      seenInPayload.add(key)
+    }
     if (filled.length !== quantite) {
       throw new Error(`Numéros de série incomplets (${filled.length}/${quantite})`)
     }
     const now = new Date().toISOString()
-    const existing = db.prepare('SELECT numero_serie FROM serial_numbers WHERE produit_id = ?').all(produitId) as { numero_serie: string }[]
+    const existing = options.skipExistingInStockForSameProduct
+      ? db.prepare("SELECT numero_serie FROM serial_numbers WHERE produit_id = ? AND statut != 'EN_STOCK'").all(produitId) as { numero_serie: string }[]
+      : db.prepare('SELECT numero_serie FROM serial_numbers WHERE produit_id = ?').all(produitId) as { numero_serie: string }[]
     const existingSet = new Set(existing.map(r => r.numero_serie.trim().toLowerCase()))
+    const existingEnStock = options.skipExistingInStockForSameProduct
+      ? db.prepare("SELECT numero_serie FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK'").all(produitId) as { numero_serie: string }[]
+      : []
+    const existingEnStockSet = new Set(existingEnStock.map(r => r.numero_serie.trim().toLowerCase()))
+    const toInsert = filled.filter(sn => !existingEnStockSet.has(sn.toLowerCase()))
     for (const sn of filled) {
       if (existingSet.has(sn.toLowerCase())) {
         throw new Error(`Numéro de série déjà existant : ${sn}`)
@@ -723,9 +749,10 @@ function setupIpcHandlers() {
       INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
       VALUES (?, ?, ?, 'EN_STOCK', ?, ?)
     `)
-    for (const sn of filled) {
+    for (const sn of toInsert) {
       insert.run(randomUUID(), produitId, sn, now, now)
     }
+    return { inserted: toInsert.length, skipped: filled.filter(sn => existingEnStockSet.has(sn.toLowerCase())) }
   }
 
   ipcMain.handle('serialNumbers:getByProduit', (_e, produitId: string) => {
@@ -1590,9 +1617,13 @@ function setupIpcHandlers() {
           updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
           const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
           if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
-          updateStock.run(l.quantite, l.produit_id)
           if (l.numeros_serie_json) {
-            addSerialNumbersToStock(l.produit_id as string, l.numeros_serie_json, l.quantite as number)
+            const serialResult = addSerialNumbersToStock(l.produit_id as string, l.numeros_serie_json, l.quantite as number, {
+              skipExistingInStockForSameProduct: true,
+            })
+            if (serialResult.inserted > 0) updateStock.run(serialResult.inserted, l.produit_id)
+          } else {
+            updateStock.run(l.quantite, l.produit_id)
           }
         }
       }
