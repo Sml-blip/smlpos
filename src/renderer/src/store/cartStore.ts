@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { CartItem } from '../lib/types'
+import { round3 } from '../lib/invoiceLineCalc'
 
 interface CartState {
   items: CartItem[]
@@ -32,11 +33,11 @@ export const useCartStore = create<CartState>((set, get) => ({
         const updated = [...state.items]
         const existing = updated[existingIdx]
         const newQty = existing.quantite + item.quantite
-        const totalLigne = newQty * existing.prix_unitaire * (1 - existing.remise_pct / 100)
+        const totalLigne = round3(newQty * existing.prix_unitaire * (1 - existing.remise_pct / 100))
         updated[existingIdx] = { ...existing, quantite: newQty, total_ligne: totalLigne }
         return { items: updated }
       }
-      return { items: [...state.items, item] }
+      return { items: [...state.items, { ...item, total_ligne: round3(item.total_ligne) }] }
     })
   },
 
@@ -45,7 +46,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       const updated = [...state.items]
       const current = updated[index]
       const merged = { ...current, ...item }
-      merged.total_ligne = merged.quantite * merged.prix_unitaire * (1 - merged.remise_pct / 100)
+      merged.total_ligne = round3(merged.quantite * merged.prix_unitaire * (1 - merged.remise_pct / 100))
       updated[index] = merged
       return { items: updated }
     })
@@ -58,24 +59,24 @@ export const useCartStore = create<CartState>((set, get) => ({
   clearCart: () => set({ items: [], remiseTotale: 0 }),
 
   loadCart: (items, remiseTotale = 0) => set({
-    items: items.map(i => ({ ...i })),
-    remiseTotale,
+    items: items.map(i => ({ ...i, total_ligne: round3(i.total_ligne) })),
+    remiseTotale: round3(remiseTotale),
   }),
 
-  setRemiseTotale: (v) => set({ remiseTotale: v }),
+  setRemiseTotale: (v) => set({ remiseTotale: round3(v) }),
 
   sousTotal: () => {
-    return get().items.reduce((sum, item) => sum + item.quantite * item.prix_unitaire, 0)
+    return round3(get().items.reduce((sum, item) => sum + item.quantite * item.prix_unitaire, 0))
   },
 
   totalRemises: () => {
-    return get().items.reduce((sum, item) => {
+    return round3(get().items.reduce((sum, item) => {
       const remise = item.quantite * item.prix_unitaire * (item.remise_pct / 100)
       return sum + remise
-    }, 0)
+    }, 0))
   },
 
   total: () => {
-    return get().items.reduce((sum, item) => sum + item.total_ligne, 0)
+    return round3(get().items.reduce((sum, item) => sum + item.total_ligne, 0))
   },
 }))

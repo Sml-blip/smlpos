@@ -111,6 +111,103 @@ function enqueueProductSnapshot(productId: unknown) {
   if (product) enqueueSync('produits', 'UPDATE', product)
 }
 
+function money3(value: unknown): number {
+  const raw = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'))
+  if (!Number.isFinite(raw)) return 0
+  return Math.round((raw + Number.EPSILON) * 1000) / 1000
+}
+
+function normalizeMoneyFields<T extends Record<string, unknown>>(row: T, fields: string[]): T {
+  const normalized = { ...row }
+  for (const field of fields) {
+    if (field in normalized) normalized[field as keyof T] = money3(normalized[field]) as T[keyof T]
+  }
+  return normalized
+}
+
+function normalizeVenteLine(line: Record<string, unknown>): Record<string, unknown> {
+  const quantite = Number(line.quantite ?? 0)
+  const prix_unitaire = money3(line.prix_unitaire)
+  const remise_pct = money3(line.remise_pct ?? 0)
+  return {
+    ...line,
+    quantite,
+    prix_unitaire,
+    remise_pct,
+    total_ligne: money3(quantite * prix_unitaire * (1 - remise_pct / 100)),
+  }
+}
+
+function normalizeDocumentLine(line: Record<string, unknown>): Record<string, unknown> {
+  return normalizeMoneyFields(
+    { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...line },
+    ['quantite', 'prix_unitaire', 'remise_pct', 'tva_taux', 'total_ht', 'total_tva', 'total_ttc'],
+  )
+}
+
+function documentSaleType(typeDocument: unknown): 'FACTURE' | 'BL_VENTE' | 'DEVIS' | null {
+  if (typeDocument === 'FACTURE_VENTE' || typeDocument === 'FACTURE_JOURNALIERE_F') return 'FACTURE'
+  if (typeDocument === 'BON_LIVRAISON') return 'BL_VENTE'
+  if (typeDocument === 'DEVIS') return 'DEVIS'
+  return null
+}
+
+function markVenteConverted(venteId: unknown, typeDocument: unknown) {
+  const type_vente = documentSaleType(typeDocument)
+  if (!venteId || !type_vente) return
+  db.prepare(`UPDATE ventes SET a_facture = 1, type_vente = ? WHERE id = ?`).run(type_vente, venteId)
+  const row = db.prepare(`SELECT * FROM ventes WHERE id = ?`).get(venteId) as Record<string, unknown> | undefined
+  if (row) enqueueSync('ventes', 'UPDATE', row)
+}
+
+function repairStoredMoneyPrecision() {
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE ventes SET
+          sous_total = ROUND(COALESCE(sous_total, 0), 3),
+          total_remises = ROUND(COALESCE(total_remises, 0), 3),
+          total_ttc = ROUND(COALESCE(total_ttc, 0), 3),
+          montant_recu = ROUND(COALESCE(montant_recu, 0), 3),
+          monnaie_rendue = ROUND(COALESCE(monnaie_rendue, 0), 3)
+      `).run()
+      db.prepare(`
+        UPDATE lignes_vente SET
+          prix_unitaire = ROUND(COALESCE(prix_unitaire, 0), 3),
+          remise_pct = ROUND(COALESCE(remise_pct, 0), 3),
+          total_ligne = ROUND(COALESCE(total_ligne, 0), 3)
+      `).run()
+      db.prepare(`
+        UPDATE documents SET
+          total_ht = ROUND(COALESCE(total_ht, 0), 3),
+          total_tva = ROUND(COALESCE(total_tva, 0), 3),
+          total_ttc = ROUND(COALESCE(total_ttc, 0), 3),
+          montant_paye = ROUND(COALESCE(montant_paye, 0), 3),
+          exo = ROUND(COALESCE(exo, 0), 3),
+          timbre = ROUND(COALESCE(timbre, 0), 3),
+          ht_7 = ROUND(COALESCE(ht_7, 0), 3),
+          tva_7 = ROUND(COALESCE(tva_7, 0), 3),
+          ht_19 = ROUND(COALESCE(ht_19, 0), 3),
+          tva_19 = ROUND(COALESCE(tva_19, 0), 3),
+          total_remise = ROUND(COALESCE(total_remise, 0), 3),
+          tva_taux_principal = ROUND(COALESCE(tva_taux_principal, 0), 3)
+      `).run()
+      db.prepare(`
+        UPDATE lignes_document SET
+          quantite = ROUND(COALESCE(quantite, 0), 3),
+          prix_unitaire = ROUND(COALESCE(prix_unitaire, 0), 3),
+          remise_pct = ROUND(COALESCE(remise_pct, 0), 3),
+          tva_taux = ROUND(COALESCE(tva_taux, 0), 3),
+          total_ht = ROUND(COALESCE(total_ht, 0), 3),
+          total_tva = ROUND(COALESCE(total_tva, 0), 3),
+          total_ttc = ROUND(COALESCE(total_ttc, 0), 3)
+      `).run()
+    })()
+  } catch (e) {
+    console.warn('[money] Precision repair skipped:', e)
+  }
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 function resolveAppIcon(): NativeImage | undefined {
@@ -215,6 +312,7 @@ app.whenReady().then(() => {
       console.warn('[backup] Pre-migration backup skipped:', e)
     }
     initDatabase()
+    repairStoredMoneyPrecision()
   } catch (err) {
     console.error('DB init error:', err)
   }
@@ -900,6 +998,11 @@ function setupIpcHandlers() {
 
   // ─── Ventes ──────────────────────────────────────────────────────────────────
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
+    const normalizedVente = normalizeMoneyFields({
+      client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+      ...vente,
+    }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue'])
+    const normalizedLignes = (lignes as Record<string, unknown>[]).map(ligne => normalizeVenteLine({ numero_serie: null, ...ligne }))
     const insertVente = db.prepare(`
       INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_id, client_nom, client_tel, client_adresse, client_matricule,
         sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture, created_at)
@@ -916,22 +1019,19 @@ function setupIpcHandlers() {
     const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`)
 
     const transaction = db.transaction(() => {
-      insertVente.run({
-        client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
-        ...vente,
-      })
+      insertVente.run(normalizedVente)
       const now = new Date().toISOString()
-      for (const ligne of lignes) {
-        insertLigne.run({ numero_serie: null, ...ligne })
+      for (const ligne of normalizedLignes) {
+        insertLigne.run(ligne)
         if (ligne.produit_id) {
-          updateStock.run(ligne.quantite, ligne.produit_id)
+          updateStock.run(Number(ligne.quantite ?? 0), ligne.produit_id)
           const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(ligne.produit_id) as { has_serial_number?: number } | undefined
           if (prod?.has_serial_number) {
             const serials = String(ligne.numero_serie ?? '')
               .split(',')
               .map((s: string) => s.trim())
               .filter(Boolean)
-            const toMark = serials.length ? serials : Array.from({ length: ligne.quantite as number }, () => null)
+            const toMark = serials.length ? serials : Array.from({ length: Number(ligne.quantite ?? 0) }, () => null)
             for (const snVal of toMark) {
               const sn = snVal
                 ? snByValue.get(ligne.produit_id, snVal) as { id: string } | undefined
@@ -943,14 +1043,10 @@ function setupIpcHandlers() {
       }
     })
     transaction()
-    const normalizedVente = {
-      client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
-      ...vente,
-    }
-    addActivityLog({ shift_id: vente.shift_id, operateur: vente.operateur_nom, action: 'SALE_CREATED', montant: vente.total_ttc, details: { numero: vente.numero, mode: vente.mode_paiement, type_vente: normalizedVente.type_vente } })
+    addActivityLog({ shift_id: normalizedVente.shift_id as string, operateur: normalizedVente.operateur_nom as string, action: 'SALE_CREATED', montant: normalizedVente.total_ttc as number, details: { numero: normalizedVente.numero, mode: normalizedVente.mode_paiement, type_vente: normalizedVente.type_vente } })
     enqueueSync('ventes', 'INSERT', normalizedVente)
-    for (const ligne of lignes) enqueueSync('lignes_vente', 'INSERT', ligne)
-    for (const ligne of lignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
+    for (const ligne of normalizedLignes) enqueueSync('lignes_vente', 'INSERT', ligne)
+    for (const ligne of normalizedLignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
     return { success: true }
   })
 
@@ -2385,7 +2481,7 @@ function setupIpcHandlers() {
   })
   ipcMain.handle('documents:create', (_e, doc: Record<string, unknown>, lignes: Record<string, unknown>[]) => {
     const now = new Date().toISOString()
-    const normalizedDoc = {
+    const normalizedDoc = normalizeMoneyFields({
       vente_id: null, fournisseur_id: null, client_id: null,
       client_nom: null, client_tel: null, client_adresse: null, client_matricule: null,
       shift_id: null, statut_paiement: 'PAYE', montant_paye: 0,
@@ -2393,12 +2489,12 @@ function setupIpcHandlers() {
       exo: null, timbre: 1.0, ht_7: 0.0, tva_7: 0.0, ht_19: 0.0, tva_19: 0.0, total_remise: 0.0, tva_taux_principal: 0.0,
       updated_at: now, created_at: now,
       ...doc,
-    }
-    let docLignes = lignes
+    }, ['total_ht', 'total_tva', 'total_ttc', 'montant_paye', 'exo', 'timbre', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'tva_taux_principal'])
+    let docLignes = (lignes as Record<string, unknown>[]).map(l => normalizeDocumentLine(l))
     const typeDocStr = String(normalizedDoc.type_document ?? '')
     const nfAllowed = typeDocStr === 'BON_LIVRAISON'
     if (normalizedDoc.vente_id && !nfAllowed) {
-      docLignes = lignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
+      docLignes = docLignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
       if (docLignes.length === 0) {
         return { success: false, error: 'Aucun produit facturé (F) — conversion impossible' }
       }
@@ -2410,6 +2506,7 @@ function setupIpcHandlers() {
         `SELECT id, numero FROM documents WHERE vente_id = ? AND type_document = ? AND statut NOT IN ('ANNULE', 'REVOQUE') LIMIT 1`,
       ).get(normalizedDoc.vente_id, normalizedDoc.type_document) as { id: string; numero: string } | undefined
       if (existing) {
+        markVenteConverted(normalizedDoc.vente_id, normalizedDoc.type_document)
         return { success: true, id: existing.id, numero: existing.numero, alreadyExists: true }
       }
     }
@@ -2430,17 +2527,16 @@ function setupIpcHandlers() {
         )
       `).run(normalizedDoc)
       for (const l of docLignes) {
-        const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l }
-        db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)`).run(nl)
+        db.prepare(`INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie) VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)`).run(l)
       }
+      markVenteConverted(normalizedDoc.vente_id, normalizedDoc.type_document)
     })()
-    addActivityLog({ shift_id: doc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: doc.type_document, numero: doc.numero, client: doc.client_nom }, montant: doc.total_ttc as number })
+    addActivityLog({ shift_id: normalizedDoc.shift_id as string, action: 'DOCUMENT_CREATED', details: { type_document: normalizedDoc.type_document, numero: normalizedDoc.numero, client: normalizedDoc.client_nom }, montant: normalizedDoc.total_ttc as number })
     enqueueSync('documents', 'INSERT', normalizedDoc)
     for (const l of docLignes) {
-      const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l }
-      enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
+      enqueueSync('lignes_document', 'INSERT', l as Record<string, unknown>)
     }
-    return { success: true }
+    return { success: true, id: normalizedDoc.id, numero: normalizedDoc.numero }
   })
   ipcMain.handle('documents:update', (_e, id: string, data: Record<string, unknown>) => {
     const FORBIDDEN = new Set(['numero', 'type_document', 'vente_id', 'created_at', 'avoir_id', 'document_origine_id'])
@@ -2453,7 +2549,10 @@ function setupIpcHandlers() {
       'exo', 'timbre', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'tva_taux_principal',
       'statut', 'annule_motif', 'updated_at',
     ])
-    const filtered = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.has(k)))
+    const filtered = normalizeMoneyFields(
+      Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.has(k))),
+      ['total_ht', 'total_tva', 'total_ttc', 'montant_paye', 'exo', 'timbre', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'tva_taux_principal'],
+    )
     if (!Object.keys(filtered).length) return { success: false, error: 'Aucun champ valide' }
     const cols = Object.keys(filtered)
     const sets = cols.map(k => `${k}=@${k}`).join(',')
@@ -2502,6 +2601,8 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('documents:replaceLignes', (_e, documentId: string, lignes: Record<string, unknown>[], totals: { total_ht: number; total_tva: number; total_ttc: number; ht_7?: number; tva_7?: number; ht_19?: number; tva_19?: number; total_remise?: number }) => {
+    const normalizedLignes = lignes.map(l => normalizeDocumentLine(l))
+    const normalizedTotals = normalizeMoneyFields({ ...totals }, ['total_ht', 'total_tva', 'total_ttc', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise'])
     const doc = db.prepare(`SELECT id, statut, type_document, vente_id FROM documents WHERE id = ?`).get(documentId) as { id: string; statut: string; type_document: string; vente_id?: string | null } | undefined
     if (!doc) return { success: false, error: 'Document introuvable' }
     if (['ANNULE', 'REVOQUE'].includes(doc.statut) || doc.type_document === 'AVOIR') {
@@ -2527,8 +2628,8 @@ function setupIpcHandlers() {
           db.prepare(`DELETE FROM lignes_vente WHERE vente_id = ?`).run(doc.vente_id)
         }
         db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
-        for (const l of lignes) {
-          const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, numero_serie: null, ...l, document_id: documentId }
+        for (const l of normalizedLignes) {
+          const nl = { ...l, document_id: documentId }
           insertLigne.run(nl)
           if (doc.vente_id) {
             insertVenteLigne.run({
@@ -2549,17 +2650,17 @@ function setupIpcHandlers() {
           const newVenteLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id = ?`).all(doc.vente_id) as Record<string, unknown>[]
           for (const vl of newVenteLines) applyVenteLineInventory(doc.vente_id!, vl, now)
         }
-        const extraSets = totals.ht_7 != null ? ', ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19' : ''
+        const extraSets = normalizedTotals.ht_7 != null ? ', ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19' : ''
         db.prepare(`UPDATE documents SET total_ht=@total_ht, total_tva=@total_tva, total_ttc=@total_ttc, updated_at=@updated_at${extraSets} WHERE id=@id`).run({
-          id: documentId, updated_at: now, ...totals,
+          id: documentId, updated_at: now, ...normalizedTotals,
         })
       })()
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Échec synchronisation stock' }
     }
     for (const ol of oldLines) enqueueSync('lignes_document', 'DELETE', { id: ol.id })
-    for (const l of lignes) {
-      const nl = { produit_id: null, type_produit: 'F', remise_pct: 0, tva_taux: 0, total_tva: 0, ...l, document_id: documentId }
+    for (const l of normalizedLignes) {
+      const nl = { ...l, document_id: documentId }
       enqueueSync('lignes_document', 'INSERT', nl as Record<string, unknown>)
     }
     if (doc.vente_id) {
@@ -2570,8 +2671,8 @@ function setupIpcHandlers() {
       for (const vl of [...oldVenteLines, ...syncedVenteLines]) if (vl.produit_id) touched.add(String(vl.produit_id))
       for (const pid of touched) enqueueProductSnapshot(pid)
     }
-    enqueueSync('documents', 'UPDATE', { id: documentId, ...totals, updated_at: now })
-    addActivityLog({ action: 'DOCUMENT_LINES_EDITED', details: { documentId, lineCount: lignes.length } })
+    enqueueSync('documents', 'UPDATE', { id: documentId, ...normalizedTotals, updated_at: now })
+    addActivityLog({ action: 'DOCUMENT_LINES_EDITED', details: { documentId, lineCount: normalizedLignes.length } })
     return { success: true }
   })
   ipcMain.handle('documents:getLastNumber', (_e, prefix: string) => {

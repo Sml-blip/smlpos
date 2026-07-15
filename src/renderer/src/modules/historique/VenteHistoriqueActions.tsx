@@ -62,13 +62,15 @@ export function VenteTicketPrintModal({ vente, onClose }: { vente: Vente; onClos
 }
 
 export function ConvertVenteDocModal({
-  vente, onClose, onCreated,
+  vente, onClose, onCreated, initialType = 'FACTURE_VENTE', forcePassenger = false,
 }: {
   vente: Vente
   onClose: () => void
   onCreated: () => void
+  initialType?: 'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'
+  forcePassenger?: boolean
 }) {
-  const [type, setType] = useState<'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'>('FACTURE_VENTE')
+  const [type, setType] = useState<'FACTURE_VENTE' | 'BON_LIVRAISON' | 'DEVIS'>(initialType)
   const [loading, setLoading] = useState(false)
   const [lignes, setLignes] = useState<LigneVente[]>([])
   const [createdDoc, setCreatedDoc] = useState<DocType | null>(null)
@@ -145,10 +147,10 @@ export function ConvertVenteDocModal({
         type_document: type,
         statut: 'ACTIF',
         vente_id: vente.id,
-        client_nom: vente.client_nom || 'Client Passager',
-        client_tel: vente.client_tel || null,
-        client_adresse: vente.client_adresse || null,
-        client_matricule: vente.client_matricule || null,
+        client_nom: forcePassenger ? 'Client Passager' : (vente.client_nom || 'Client Passager'),
+        client_tel: forcePassenger ? null : (vente.client_tel || null),
+        client_adresse: forcePassenger ? null : (vente.client_adresse || null),
+        client_matricule: forcePassenger ? null : (vente.client_matricule || null),
         total_ht: sums.total_ht,
         total_tva: sums.total_tva,
         total_ttc: sums.total_ttc,
@@ -163,8 +165,13 @@ export function ConvertVenteDocModal({
         updated_at: now,
       }
       
-      await api.documentsCreate(doc, docLignes)
-      setCreatedDoc(doc as DocType)
+      const result = await api.documentsCreate(doc, docLignes) as { success?: boolean; error?: string; id?: string; numero?: string } | undefined
+      if (result?.success === false) throw new Error(result.error || 'Document non cree')
+      setCreatedDoc({
+        ...doc,
+        id: result?.id || docId,
+        numero: result?.numero || numero,
+      } as DocType)
     }, { setLoading, successMessage: 'Document créé' })
   }
 
@@ -176,11 +183,11 @@ export function ConvertVenteDocModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[120]">
       <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-5">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-sm">Convertir vente {vente.numero}</h3>
+          <h3 className="font-bold text-sm">{forcePassenger ? 'Facture passager' : 'Convertir vente'} {vente.numero}</h3>
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <div className="space-y-2 mb-4">
-          {([
+          {!forcePassenger && ([
             ['FACTURE_VENTE', 'Facture', FileText],
             ['BON_LIVRAISON', 'Bon de livraison', FileCheck],
             ['DEVIS', 'Devis', FileText],
@@ -190,6 +197,11 @@ export function ConvertVenteDocModal({
               <Icon size={14} /> {label}
             </button>
           ))}
+          {forcePassenger && (
+            <div className="rounded-xl border border-accent-200 bg-accent-50 px-3 py-2.5 text-sm font-semibold flex items-center gap-2">
+              <FileText size={14} /> Facture vente - Client Passager
+            </div>
+          )}
         </div>
         {!canCreate ? (
           <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mb-4">

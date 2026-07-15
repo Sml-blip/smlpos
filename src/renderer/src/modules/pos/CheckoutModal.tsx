@@ -7,6 +7,7 @@ import TicketModal from './TicketModal'
 import DocumentPreviewModal from './DocumentPreviewModal'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { runAction } from '../../lib/apiCall'
+import { round3 } from '../../lib/invoiceLineCalc'
 
 const api = window.api
 
@@ -35,8 +36,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const [showTicket, setShowTicket] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
-  const montantRecuNum = parseFloat(montantRecu.replace(',', '.')) || 0
-  const monnaieRendue = mode === 'ESPECES' ? Math.max(0, montantRecuNum - total) : 0
+  const montantRecuNum = round3(parseFloat(montantRecu.replace(',', '.')) || 0)
+  const cleanTotal = round3(total)
+  const cleanSousTotal = round3(sousTotal)
+  const cleanTotalRemises = round3(totalRemises)
+  const monnaieRendue = mode === 'ESPECES' ? round3(Math.max(0, montantRecuNum - cleanTotal)) : 0
   const hasItemsF = items.some(i => i.type_produit === 'F' && !i.is_service)
 
   const modes: { id: ModePaiement; label: string; icon: React.ReactNode }[] = [
@@ -47,7 +51,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   ]
 
   const handleConfirm = async () => {
-    if (mode === 'ESPECES' && montantRecuNum < total) return
+    if (mode === 'ESPECES' && montantRecuNum < cleanTotal) return
     if (typeVente === 'BL_VENTE' && items.length === 0) return
     if ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF) {
       setErrorMsg(`${typeVente === 'DEVIS' ? 'Devis' : 'Facture'} : au moins un produit F requis dans le panier.`)
@@ -66,11 +70,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         numero,
         shift_id: currentShift?.id,
         operateur_nom: currentShift?.operateur_nom,
-        sous_total: sousTotal,
-        total_remises: totalRemises,
-        total_ttc: total,
+        sous_total: cleanSousTotal,
+        total_remises: cleanTotalRemises,
+        total_ttc: cleanTotal,
         mode_paiement: mode,
-        montant_recu: mode === 'ESPECES' ? montantRecuNum : total,
+        montant_recu: mode === 'ESPECES' ? montantRecuNum : cleanTotal,
         monnaie_rendue: monnaieRendue,
         type: 'VENTE',
         type_vente: typeVente,
@@ -89,9 +93,9 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         produit_id: item.produit_id || null,
         designation: item.designation,
         quantite: item.quantite,
-        prix_unitaire: item.prix_unitaire,
-        remise_pct: item.remise_pct,
-        total_ligne: item.total_ligne,
+        prix_unitaire: round3(item.prix_unitaire),
+        remise_pct: round3(item.remise_pct),
+        total_ligne: round3(item.total_ligne),
         type_produit: item.type_produit,
         numero_serie: item.numero_serie ?? null,
       }))
