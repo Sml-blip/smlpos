@@ -42,6 +42,7 @@ export default function CreditsTab() {
   const [showNewClient, setShowNewClient] = useState(false)
   const [showAddTranche, setShowAddTranche] = useState<'CREDIT' | 'PAIEMENT' | null>(null)
   const [showAddOrg, setShowAddOrg] = useState(false)
+  const [assignOrg, setAssignOrg] = useState<OrganisationSummary | null>(null)
   const [filterOrgId, setFilterOrgId] = useState<string | null>(null)
 
   // Use a ref to avoid including `selected` in load deps (prevents infinite reload loop)
@@ -180,6 +181,10 @@ export default function CreditsTab() {
                     <button onClick={() => { setFilterOrgId(org.id); setSubTab('clients') }}
                       className="text-xs text-accent-600 hover:underline text-left">
                       Voir les clients →
+                    </button>
+                    <button onClick={() => setAssignOrg(org)}
+                      className="flex items-center justify-center gap-1.5 border border-border hover:border-accent-400 hover:bg-accent-50 rounded-lg px-3 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary">
+                      <UserPlus size={12} /> Assigner un client existant
                     </button>
                   </div>
                 )
@@ -539,6 +544,13 @@ export default function CreditsTab() {
         <AddOrgModal
           onClose={() => setShowAddOrg(false)}
           onSaved={() => { setShowAddOrg(false); load() }}
+        />
+      )}
+      {assignOrg && (
+        <AssignOrganisationClientModal
+          organisation={assignOrg}
+          onClose={() => setAssignOrg(null)}
+          onSaved={() => { setAssignOrg(null); load() }}
         />
       )}
     </div>
@@ -925,6 +937,88 @@ function AddTrancheModal({
 }
 
 // ── Add Organisation Modal ────────────────────────────────────────────────────
+function AssignOrganisationClientModal({ organisation, onClose, onSaved }: {
+  organisation: OrganisationSummary
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [clients, setClients] = useState<Client[]>([])
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    api.clientsList({}).then(rows => {
+      if (!cancelled) setClients((rows as Client[]).filter(c => c.organisation_id !== organisation.id))
+    }).catch(() => {
+      if (!cancelled) setError('Impossible de charger les clients')
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [organisation.id])
+
+  const visible = clients.filter(c => `${c.nom} ${c.telephone ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()))
+
+  const assign = async (client: Client) => {
+    setError('')
+    setSavingId(client.id)
+    try {
+      const result = await api.clientsUpdate(client.id, { organisation_id: organisation.id }) as { success?: boolean; error?: string }
+      if (result?.success === false || result?.error) throw new Error(result.error || 'Affectation impossible')
+      setClients(current => current.filter(c => c.id !== client.id))
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Affectation impossible')
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-[460px] max-w-full animate-slide-in">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div>
+            <h2 className="font-bold text-base flex items-center gap-2"><Building2 size={15} /> Assigner un client</h2>
+            <p className="text-xs text-text-muted mt-1">Organisation : {organisation.nom}</p>
+          </div>
+          <button onClick={onClose} aria-label="Fermer"><X size={18} className="text-text-muted" /></button>
+        </div>
+        {error && <p className="mx-6 mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
+        <div className="p-6">
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-3 top-3 text-text-muted" />
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un client..."
+              className="w-full border border-border rounded-xl pl-9 pr-3 py-2.5 text-sm outline-none focus:border-accent-500" />
+          </div>
+          <div className="max-h-64 overflow-auto border border-border rounded-xl divide-y divide-border">
+            {loading ? <p className="p-4 text-sm text-text-muted text-center">Chargement...</p> : visible.length === 0 ? (
+              <p className="p-5 text-sm text-text-muted text-center">Aucun client disponible</p>
+            ) : visible.map(client => (
+              <div key={client.id} className="flex items-center gap-3 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{client.nom}</p>
+                  <p className="text-xs text-text-muted truncate">{client.telephone || 'Sans téléphone'}{client.organisation_id ? ' · autre organisation' : ' · client général'}</p>
+                </div>
+                <button onClick={() => assign(client)} disabled={savingId !== null}
+                  className="shrink-0 bg-accent-500 hover:bg-accent-400 disabled:opacity-50 rounded-lg px-3 py-1.5 text-xs font-bold">
+                  {savingId === client.id ? '...' : 'Assigner'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end px-6 py-4 border-t border-border">
+          <button onClick={onClose} className="px-4 py-2.5 bg-muted hover:bg-border rounded-xl text-sm font-semibold">Fermer</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({ nom: '', telephone: '', email: '', adresse: '', matricule_fiscal: '' })
   const [saving, setSaving] = useState(false)

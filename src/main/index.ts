@@ -2209,8 +2209,16 @@ function setupIpcHandlers() {
     const params: unknown[] = []
     if (filters.search) { where.push('(nom LIKE ? OR telephone LIKE ?)'); params.push(`%${filters.search}%`, `%${filters.search}%`) }
     if (filters.organisation_id === null || filters.organisation_id === 'none') where.push('organisation_id IS NULL')
-    else if (filters.organisation_id) { where.push('organisation_id = ?'); params.push(filters.organisation_id) }
-    return db.prepare(`SELECT * FROM clients WHERE ${where.join(' AND ')} ORDER BY nom`).all(...params)
+    else if (filters.organisation_id) {
+      // Older records may contain the organisation name instead of its ID.
+      // Treat that legacy value as the same organisation until the user reassigns it.
+      where.push('(c.organisation_id = ? OR lower(trim(c.organisation_id)) = lower(trim(o.nom)))')
+      params.push(filters.organisation_id)
+    }
+    return db.prepare(`SELECT c.* FROM clients c LEFT JOIN organisations o ON o.id = ? WHERE ${where.join(' AND ')} ORDER BY c.nom`).all(
+      filters.organisation_id && filters.organisation_id !== 'none' ? filters.organisation_id : null,
+      ...params,
+    )
   })
 
   ipcMain.handle('clients:create', (_e, client: Record<string, unknown>) => {
@@ -2410,7 +2418,7 @@ function setupIpcHandlers() {
       SELECT o.*, COUNT(c.id) AS client_count,
         COALESCE(SUM(CASE WHEN c.solde_credit > 0 THEN c.solde_credit ELSE 0 END), 0) AS credit_live
       FROM organisations o
-      LEFT JOIN clients c ON c.organisation_id = o.id AND c.actif = 1
+      LEFT JOIN clients c ON c.actif = 1 AND (c.organisation_id = o.id OR lower(trim(c.organisation_id)) = lower(trim(o.nom)))
       WHERE o.actif = 1
       GROUP BY o.id
       ORDER BY o.nom
