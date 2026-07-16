@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/appStore'
 import {
   Users, X, Search, RefreshCw, CreditCard, UserPlus,
   ArrowUpCircle, ArrowDownCircle, DollarSign, Clock, User,
-  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download
+  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus
 } from 'lucide-react'
 import type { Organisation } from '../../lib/types'
 import { runAction, loadData } from '../../lib/apiCall'
@@ -44,6 +44,7 @@ export default function CreditsTab() {
   const [showAddOrg, setShowAddOrg] = useState(false)
   const [assignOrg, setAssignOrg] = useState<OrganisationSummary | null>(null)
   const [filterOrgId, setFilterOrgId] = useState<string | null>(null)
+  const [unassigning, setUnassigning] = useState(false)
 
   // Use a ref to avoid including `selected` in load deps (prevents infinite reload loop)
   const selectedIdRef = useRef<string | null>(null)
@@ -85,6 +86,23 @@ export default function CreditsTab() {
     load()
     if (selected) loadHistory(selected.id)
   }, [load, selected, loadHistory])
+
+  const unassignSelected = async () => {
+    if (!selected || !filterOrgId) return
+    if (!window.confirm(`Retirer ${selected.nom} de cette organisation ? Le client restera dans les clients généraux.`)) return
+    setUnassigning(true)
+    try {
+      const result = await api.clientsUpdate(selected.id, { organisation_id: null }) as { success?: boolean; error?: string }
+      if (result?.success === false || result?.error) throw new Error(result.error || 'Désaffectation impossible')
+      setSelected(null)
+      setHistory([])
+      await load()
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Désaffectation impossible')
+    } finally {
+      setUnassigning(false)
+    }
+  }
 
   // KPIs
   const totalCredit = clients.reduce((s, c) => s + (c.solde_credit > 0 ? c.solde_credit : 0), 0)
@@ -388,6 +406,15 @@ export default function CreditsTab() {
                 >
                   <ArrowDownCircle size={13} /> Encaisser paiement
                 </button>
+                {filterOrgId && (
+                  <button
+                    onClick={() => void unassignSelected()}
+                    disabled={unassigning}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-50 rounded-xl text-xs font-semibold transition-colors"
+                  >
+                    <UserMinus size={13} /> {unassigning ? 'Retrait...' : 'Désassigner de l’organisation'}
+                  </button>
+                )}
               </div>
             </div>
 
