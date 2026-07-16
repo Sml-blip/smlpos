@@ -2406,7 +2406,15 @@ function setupIpcHandlers() {
 
   // ── Organisations ───────────────────────────────────────────────────────────
   ipcMain.handle('organisations:list', () => {
-    return db.prepare(`SELECT * FROM organisations WHERE actif = 1 ORDER BY nom`).all()
+    return db.prepare(`
+      SELECT o.*, COUNT(c.id) AS client_count,
+        COALESCE(SUM(CASE WHEN c.solde_credit > 0 THEN c.solde_credit ELSE 0 END), 0) AS credit_live
+      FROM organisations o
+      LEFT JOIN clients c ON c.organisation_id = o.id AND c.actif = 1
+      WHERE o.actif = 1
+      GROUP BY o.id
+      ORDER BY o.nom
+    `).all()
   })
   ipcMain.handle('organisations:create', (_e, org: Record<string, unknown>) => {
     const row = bindRow({

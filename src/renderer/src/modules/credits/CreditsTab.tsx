@@ -19,6 +19,7 @@ interface Client {
   id: string; nom: string; telephone?: string; email?: string
   adresse?: string; solde_credit: number; credit_limite?: number; organisation_id?: string; notes?: string; created_at: string
 }
+type OrganisationSummary = Organisation & { client_count?: number; credit_live?: number }
 interface CreditLigne {
   id: string; client_id: string; client_nom: string; shift_id?: string
   type: 'CREDIT' | 'PAIEMENT'; montant: number; reference?: string
@@ -32,7 +33,7 @@ export default function CreditsTab() {
   const { currentShift } = useAppStore()
   const [subTab, setSubTab] = useState<SubTab>('clients')
   const [clients, setClients] = useState<Client[]>([])
-  const [organisations, setOrganisations] = useState<Organisation[]>([])
+  const [organisations, setOrganisations] = useState<OrganisationSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Client | null>(null)
@@ -51,7 +52,7 @@ export default function CreditsTab() {
     const data = await loadData('Chargement crédits', async () => {
       const [cl, orgs] = await Promise.all([
         api.clientsList({ ...(search ? { search } : {}), ...(filterOrgId ? { organisation_id: filterOrgId } : {}) }) as Promise<Client[]>,
-        api.organisationsList() as Promise<Organisation[]>,
+        api.organisationsList() as Promise<OrganisationSummary[]>,
       ])
       return { cl, orgs }
     }, { setLoading })
@@ -158,7 +159,8 @@ export default function CreditsTab() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {organisations.map(org => {
                 const orgClients = clients.filter(c => c.organisation_id === org.id)
-                const orgCredit = orgClients.reduce((s, c) => s + (c.solde_credit > 0 ? c.solde_credit : 0), 0)
+                const orgCredit = org.credit_live ?? orgClients.reduce((s, c) => s + (c.solde_credit > 0 ? c.solde_credit : 0), 0)
+                const orgClientCount = org.client_count ?? orgClients.length
                 return (
                   <div key={org.id} className="bg-white rounded-xl border border-border p-4 flex flex-col gap-3">
                     <div className="flex items-start justify-between">
@@ -167,7 +169,7 @@ export default function CreditsTab() {
                         {org.telephone && <p className="text-xs text-text-muted flex items-center gap-1"><Phone size={10} />{org.telephone}</p>}
                         {org.matricule_fiscal && <p className="text-xs text-text-muted">MF: {org.matricule_fiscal}</p>}
                       </div>
-                      <span className="text-xs bg-muted text-text-secondary px-2 py-0.5 rounded-full">{orgClients.length} client{orgClients.length !== 1 ? 's' : ''}</span>
+                      <span className="text-xs bg-muted text-text-secondary px-2 py-0.5 rounded-full">{orgClientCount} client{orgClientCount !== 1 ? 's' : ''}</span>
                     </div>
                     {orgCredit > 0 && (
                       <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2">

@@ -4,11 +4,12 @@ import { cn } from '../../lib/utils'
 import { useAppStore } from '../../store/appStore'
 import {
   Users, X, Plus, RefreshCw, Search,
-  Phone, Mail, MapPin, FileText
+  Phone, Mail, MapPin, FileText, Building2
 } from 'lucide-react'
 import { runAction, loadData } from '../../lib/apiCall'
+import { showToast } from '../../lib/toast'
 import Fuse from 'fuse.js'
-import type { Document } from '../../lib/types'
+import type { Document, Organisation } from '../../lib/types'
 
 const api = window.api
 
@@ -38,6 +39,7 @@ export default function ClientsTab() {
   const [subTab, setSubTab] = useState<SubTab>('clients')
   const [clients, setClients] = useState<Client[]>([])
   const [documents, setDocuments] = useState<Document[]>([])
+  const [organisations, setOrganisations] = useState<Organisation[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
@@ -49,15 +51,17 @@ export default function ClientsTab() {
 
   const load = useCallback(async () => {
     const data = await loadData('Chargement clients', async () => {
-      const [cl, docs] = await Promise.all([
+      const [cl, docs, orgs] = await Promise.all([
         api.clientsList({}) as Promise<Client[]>,
         api.documentsList({ type_document: 'FACTURE_VENTE' }) as Promise<Document[]>,
+        api.organisationsList() as Promise<Organisation[]>,
       ])
-      return { cl, docs }
+      return { cl, docs, orgs }
     }, { setLoading })
     if (data) {
       setClients(data.cl ?? [])
       setDocuments(data.docs ?? [])
+      setOrganisations(data.orgs ?? [])
       if (selectedRef.current) {
         const updated = (data.cl ?? []).find(c => c.id === selectedRef.current)
         if (updated) setSelectedClient(updated)
@@ -172,6 +176,25 @@ export default function ClientsTab() {
                         {selectedClient.email && <p className="text-sm text-text-secondary flex items-center gap-1.5"><Mail size={13} />{selectedClient.email}</p>}
                         {selectedClient.adresse && <p className="text-sm text-text-secondary flex items-center gap-1.5"><MapPin size={13} />{selectedClient.adresse}</p>}
                         {selectedClient.matricule_fiscal && <p className="text-xs text-text-muted mt-1">MF: {selectedClient.matricule_fiscal}</p>}
+                        <div className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
+                          <Building2 size={12} />
+                          <select
+                            value={selectedClient.organisation_id ?? ''}
+                            onChange={async e => {
+                              const organisation_id = e.target.value || null
+                              const result = await api.clientsUpdate(selectedClient.id, { organisation_id }) as { success?: boolean; error?: string }
+                              if (result?.success !== false) {
+                                const updated = { ...selectedClient, organisation_id: organisation_id ?? undefined }
+                                setSelectedClient(updated)
+                                setClients(prev => prev.map(c => c.id === updated.id ? updated : c))
+                              } else showToast('error', result.error || 'Impossible de modifier l’organisation')
+                            }}
+                            className="rounded-lg border border-border bg-white px-2 py-1.5 text-xs outline-none focus:border-accent-500"
+                          >
+                            <option value="">Client général</option>
+                            {organisations.map(org => <option key={org.id} value={org.id}>{org.nom}</option>)}
+                          </select>
+                        </div>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-text-muted">Solde crédit</p>
@@ -282,6 +305,7 @@ export default function ClientsTab() {
       {/* Add Client Modal */}
       {showAddClient && (
         <AddClientModal
+          organisations={organisations}
           onClose={() => setShowAddClient(false)}
           onSaved={() => { setShowAddClient(false); load() }}
         />
@@ -291,8 +315,8 @@ export default function ClientsTab() {
 }
 
 // ── Add Client Modal ──────────────────────────────────────────────────────────
-function AddClientModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ nom: '', telephone: '', email: '', adresse: '', matricule_fiscal: '', credit_limite: '500' })
+function AddClientModal({ organisations, onClose, onSaved }: { organisations: Organisation[]; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState({ nom: '', telephone: '', email: '', adresse: '', matricule_fiscal: '', credit_limite: '500', organisation_id: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -341,6 +365,13 @@ function AddClientModal({ onClose, onSaved }: { onClose: () => void; onSaved: ()
           <label className="text-xs font-medium text-text-secondary">Adresse</label>
           <input value={form.adresse} onChange={e => setForm(v => ({ ...v, adresse: e.target.value }))}
             className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/30" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-text-secondary">Organisation (optionnel)</label>
+          <select value={form.organisation_id} onChange={e => setForm(v => ({ ...v, organisation_id: e.target.value }))} className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/30">
+            <option value="">Client général</option>
+            {organisations.map(org => <option key={org.id} value={org.id}>{org.nom}</option>)}
+          </select>
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-text-secondary border border-border rounded-lg">Annuler</button>
