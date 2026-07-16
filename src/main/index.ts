@@ -2205,10 +2205,10 @@ function setupIpcHandlers() {
 
   // ── Clients ────────────────────────────────────────────────────────────────
   ipcMain.handle('clients:list', (_e, filters: Record<string, unknown> = {}) => {
-    const where = ['actif = 1']
+    const where = ['c.actif = 1']
     const params: unknown[] = []
-    if (filters.search) { where.push('(nom LIKE ? OR telephone LIKE ?)'); params.push(`%${filters.search}%`, `%${filters.search}%`) }
-    if (filters.organisation_id === null || filters.organisation_id === 'none') where.push('organisation_id IS NULL')
+    if (filters.search) { where.push('(c.nom LIKE ? OR c.telephone LIKE ?)'); params.push(`%${filters.search}%`, `%${filters.search}%`) }
+    if (filters.organisation_id === null || filters.organisation_id === 'none') where.push('c.organisation_id IS NULL')
     else if (filters.organisation_id) {
       // Older records may contain the organisation name instead of its ID.
       // Treat that legacy value as the same organisation until the user reassigns it.
