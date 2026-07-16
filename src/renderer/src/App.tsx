@@ -29,6 +29,7 @@ import { PrintManagerProvider } from './components/PrintManagerProvider'
 import UpdateModal from './components/UpdateModal'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
+import { generateId } from './lib/utils'
 import { applyAgentTheme, loadAgentTheme } from './lib/agentTheme'
 import type { Operateur, Shift } from './lib/types'
 
@@ -57,6 +58,8 @@ export default function App() {
   const [locked, setLocked] = useState(false)
   const [currentPin, setCurrentPin] = useState('')
   const [appVersion, setAppVersion] = useState('1.9.2')
+  const [agentChangeOpen, setAgentChangeOpen] = useState(false)
+  const [agentChangeSettings, setAgentChangeSettings] = useState<Record<string, string>>({})
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { status: updateStatus, showModal: showUpdateModal, isManualChecking, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
 
@@ -133,6 +136,25 @@ export default function App() {
     applyAgentTheme(loadAgentTheme(currentOperateur?.id))
   }, [currentOperateur?.id])
 
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      if (!currentShift) return
+      const settings = await api.settingsGetAll().catch(() => ({} as Record<string, string>))
+      if (cancelled) return
+      setAgentChangeSettings(settings)
+      if (settings.shift_agent_change_enabled === 'false') return
+      const target = settings.shift_agent_change_time || '03:00'
+      const now = new Date()
+      const current = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      const key = `smlpos-agent-change-${now.toISOString().slice(0, 10)}`
+      if (current >= target && localStorage.getItem(key) !== '1') setAgentChangeOpen(true)
+    }
+    void check()
+    const timer = window.setInterval(() => void check(), 30_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [currentShift])
+
   return (
     <PrintManagerProvider>
     <div className="h-screen flex flex-col bg-surface overflow-hidden">
@@ -190,6 +212,7 @@ export default function App() {
       <StatusBar />
 
       {showShiftModal && <ShiftModal />}
+      {agentChangeOpen && currentShift && <AgentChangeModal currentShift={currentShift} settings={agentChangeSettings} onClose={() => { localStorage.setItem(`smlpos-agent-change-${new Date().toISOString().slice(0, 10)}`, '1'); setAgentChangeOpen(false) }} onDone={() => { localStorage.setItem(`smlpos-agent-change-${new Date().toISOString().slice(0, 10)}`, '1'); setAgentChangeOpen(false) }} />}
 
       {showUpdateModal && (
         <UpdateModal
@@ -205,4 +228,31 @@ export default function App() {
     </div>
     </PrintManagerProvider>
   )
+}
+
+function AgentChangeModal({ currentShift, settings, onClose, onDone }: { currentShift: Shift; settings: Record<string, string>; onClose: () => void; onDone: () => void }) {
+  const { operateurs, setCurrentShift, setCurrentOperateur } = useAppStore()
+  const [selectedId, setSelectedId] = useState('')
+  const [pin, setPin] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const selected = operateurs.find(op => op.id === selectedId)
+  const confirm = async () => {
+    if (!selected) return
+    const expected = settings[`pin_${selected.identifiant.toLowerCase()}`] ?? 'sml2023'
+    if (pin !== expected) { setError('PIN opérateur incorrect.'); return }
+    setLoading(true); setError('')
+    try {
+      const now = new Date().toISOString()
+      await api.shiftsClose(currentShift.id, { ended_at: now, solde_theorique: currentShift.fond_de_caisse, notes_cloture: 'Changement automatique de deuxième shift' })
+      await api.caisseInterneTransferShift(currentShift.id)
+      const nextShift = { id: generateId(), operateur_id: selected.id, operateur_nom: selected.nom, fond_de_caisse: currentShift.fond_de_caisse, started_at: now }
+      await api.shiftsOpen(nextShift)
+      setCurrentShift(nextShift)
+      setCurrentOperateur(selected)
+      onDone()
+    } catch (e) { setError(e instanceof Error ? e.message : 'Impossible de changer d’agent') }
+    finally { setLoading(false) }
+  }
+  return <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6 space-y-5"><div><h2 className="text-lg font-bold">Changement de deuxième shift</h2><p className="text-sm text-text-secondary mt-1">Sélectionnez l’agent qui prend la caisse.</p></div>{error && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}<div className="grid grid-cols-2 gap-2">{operateurs.map(op => <button key={op.id} onClick={() => { setSelectedId(op.id); setPin(''); setError('') }} className={cn('rounded-xl border-2 p-3 text-sm font-semibold', selectedId === op.id ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted')}>{op.nom}</button>)}</div><input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN du nouvel agent" className="w-full rounded-xl border border-border px-3 py-3 font-mono outline-none" /><div className="flex gap-2"><button onClick={onClose} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Rappeler plus tard</button><button onClick={() => void confirm()} disabled={!selected || !pin || loading} className="flex-1 rounded-xl bg-accent-500 py-2.5 font-bold disabled:opacity-50">{loading ? 'Changement...' : 'Changer l’agent'}</button></div></div></div>
 }

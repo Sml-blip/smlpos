@@ -102,7 +102,7 @@ export default function HistoriqueTab() {
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
-  const [convertVente, setConvertVente] = useState<{ vente: Vente; forcePassenger?: boolean } | null>(null)
+  const [convertVente, setConvertVente] = useState<Vente | null>(null)
   const [activityLogs, setActivityLogs] = useState<Array<{
     id: string; shift_id?: string; operateur?: string; action: string; details?: unknown; montant?: number; created_at: string
   }>>([])
@@ -179,17 +179,13 @@ export default function HistoriqueTab() {
     }, { successMessage: 'Vente annulée' })
   }
 
-  const handleConvertVente = async (vente: Vente, forcePassenger = false) => {
+  const handleConvertVente = async (vente: Vente) => {
     const lignes = await api.ventesGetLignes(vente.id) as LigneVente[]
     if (!lignes.length) {
       showToast('error', 'Conversion impossible : vente sans lignes.')
       return
     }
-    if (forcePassenger && !lignes.some(l => l.type_produit === 'F')) {
-      showToast('error', 'Facture passager impossible : aucun produit F dans cette vente.')
-      return
-    }
-    setConvertVente({ vente, forcePassenger })
+    setConvertVente(vente)
   }
 
   const updateStatut = async (repId: string, statut: StatutRep) => {
@@ -392,7 +388,6 @@ export default function HistoriqueTab() {
             onCancel={setCancelTarget}
             onPrintTicket={(v) => void printVenteTicketQuick(v)}
             onConvert={(v) => void handleConvertVente(v)}
-            onConvertPassenger={(v) => void handleConvertVente(v, true)}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
             />
         )}
@@ -557,9 +552,8 @@ export default function HistoriqueTab() {
       )}
       {convertVente && (
         <ConvertVenteDocModal
-          vente={convertVente.vente}
+          vente={convertVente}
           initialType="FACTURE_VENTE"
-          forcePassenger={convertVente.forcePassenger}
           onClose={() => setConvertVente(null)}
           onCreated={() => { setConvertVente(null); load() }}
         />
@@ -571,11 +565,11 @@ export default function HistoriqueTab() {
 // ─── Ventes Table ─────────────────────────────────────────────────────────────
 
 function VentesTable({
-  ventes, expandedVente, venteLignes, onToggle, onCancel, onPrintTicket, onConvert, onConvertPassenger, emptyHint,
+  ventes, expandedVente, venteLignes, onToggle, onCancel, onPrintTicket, onConvert, emptyHint,
 }: {
   ventes: Vente[]; expandedVente: string | null; venteLignes: Record<string, LigneVente[]>
   onToggle: (id: string) => void; onCancel: (v: Vente) => void
-  onPrintTicket: (v: Vente) => void; onConvert: (v: Vente) => void; onConvertPassenger: (v: Vente) => void; emptyHint?: string
+  onPrintTicket: (v: Vente) => void; onConvert: (v: Vente) => void; emptyHint?: string
 }) {
   if (ventes.length === 0) {
     return (
@@ -648,10 +642,6 @@ function VentesTable({
                       <button type="button" onClick={() => onConvert(v)} title="Facture / BL / Devis"
                         className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary text-[10px] font-bold px-2">
                         Doc
-                      </button>
-                      <button type="button" onClick={() => onConvertPassenger(v)} title="Facture passager"
-                        className="p-1.5 border border-accent-200 bg-accent-50 rounded-lg hover:bg-accent-100 text-text-primary text-[10px] font-bold px-2">
-                        FP
                       </button>
                     </div>
                   )}

@@ -103,6 +103,8 @@ interface Window {
     facturesFournisseursUpdate?: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
     facturesFournisseursReplaceLignes?: (factureId: string, lignes: unknown[], totals: unknown) => Promise<{ success?: boolean; error?: string }>
     paiementsFournisseursCreate: (p: unknown) => Promise<unknown>
+    ajustementsFournisseursList: (fournisseurId: string) => Promise<unknown[]>
+    ajustementsFournisseursCreate: (p: unknown) => Promise<unknown>
 
     // Caisse interne
     caisseInterneGetToday: () => Promise<unknown>
@@ -175,6 +177,7 @@ interface Window {
     settingsGet: (key: string) => Promise<string | null>
     settingsSet: (key: string, value: string) => Promise<unknown>
     settingsSetMany: (data: Record<string, string>) => Promise<unknown>
+    reportsSavePdf: (html: string, suggestedName?: string) => Promise<{ success?: boolean; canceled?: boolean; path?: string; error?: string }>
     authVerifyCaissePin?: (pin: string) => Promise<{ valid?: boolean }>
 
     backupDiscover?: () => Promise<{

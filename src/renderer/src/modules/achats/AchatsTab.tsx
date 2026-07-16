@@ -5,6 +5,7 @@ import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
 import { runAction, loadData } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
+import { saveBalanceReport } from '../../lib/reportPdf'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import FactureAchatPrintModal from './FactureAchatPrintModal'
 import FactureSerialModal from './FactureSerialModal'
@@ -28,7 +29,7 @@ import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
   RefreshCw, Edit2, PackageCheck, Inbox, InboxIcon, Printer,
-  Barcode, Tag, BarChart2, Hash
+  Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle
 } from 'lucide-react'
 
 const api = window.api
@@ -62,6 +63,7 @@ export default function AchatsTab() {
   const [draftCount, setDraftCount] = useState(0)
   const [editingFournisseur, setEditingFournisseur] = useState<Fournisseur | null>(null)
   const [showPaiementModal, setShowPaiementModal] = useState<FactureFournisseur | null>(null)
+  const [balanceTarget, setBalanceTarget] = useState<{ fournisseur: Fournisseur; type: 'AJOUT' | 'RETRAIT' } | null>(null)
   const [factureFilter, setFactureFilter] = useState<'tous' | 'arrivees' | 'en_attente'>('tous')
 
   const loadFournisseurs = useCallback(async () => {
@@ -100,6 +102,7 @@ export default function AchatsTab() {
     const diff = (new Date(f.date_echeance).getTime() - Date.now()) / 86400000
     return diff >= 0 && diff <= 7
   })
+  const blFacturesMissing = factures.filter(f => f.type === 'FACTURE_ACHAT_BL' && f.statut_reception !== 'ARRIVE' && f.statut_paiement !== 'ANNULE')
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-surface">
@@ -133,7 +136,7 @@ export default function AchatsTab() {
       </div>
 
       {/* Alerts */}
-      {(facturesEnRetard.length > 0 || facturesUrgentes.length > 0) && (
+      {(facturesEnRetard.length > 0 || facturesUrgentes.length > 0 || blFacturesMissing.length > 0) && (
         <div className="px-4 py-2 bg-white border-b border-border flex-shrink-0 space-y-1.5">
           {facturesEnRetard.map(f => (
             <div key={f.id} className="flex items-center gap-2 text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -145,6 +148,12 @@ export default function AchatsTab() {
             <div key={f.id} className="flex items-center gap-2 text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
               <Clock size={12} className="flex-shrink-0" />
               <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — <strong className="font-price">{formatPrice(f.montant_restant ?? (f.montant_ttc - f.montant_paye))}</strong> — Échéance dans ≤7j</span>
+            </div>
+          ))}
+          {blFacturesMissing.map(f => (
+            <div key={`invoice-missing-${f.id}`} className="flex items-center gap-2 text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+              <Inbox size={12} className="flex-shrink-0" />
+              <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — BL enregistré, <strong>facture fournisseur manquante</strong></span>
             </div>
           ))}
         </div>
@@ -241,7 +250,15 @@ export default function AchatsTab() {
         {activeTab === 'fournisseurs' && (
           <FournisseursTable
             fournisseurs={fournisseurs}
+            factures={factures}
             onEdit={f => { setEditingFournisseur(f); setShowFournisseurModal(true) }}
+            onAdjust={(f, type) => setBalanceTarget({ fournisseur: f, type })}
+            onExport={async f => {
+              const adjustments = await api.ajustementsFournisseursList(f.id)
+              const invoiceRows = factures.filter(x => x.fournisseur_id === f.id).map(x => ({ date: x.date_facture, type: 'Facture fournisseur', amount: x.montant_ttc, operator: '', note: `${x.numero_facture} · payé ${formatPrice(x.montant_paye)} DT` }))
+              const adjustmentRows = (adjustments as Array<Record<string, unknown>>).map(row => ({ date: String(row.created_at ?? ''), type: row.type === 'AJOUT' ? 'Ajout solde' : 'Retrait solde', amount: Number(row.montant ?? 0), operator: String(row.operateur ?? ''), note: String(row.motif ?? '') }))
+              await saveBalanceReport('Historique fournisseur', f.nom, [['Solde dû', `${formatPrice(f.solde_du)} DT`], ['Factures', String(invoiceRows.length)], ['Ajustements', String(adjustmentRows.length)]], [...invoiceRows, ...adjustmentRows], `fournisseur-${f.nom}`)
+            }}
           />
         )}
         {activeTab === 'factures' && (() => {
@@ -292,6 +309,7 @@ export default function AchatsTab() {
           onSaved={loadFournisseurs}
         />
       )}
+      {balanceTarget && <SupplierBalanceModal target={balanceTarget} onClose={() => setBalanceTarget(null)} onSaved={() => { setBalanceTarget(null); void loadFournisseurs() }} />}
       {showDraftPicker && (
         <DraftPickerModal
           onClose={() => setShowDraftPicker(false)}
@@ -362,7 +380,7 @@ function DraftPickerModal({ onClose, onSelect }: { onClose: () => void; onSelect
 }
 
 // ── Fournisseurs Table ────────────────────────────────────────────────────────
-function FournisseursTable({ fournisseurs, onEdit }: { fournisseurs: Fournisseur[]; onEdit: (f: Fournisseur) => void }) {
+function FournisseursTable({ fournisseurs, factures, onEdit, onAdjust, onExport }: { fournisseurs: Fournisseur[]; factures: FactureFournisseur[]; onEdit: (f: Fournisseur) => void; onAdjust: (f: Fournisseur, type: 'AJOUT' | 'RETRAIT') => void; onExport: (f: Fournisseur) => void }) {
   if (fournisseurs.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-text-muted">
@@ -393,14 +411,16 @@ function FournisseursTable({ fournisseurs, onEdit }: { fournisseurs: Fournisseur
               <td className="px-4 py-3 text-text-secondary">{f.contact_nom || '—'}</td>
               <td className="px-4 py-3 text-text-secondary">{f.telephone || '—'}</td>
               <td className="px-4 py-3 text-right">
-                <span className={cn('font-price font-bold', f.solde_du > 0 ? 'text-danger' : 'text-success')}>
-                  {formatPrice(f.solde_du)}
-                </span>
+                <span className={cn('font-price font-bold', f.solde_du > 0 ? 'text-danger' : 'text-success')}>{formatPrice(f.solde_du)}</span>
+                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <div className="mt-1 ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div> })()}
               </td>
               <td className="px-4 py-3 text-right">
-                <button onClick={() => onEdit(f)} className="text-text-muted hover:text-text-primary transition-colors">
-                  <Edit2 size={14} />
-                </button>
+                <div className="flex items-center justify-end gap-1">
+                  <button onClick={() => onAdjust(f, 'AJOUT')} title="Ajouter au solde" className="p-1.5 rounded-lg text-green-700 hover:bg-green-50"><ArrowUpCircle size={14} /></button>
+                  <button onClick={() => onAdjust(f, 'RETRAIT')} title="Retirer du solde" className="p-1.5 rounded-lg text-orange-700 hover:bg-orange-50"><ArrowDownCircle size={14} /></button>
+                  <button onClick={() => onExport(f)} title="Exporter PDF" className="p-1.5 rounded-lg text-text-muted hover:bg-muted"><Download size={14} /></button>
+                  <button onClick={() => onEdit(f)} title="Modifier" className="p-1.5 rounded-lg text-text-muted hover:bg-muted"><Edit2 size={14} /></button>
+                </div>
               </td>
             </tr>
           ))}
@@ -2311,6 +2331,21 @@ function FactureFournisseurModal({
 }
 
 // ── Paiement Modal ────────────────────────────────────────────────────────────
+function SupplierBalanceModal({ target, onClose, onSaved }: { target: { fournisseur: Fournisseur; type: 'AJOUT' | 'RETRAIT' }; onClose: () => void; onSaved: () => void }) {
+  const [montant, setMontant] = useState('')
+  const [motif, setMotif] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const amount = parseFloat(montant.replace(',', '.')) || 0
+  const next = target.fournisseur.solde_du + (target.type === 'AJOUT' ? amount : -amount)
+  const save = async () => {
+    if (amount <= 0 || !motif.trim() || (target.type === 'RETRAIT' && next < 0)) { setError('Saisissez un montant, un motif et un retrait valide.'); return }
+    const ok = await runAction('Ajustement solde fournisseur', () => api.ajustementsFournisseursCreate({ id: generateId(), fournisseur_id: target.fournisseur.id, type: target.type, montant: amount, motif: motif.trim(), operateur: 'superadmin', created_at: new Date().toISOString() }), { setLoading, onError: setError, successMessage: 'Solde fournisseur mis à jour' })
+    if (ok) onSaved()
+  }
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl p-5 space-y-4"><div className="flex items-center justify-between"><h2 className="font-bold">{target.type === 'AJOUT' ? 'Ajouter au solde' : 'Retirer du solde'}</h2><button onClick={onClose}><X size={18} /></button></div><p className="text-xs text-text-muted">{target.fournisseur.nom} · Solde actuel {formatPrice(target.fournisseur.solde_du)} DT</p>{error && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}<input autoFocus inputMode="decimal" value={montant} onChange={e => setMontant(e.target.value.replace(/[^0-9.,]/g, ''))} placeholder="Montant DT" className="w-full rounded-xl border border-border px-3 py-3 text-xl font-price font-bold outline-none" /><input value={motif} onChange={e => setMotif(e.target.value)} placeholder="Motif obligatoire" className="w-full rounded-xl border border-border px-3 py-2.5 text-sm outline-none" />{amount > 0 && <div className="rounded-xl bg-muted px-3 py-2 text-sm">Nouveau solde : <strong>{formatPrice(Math.max(0, next))} DT</strong></div>}<div className="flex gap-2"><button onClick={onClose} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Annuler</button><button onClick={() => void save()} disabled={loading} className="flex-1 rounded-xl bg-accent-500 py-2.5 font-bold">{loading ? 'Enregistrement...' : 'Valider'}</button></div></div></div>
+}
+
 function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFournisseur; onClose: () => void; onSaved: () => void }) {
   const restant = facture.montant_restant ?? (facture.montant_ttc - facture.montant_paye)
   const [montant, setMontant] = useState(restant.toFixed(3))

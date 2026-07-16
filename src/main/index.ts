@@ -345,6 +345,29 @@ function setupIpcHandlers() {
   // App version (used in Settings / About)
   ipcMain.handle('app:version', () => app.getVersion())
 
+  ipcMain.handle('reports:savePdf', async (_e, html: string, suggestedName = 'rapport.pdf') => {
+    if (!html?.trim()) return { success: false, error: 'Rapport vide' }
+    const safeName = String(suggestedName).replace(/[<>:"/\\|?*]/g, '-').replace(/\.pdf$/i, '') + '.pdf'
+    const target = await dialog.showSaveDialog(mainWindow ?? undefined, {
+      title: 'Exporter en PDF',
+      defaultPath: safeName,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    })
+    if (target.canceled || !target.filePath) return { success: false, canceled: true }
+    const reportWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    try {
+      await reportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      const pdf = await reportWindow.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true })
+      const { writeFile } = await import('fs/promises')
+      await writeFile(target.filePath, pdf)
+      return { success: true, path: target.filePath }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      if (!reportWindow.isDestroyed()) reportWindow.close()
+    }
+  })
+
   ipcMain.handle('app:factoryReset', async () => {
     try {
       const result = await wipeAllUserData()
@@ -1555,10 +1578,10 @@ function setupIpcHandlers() {
   ipcMain.handle('facturesFournisseurs:create', (_e, facture, lignes) => {
     const insertFacture = db.prepare(`
       INSERT INTO factures_fournisseurs (id, numero_facture, fournisseur_id, date_facture, date_echeance,
-        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception,
+        statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception, stock_applied,
         exo, timbre, total_remise, ht_7, tva_7, ht_19, tva_19, created_at)
       VALUES (@id, @numero_facture, @fournisseur_id, @date_facture, @date_echeance,
-        @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception,
+        @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception, @stock_applied,
         @exo, @timbre, @total_remise, @ht_7, @tva_7, @ht_19, @tva_19, @created_at)
     `)
     const insertLigne = db.prepare(`
@@ -1579,12 +1602,13 @@ function setupIpcHandlers() {
       ...f,
       type: f.type ?? 'FACTURE_ACHAT',
       statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
+      stock_applied: f.stock_applied ?? 1,
     }
     const transaction = db.transaction(() => {
       insertFacture.run(factureWithDefaults)
       for (const l of lignes) {
         insertLigne.run(l)
-        if (l.produit_id && !isBL) {
+        if (l.produit_id) {
           const now = new Date().toISOString()
           updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
           const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
@@ -1601,7 +1625,7 @@ function setupIpcHandlers() {
     addActivityLog({ action: 'SUPPLIER_INVOICE_CREATED', montant: facture.montant_ttc, details: { numero: facture.numero_facture, type: factureWithDefaults.type } })
     enqueueSync('factures_fournisseurs', 'INSERT', factureWithDefaults)
     for (const l of lignes) enqueueSync('lignes_facture_fournisseur', 'INSERT', l)
-    if (!isBL) for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
+    for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
     return { success: true }
   })
 
@@ -1706,27 +1730,28 @@ function setupIpcHandlers() {
     const updatePrixAchat = db.prepare(`UPDATE produits SET prix_achat=?, updated_at=? WHERE id=?`)
     const updatePrixVente = db.prepare(`UPDATE produits SET prix_vente=?, updated_at=? WHERE id=?`)
     const updateStock = db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id=?`)
-    const markRecu = db.prepare(`UPDATE factures_fournisseurs SET statut_reception='ARRIVE' WHERE id=?`)
     db.transaction(() => {
-      for (const l of lignes) {
-        if (l.produit_id) {
-          updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
-          const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
-          if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
-          if (l.numeros_serie_json) {
-            const serialResult = addSerialNumbersToStock(l.produit_id as string, l.numeros_serie_json, l.quantite as number, {
-              skipExistingInStockForSameProduct: true,
-            })
-            if (serialResult.inserted > 0) updateStock.run(serialResult.inserted, l.produit_id)
-          } else {
-            updateStock.run(l.quantite, l.produit_id)
+      if (!(facture.stock_applied as number)) {
+        for (const l of lignes) {
+          if (l.produit_id) {
+            updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
+            const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
+            if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
+            if (l.numeros_serie_json) {
+              const serialResult = addSerialNumbersToStock(l.produit_id as string, l.numeros_serie_json, l.quantite as number, {
+                skipExistingInStockForSameProduct: true,
+              })
+              if (serialResult.inserted > 0) updateStock.run(serialResult.inserted, l.produit_id)
+            } else {
+              updateStock.run(l.quantite, l.produit_id)
+            }
           }
         }
       }
-      markRecu.run(factureId)
+      db.prepare(`UPDATE factures_fournisseurs SET statut_reception='ARRIVE', stock_applied=1 WHERE id=?`).run(factureId)
     })()
     addActivityLog({ action: 'SUPPLIER_INVOICE_RECEIVED', details: { factureId } })
-    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_reception: 'ARRIVE' })
+    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_reception: 'ARRIVE', stock_applied: 1 })
     for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
     return { success: true }
   })
@@ -1922,6 +1947,33 @@ function setupIpcHandlers() {
     const fournisseur = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(row.fournisseur_id) as Record<string, unknown> | undefined
     if (fournisseur) enqueueSync('fournisseurs', 'UPDATE', fournisseur)
     return { success: true }
+  })
+
+  ipcMain.handle('ajustementsFournisseurs:list', (_e, fournisseurId: string) => {
+    return db.prepare(`SELECT * FROM ajustements_fournisseurs WHERE fournisseur_id = ? ORDER BY created_at DESC LIMIT 500`).all(fournisseurId)
+  })
+
+  ipcMain.handle('ajustementsFournisseurs:create', (_e, input: Record<string, unknown>) => {
+    const montant = money3(input.montant)
+    const type = input.type === 'RETRAIT' ? 'RETRAIT' : 'AJOUT'
+    if (!input.fournisseur_id || montant <= 0 || !String(input.motif ?? '').trim()) {
+      return { success: false, error: 'Montant et motif requis' }
+    }
+    const id = String(input.id ?? randomUUID())
+    const now = new Date().toISOString()
+    const delta = type === 'AJOUT' ? montant : -montant
+    db.transaction(() => {
+      const supplier = db.prepare('SELECT solde_du FROM fournisseurs WHERE id = ?').get(input.fournisseur_id) as { solde_du?: number } | undefined
+      if (!supplier) throw new Error('Fournisseur introuvable')
+      if (type === 'RETRAIT' && (supplier.solde_du ?? 0) + delta < 0) throw new Error('Le retrait depasse le solde fournisseur')
+      db.prepare(`INSERT INTO ajustements_fournisseurs (id,fournisseur_id,type,montant,motif,operateur,created_at) VALUES (?,?,?,?,?,?,?)`)
+        .run(id, input.fournisseur_id, type, montant, String(input.motif).trim(), input.operateur ?? 'superadmin', now)
+      db.prepare('UPDATE fournisseurs SET solde_du = MAX(0, solde_du + ?) WHERE id = ?').run(delta, input.fournisseur_id)
+    })()
+    const snapshot = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(input.fournisseur_id) as Record<string, unknown>
+    enqueueSync('fournisseurs', 'UPDATE', snapshot)
+    addActivityLog({ action: 'SUPPLIER_BALANCE_ADJUSTED', montant, operateur: input.operateur as string, details: { fournisseur_id: input.fournisseur_id, type, motif: input.motif } })
+    return { success: true, id, supplier: snapshot }
   })
 
   // ─── Caisse Interne ──────────────────────────────────────────────────────────
@@ -2153,10 +2205,12 @@ function setupIpcHandlers() {
 
   // ── Clients ────────────────────────────────────────────────────────────────
   ipcMain.handle('clients:list', (_e, filters: Record<string, unknown> = {}) => {
-    if (filters.search) {
-      return db.prepare(`SELECT * FROM clients WHERE actif = 1 AND (nom LIKE ? OR telephone LIKE ?) ORDER BY nom`).all(`%${filters.search}%`, `%${filters.search}%`)
-    }
-    return db.prepare(`SELECT * FROM clients WHERE actif = 1 ORDER BY nom`).all()
+    const where = ['actif = 1']
+    const params: unknown[] = []
+    if (filters.search) { where.push('(nom LIKE ? OR telephone LIKE ?)'); params.push(`%${filters.search}%`, `%${filters.search}%`) }
+    if (filters.organisation_id === null || filters.organisation_id === 'none') where.push('organisation_id IS NULL')
+    else if (filters.organisation_id) { where.push('organisation_id = ?'); params.push(filters.organisation_id) }
+    return db.prepare(`SELECT * FROM clients WHERE ${where.join(' AND ')} ORDER BY nom`).all(...params)
   })
 
   ipcMain.handle('clients:create', (_e, client: Record<string, unknown>) => {
@@ -2443,6 +2497,12 @@ function setupIpcHandlers() {
       operateur: 'superadmin',
       created_at: new Date().toISOString(),
     }, mvt)
+    const reverseType = row.type === 'AVANCE_REMBOURSEMENT' ? 'avance_solde' : row.type === 'CREDIT_REMBOURSEMENT' ? 'credit_solde' : null
+    if (reverseType) {
+      const person = db.prepare(`SELECT ${reverseType} as balance FROM personnels WHERE id = ?`).get(row.personnel_id) as { balance?: number } | undefined
+      if (!person) return { success: false, error: 'Personnel introuvable' }
+      if (money3(row.montant) > money3(person.balance)) return { success: false, error: 'Le remboursement dépasse le solde actuel' }
+    }
     db.transaction(() => {
       db.prepare(`INSERT INTO mouvements_personnels (id,personnel_id,type,montant,mois,note,operateur,created_at) VALUES (@id,@personnel_id,@type,@montant,@mois,@note,@operateur,@created_at)`).run(row)
       const type = row.type as string

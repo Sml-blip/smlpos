@@ -5,10 +5,11 @@ import { useAppStore } from '../../store/appStore'
 import {
   Users, X, Search, RefreshCw, CreditCard, UserPlus,
   ArrowUpCircle, ArrowDownCircle, DollarSign, Clock, User,
-  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus
+  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download
 } from 'lucide-react'
 import type { Organisation } from '../../lib/types'
 import { runAction, loadData } from '../../lib/apiCall'
+import { saveBalanceReport } from '../../lib/reportPdf'
 
 const api = window.api
 
@@ -49,7 +50,7 @@ export default function CreditsTab() {
   const load = useCallback(async () => {
     const data = await loadData('Chargement crédits', async () => {
       const [cl, orgs] = await Promise.all([
-        api.clientsList(search ? { search } : {}) as Promise<Client[]>,
+        api.clientsList({ ...(search ? { search } : {}), ...(filterOrgId ? { organisation_id: filterOrgId } : {}) }) as Promise<Client[]>,
         api.organisationsList() as Promise<Organisation[]>,
       ])
       return { cl, orgs }
@@ -62,7 +63,7 @@ export default function CreditsTab() {
         if (updated) setSelected(updated)
       }
     }
-  }, [search]) // ← no selected?.id in deps — prevents infinite reload
+  }, [search, filterOrgId])
 
   useEffect(() => { load() }, [load])
 
@@ -89,9 +90,10 @@ export default function CreditsTab() {
   const totalClients = clients.length
 
   // Filter clients list
-  const filteredClients = filterOrgId
+  const filteredClients = (filterOrgId
     ? clients.filter(c => c.organisation_id === filterOrgId)
-    : clients
+    : clients.filter(c => !c.organisation_id))
+    .filter(c => !search || `${c.nom} ${c.telephone ?? ''}`.toLowerCase().includes(search.toLowerCase()))
 
   // Compute running balances for history (oldest → newest, then reverse for display)
   const historyWithBalance: CreditWithBalance[] = (() => {
@@ -112,7 +114,7 @@ export default function CreditsTab() {
           { id: 'clients' as SubTab, label: 'Crédits Clients', icon: <CreditCard size={13} /> },
           { id: 'organisations' as SubTab, label: 'Organisations', icon: <Building2 size={13} /> },
         ]).map(t => (
-          <button key={t.id} onClick={() => setSubTab(t.id)}
+          <button key={t.id} onClick={() => { setSubTab(t.id); if (t.id === 'organisations') setFilterOrgId(null) }}
             className={cn('flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-all',
               subTab === t.id ? 'border-accent-500 text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary')}>
             {t.icon}{t.label}
@@ -355,12 +357,18 @@ export default function CreditsTab() {
                     Limite : <span className="font-price font-semibold">{formatPrice(selected.credit_limite)}</span>
                   </div>
                 )}
+                {selected.credit_limite != null && selected.credit_limite > 0 && (
+                  <div className="mt-1.5 h-1.5 w-28 overflow-hidden rounded-full bg-gray-200">
+                    <div className={cn('h-full rounded-full', selected.solde_credit >= selected.credit_limite ? 'bg-red-500' : 'bg-accent-500')} style={{ width: `${Math.min(100, Math.max(0, (selected.solde_credit / selected.credit_limite) * 100))}%` }} />
+                  </div>
+                )}
                 <div className={cn('text-xs', selected.solde_credit > 0 ? 'text-red-500' : 'text-green-500')}>
                   {selected.solde_credit > 0 ? 'À rembourser' : 'Soldé ✓'}
                 </div>
               </div>
               {/* Action buttons */}
               <div className="flex flex-col gap-2 flex-shrink-0">
+                <button onClick={() => void saveBalanceReport('Historique crédit client', selected.nom, [['Solde actuel', `${formatPrice(selected.solde_credit)} DT`], ['Limite', selected.credit_limite == null ? '—' : `${formatPrice(selected.credit_limite)} DT`], ['Mouvements', String(history.length)]], history.map(row => ({ date: row.created_at, type: row.type === 'CREDIT' ? 'Crédit' : 'Paiement', amount: row.montant, operator: row.operateur, note: row.note || row.reference })), `credit-${selected.nom}`)} className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:bg-muted rounded-xl text-xs font-semibold"><Download size={12} /> PDF</button>
                 <button
                   onClick={() => setShowAddTranche('CREDIT')}
                   className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-colors"
@@ -510,6 +518,7 @@ export default function CreditsTab() {
       {/* Modals */}
       {showNewClient && (
         <NewClientModal
+          organisations={organisations}
           currentShift={currentShift as { operateur_nom?: string } | null}
           onClose={() => setShowNewClient(false)}
           onSaved={() => { load(); setShowNewClient(false) }}
@@ -536,16 +545,19 @@ export default function CreditsTab() {
 
 // ── New Client Modal ──────────────────────────────────────────────────────────
 function NewClientModal({
+  organisations,
   currentShift,
   onClose,
   onSaved,
 }: {
+  organisations: Organisation[]
   currentShift: { operateur_nom?: string } | null
   onClose: () => void
   onSaved: () => void
 }) {
   const [nom, setNom] = useState('')
   const [tel, setTel] = useState('')
+  const [organisationId, setOrganisationId] = useState('')
   const [montantBrut, setMontantBrut] = useState('')    // before interest
   const [montantApres, setMontantApres] = useState('')  // after interest = actual debt
   const [loading, setLoading] = useState(false)
@@ -569,6 +581,7 @@ function NewClientModal({
         id: generateId(),
         nom: nom.trim(),
         telephone: tel || null,
+        organisation_id: organisationId || null,
         created_at: new Date().toISOString(),
         montant_credit_initial: apresNum > 0 ? apresNum : (brutNum > 0 ? brutNum : 0),
         agent_initial: agent,
@@ -617,6 +630,13 @@ function NewClientModal({
           </div>
 
           {/* Crédit initial with before/after interest */}
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1">Organisation (optionnel)</label>
+            <select value={organisationId} onChange={e => setOrganisationId(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500">
+              <option value="">Client général</option>
+              {organisations.map(org => <option key={org.id} value={org.id}>{org.nom}</option>)}
+            </select>
+          </div>
           <div className="border-t border-border pt-3">
             <div className="text-xs font-semibold text-text-secondary mb-3 uppercase tracking-wider flex items-center gap-1.5">
               <CreditCard size={11} /> Crédit initial (optionnel)

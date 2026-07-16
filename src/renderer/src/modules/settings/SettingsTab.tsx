@@ -371,6 +371,24 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
           </div>
         </Section>
       </Card>
+      <Card>
+        <Section title="Second shift agent change">
+          <div className="space-y-3">
+            <Toggle checked={values['shift_agent_change_enabled'] !== 'false'} onChange={() => toggle('shift_agent_change_enabled')} label="Show the second-shift agent popup" />
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Change time" hint="Default: 03:00">
+                <TextInput value={values['shift_agent_change_time'] ?? '03:00'} onChange={v => set('shift_agent_change_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="03:00" />
+              </Field>
+              <Field label="Reminder mode" hint="The popup is shown once per day">
+                <select value={values['shift_agent_change_repeat'] ?? 'once'} onChange={e => set('shift_agent_change_repeat', e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
+                  <option value="once">Once per day</option>
+                  <option value="always">Until changed</option>
+                </select>
+              </Field>
+            </div>
+          </div>
+        </Section>
+      </Card>
     </div>
   )
 }

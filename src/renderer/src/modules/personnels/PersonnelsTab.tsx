@@ -3,7 +3,7 @@ import type { Personnel, MouvementPersonnel, TypeMouvementPersonnel } from '../.
 import { formatPrice, formatDate, generateId } from '../../lib/utils'
 import { useAppStore } from '../../store/appStore'
 import {
-  Users2, Plus, RefreshCw, X, CheckCircle,
+  Users2, Plus, RefreshCw, X, CheckCircle, Download,
   Wallet, Clock, TrendingDown, TrendingUp, ChevronDown, ChevronUp,
   Banknote, Calendar, Printer
 } from 'lucide-react'
@@ -12,6 +12,7 @@ import { showToast } from '../../lib/toast'
 
 import { wrapPrintHtml } from '../../lib/printHtml'
 import { printLabelHtml } from '../../lib/nativePrint'
+import { saveBalanceReport } from '../../lib/reportPdf'
 
 const api = window.api
 
@@ -360,6 +361,9 @@ function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary, 
           <button onClick={() => printFichePersonnel(p)} title="Imprimer fiche" className="p-1.5 text-text-muted hover:text-text-primary hover:bg-muted rounded-lg transition-colors">
             <Printer size={13} />
           </button>
+          <button onClick={async () => { const rows = await api.mouvementsPersonnelsList({ personnel_id: p.id }) as MouvementPersonnel[]; await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Avance', `${formatPrice(p.avance_solde)} DT`], ['Crédit', `${formatPrice(p.credit_solde)} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: row.note })), `personnel-${p.nom}`) }} title="Exporter PDF" className="p-1.5 text-text-muted hover:text-text-primary hover:bg-muted rounded-lg transition-colors">
+            <Download size={13} />
+          </button>
           <button onClick={() => setOpen(!open)} className="text-text-muted hover:text-text-primary">
             {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
@@ -382,6 +386,10 @@ function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary, 
           <p className="text-text-muted">Total dû</p>
           <p className="font-price font-bold text-red-600">{formatPrice(p.avance_solde + p.credit_solde)}</p>
         </div>
+      </div>
+      <div className="space-y-1">
+        <div className="flex justify-between text-[10px] text-text-muted"><span>Charge actuelle</span><span>{formatPrice(p.avance_solde + p.credit_solde)} DT</span></div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-orange-500" style={{ width: `${Math.min(100, p.salaire_base > 0 ? ((p.avance_solde + p.credit_solde) / p.salaire_base) * 100 : 0)}%` }} /></div>
       </div>
       {open && (
         <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border">

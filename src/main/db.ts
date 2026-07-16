@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.9.6'
+export const SCHEMA_VERSION = '1.9.7'
 
 export function initDatabase() {
   const db = getDb()
@@ -298,6 +298,16 @@ export function initDatabase() {
       reference_cheque TEXT,
       date_paiement    TEXT DEFAULT (date('now')),
       notes            TEXT,
+      created_at       TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ajustements_fournisseurs (
+      id               TEXT PRIMARY KEY,
+      fournisseur_id   TEXT NOT NULL REFERENCES fournisseurs(id),
+      type             TEXT NOT NULL CHECK(type IN ('AJOUT','RETRAIT')),
+      montant          REAL NOT NULL,
+      motif            TEXT NOT NULL,
+      operateur        TEXT,
       created_at       TEXT DEFAULT (datetime('now'))
     );
 
@@ -723,6 +733,7 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
 
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN updated_at TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN stock_applied INTEGER DEFAULT 0`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN numeros_serie_json TEXT`) } catch { /* already exists */ }
 
@@ -782,6 +793,9 @@ export function initDatabase() {
     facture_vente_sequence_2026:   '0',
     boutique_rib:                  '',
     boutique_banque:               '',
+    shift_agent_change_enabled:    'true',
+    shift_agent_change_time:       '03:00',
+    shift_agent_change_repeat:     'once',
   }
   const insertSetting = db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)`)
   for (const [k, v] of Object.entries(settingsDefaults)) insertSetting.run(k, v)
