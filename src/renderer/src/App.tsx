@@ -52,7 +52,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
 ]
 
 export default function App() {
-  const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur,
+  const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur, currentShift,
     setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
   const [showSplash, setShowSplash] = useState(true)
   const [locked, setLocked] = useState(false)
