@@ -945,7 +945,8 @@ function AssignOrganisationClientModal({ organisation, onClose, onSaved }: {
   const [clients, setClients] = useState<Client[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
-  const [savingId, setSavingId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -962,18 +963,31 @@ function AssignOrganisationClientModal({ organisation, onClose, onSaved }: {
 
   const visible = clients.filter(c => `${c.nom} ${c.telephone ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()))
 
-  const assign = async (client: Client) => {
+  const toggleClient = (id: string) => {
+    setSelectedIds(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const assignSelected = async () => {
     setError('')
-    setSavingId(client.id)
+    const selected = clients.filter(client => selectedIds.has(client.id))
+    if (selected.length === 0) return
+    setSaving(true)
     try {
-      const result = await api.clientsUpdate(client.id, { organisation_id: organisation.id }) as { success?: boolean; error?: string }
-      if (result?.success === false || result?.error) throw new Error(result.error || 'Affectation impossible')
-      setClients(current => current.filter(c => c.id !== client.id))
+      const results = await Promise.all(selected.map(client => api.clientsUpdate(client.id, { organisation_id: organisation.id }) as Promise<{ success?: boolean; error?: string }>))
+      const failed = results.find(result => result?.success === false || result?.error)
+      if (failed) throw new Error(failed.error || 'Affectation impossible')
+      setClients(current => current.filter(client => !selectedIds.has(client.id)))
+      setSelectedIds(new Set())
       onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Affectation impossible')
     } finally {
-      setSavingId(null)
+      setSaving(false)
     }
   }
 
@@ -982,7 +996,7 @@ function AssignOrganisationClientModal({ organisation, onClose, onSaved }: {
       <div className="bg-white rounded-2xl shadow-2xl w-[460px] max-w-full animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
-            <h2 className="font-bold text-base flex items-center gap-2"><Building2 size={15} /> Assigner un client</h2>
+            <h2 className="font-bold text-base flex items-center gap-2"><Building2 size={15} /> Assigner des clients</h2>
             <p className="text-xs text-text-muted mt-1">Organisation : {organisation.nom}</p>
           </div>
           <button onClick={onClose} aria-label="Fermer"><X size={18} className="text-text-muted" /></button>
@@ -998,21 +1012,23 @@ function AssignOrganisationClientModal({ organisation, onClose, onSaved }: {
             {loading ? <p className="p-4 text-sm text-text-muted text-center">Chargement...</p> : visible.length === 0 ? (
               <p className="p-5 text-sm text-text-muted text-center">Aucun client disponible</p>
             ) : visible.map(client => (
-              <div key={client.id} className="flex items-center gap-3 px-3 py-2.5">
+              <label key={client.id} className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/50">
+                <input type="checkbox" checked={selectedIds.has(client.id)} onChange={() => toggleClient(client.id)} disabled={saving}
+                  className="h-4 w-4 accent-accent-500" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold truncate">{client.nom}</p>
                   <p className="text-xs text-text-muted truncate">{client.telephone || 'Sans téléphone'}{client.organisation_id ? ' · autre organisation' : ' · client général'}</p>
                 </div>
-                <button onClick={() => assign(client)} disabled={savingId !== null}
-                  className="shrink-0 bg-accent-500 hover:bg-accent-400 disabled:opacity-50 rounded-lg px-3 py-1.5 text-xs font-bold">
-                  {savingId === client.id ? '...' : 'Assigner'}
-                </button>
-              </div>
+              </label>
             ))}
           </div>
         </div>
-        <div className="flex justify-end px-6 py-4 border-t border-border">
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-border">
+          <span className="text-xs text-text-muted">{selectedIds.size} sélectionné{selectedIds.size !== 1 ? 's' : ''}</span>
+          <div className="flex gap-2">
           <button onClick={onClose} className="px-4 py-2.5 bg-muted hover:bg-border rounded-xl text-sm font-semibold">Fermer</button>
+          <button onClick={assignSelected} disabled={saving || selectedIds.size === 0} className="px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:bg-gray-200 disabled:text-gray-400 rounded-xl text-sm font-bold">{saving ? 'Affectation...' : 'Assigner la sélection'}</button>
+          </div>
         </div>
       </div>
     </div>
