@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/appStore'
 import {
   Users2, Plus, RefreshCw, X, CheckCircle, Download,
   Wallet, Clock, TrendingDown, TrendingUp, ChevronDown, ChevronUp,
-  Banknote, Calendar, Printer
+  Banknote, Calendar, Printer, Minus, History as HistoryIcon
 } from 'lucide-react'
 import { runAction, loadData } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
@@ -132,7 +132,7 @@ export default function PersonnelsTab() {
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex items-center gap-0 bg-white border-b border-border px-4 flex-shrink-0">
+      <div className="hidden flex items-center gap-0 bg-white border-b border-border px-4 flex-shrink-0">
         {SUB_TABS.map(t => (
           <button
             key={t.id}
@@ -162,7 +162,7 @@ export default function PersonnelsTab() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredPersonnels.map(p => (
-                  <PersonnelCard
+                  <SimplePersonnelCard
                     key={p.id}
                     personnel={p}
                     paidThisMonth={salairesPaiesMois.has(p.id)}
@@ -174,7 +174,6 @@ export default function PersonnelsTab() {
                       }
                       setPayTarget(p)
                     }}
-                    onRefresh={loadPersonnels}
                   />
                 ))}
               </div>
@@ -342,14 +341,74 @@ export default function PersonnelsTab() {
 }
 
 // ── Personnel Card ────────────────────────────────────────────────────────────
-function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary, onRefresh }: {
+function SimplePersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary }: {
   personnel: Personnel
   paidThisMonth: boolean
   onMouvement: (type: TypeMouvementPersonnel) => void
   onPaySalary: () => void
-  onRefresh: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const totalDue = Math.max(0, (p.avance_solde || 0) + (p.credit_solde || 0))
+  const progress = p.salaire_base > 0 ? Math.min(100, (totalDue / p.salaire_base) * 100) : 0
+  return (
+    <div className="bg-white rounded-xl border border-border p-4 flex flex-col gap-3 shadow-sm">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="font-bold text-text-primary uppercase">{p.nom} {p.prenom ?? ''}</p>
+          <p className="text-xs text-text-muted mt-1">{p.poste ?? 'Poste non spécifié'}</p>
+          {p.telephone && <p className="text-xs text-text-muted mt-1">{p.telephone}</p>}
+        </div>
+        <span className="text-[11px] px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-200">actif</span>
+      </div>
+      <div className="flex items-end justify-between mt-8">
+        <div>
+          <p className="text-xs text-text-secondary">Solde à récupérer</p>
+          <div className="h-1.5 w-48 max-w-full bg-gray-200 rounded-full mt-3 overflow-hidden"><div className="h-full bg-accent-500 rounded-full" style={{ width: `${progress}%` }} /></div>
+        </div>
+        <p className="font-price text-xl font-bold text-accent-600">{formatPrice(totalDue)} DT</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 pt-2">
+        <button onClick={() => onMouvement('AVANCE')} className="flex items-center justify-center gap-1.5 border border-accent-500 text-accent-700 hover:bg-accent-50 rounded-lg py-2 text-xs font-semibold"><Plus size={13} /> Ajouter</button>
+        <button onClick={() => onMouvement('AVANCE_REMBOURSEMENT')} className="flex items-center justify-center gap-1.5 border border-border hover:bg-muted rounded-lg py-2 text-xs font-semibold"><Minus size={13} /> Retirer</button>
+        <button onClick={() => setShowHistory(true)} className="flex items-center justify-center gap-1.5 border border-blue-400 text-blue-600 hover:bg-blue-50 rounded-lg py-2 text-xs font-semibold"><HistoryIcon size={13} /> Historique</button>
+        <button onClick={onPaySalary} disabled={paidThisMonth} className="flex items-center justify-center gap-1.5 bg-accent-500 hover:bg-accent-400 disabled:bg-gray-200 disabled:text-gray-400 text-black rounded-lg py-2 text-xs font-bold"><Banknote size={13} /> {paidThisMonth ? 'Salaire payé' : 'Payer salaire'}</button>
+      </div>
+      {showHistory && <PersonnelHistoryModal personnel={p} onClose={() => setShowHistory(false)} />}
+    </div>
+  )
+}
+
+function PersonnelHistoryModal({ personnel: p, onClose }: { personnel: Personnel; onClose: () => void }) {
+  const [rows, setRows] = useState<MouvementPersonnel[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    api.mouvementsPersonnelsList({ personnel_id: p.id }).then(result => setRows(result as MouvementPersonnel[])).finally(() => setLoading(false))
+  }, [p.id])
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-[500px] max-w-full max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold text-base flex items-center gap-2"><HistoryIcon size={16} /> Historique - {p.nom} {p.prenom ?? ''}</h2><button onClick={onClose} aria-label="Fermer"><X size={18} /></button></div>
+        <div className="p-4 overflow-auto space-y-2">
+          {loading ? <p className="text-sm text-text-muted text-center py-8">Chargement...</p> : rows.length === 0 ? <p className="text-sm text-text-muted text-center py-8">Aucun mouvement</p> : rows.map(row => {
+            const positive = row.type === 'AVANCE' || row.type === 'CREDIT_PERSONNEL' || row.type === 'SALAIRE'
+            return <div key={row.id} className="flex items-center gap-3 bg-muted/40 border border-border rounded-xl p-3"><span className={cn('w-8 h-8 rounded-full flex items-center justify-center text-lg', positive ? 'bg-accent-100 text-accent-700' : 'bg-green-100 text-green-700')}>{positive ? '+' : '-'}</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{TYPE_LABELS[row.type]}</p><p className="text-xs text-text-muted">{formatDate(row.created_at)}</p>{row.note && <p className="text-xs text-text-secondary italic truncate">{row.note}</p>}</div><p className={cn('font-price font-bold', positive ? 'text-accent-700' : 'text-green-700')}>{positive ? '+' : '-'}{formatPrice(row.montant)} DT</p></div>
+          })}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-border"><button onClick={async () => { await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Solde actuel', `${formatPrice((p.avance_solde || 0) + (p.credit_solde || 0))} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: row.note })), `personnel-${p.nom}`) }} className="flex items-center gap-1.5 border border-border rounded-lg px-3 py-2 text-xs font-semibold"><Download size={13} /> PDF</button><button onClick={onClose} className="border border-border rounded-lg px-4 py-2 text-xs font-semibold">Fermer</button></div>
+      </div>
+    </div>
+  )
+}
+
+function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary }: {
+  personnel: Personnel
+  paidThisMonth: boolean
+  onMouvement: (type: TypeMouvementPersonnel) => void
+  onPaySalary: () => void
+}) {
+  const [showHistory, setShowHistory] = useState(false)
+  const totalDue = Math.max(0, (p.avance_solde || 0) + (p.credit_solde || 0))
+  const progress = p.salaire_base > 0 ? Math.min(100, (totalDue / p.salaire_base) * 100) : 0
   return (
     <div className="bg-white rounded-xl border border-border p-4 flex flex-col gap-3">
       <div className="flex items-start justify-between">
@@ -544,12 +603,12 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="font-bold text-text-primary">{TYPE_LABELS[type]}</h2>
+          <h2 className="font-bold text-text-primary">{type === 'AVANCE' ? 'Ajouter prime / paiement' : 'Retirer prime / paiement'}</h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>
         </div>
         {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
+          <div className="hidden flex-col gap-1">
             <label className="text-xs font-medium text-text-secondary">Employé</label>
             <select
               value={selectedId}
@@ -561,7 +620,7 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-1">
+          <div className="hidden flex-col gap-1">
             <label className="text-xs font-medium text-text-secondary">Type</label>
             <select
               value={type}
@@ -582,13 +641,13 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
           )}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-text-secondary">Montant (DT)</label>
-            <input value={montant} onChange={e => setMontant(e.target.value)} placeholder="0.000"
+            <input type="number" min="0" step="0.001" value={montant} onChange={e => setMontant(e.target.value)} placeholder="0.00"
               className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/30 font-price" />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-text-secondary">Note</label>
-            <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optionnel..."
-              className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/30" />
+            <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Note explicative..." rows={3}
+              className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/30 resize-none" />
           </div>
         </div>
         <div className="flex gap-2 justify-end pt-2">
