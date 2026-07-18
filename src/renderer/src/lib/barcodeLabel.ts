@@ -50,7 +50,7 @@ export function buildBarcodeLabelHtml(
 
   const barcode = pickLabelBarcodePayload(code, productRef)
   const barcodeValue = barcode.value
-  const safeBarcode = escapeHtml(barcodeValue)
+  const safeBarcode = escapeHtml(barcode.displayValue)
   const displayName = (nom || productRef || 'Produit').trim()
   const safeName = escapeHtml(displayName)
   const safeRef = escapeHtml(productRef || code)

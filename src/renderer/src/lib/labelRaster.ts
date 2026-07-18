@@ -204,7 +204,7 @@ export function renderBarcodeLabelRaster(
     if (showBarcodeCaption) {
       drawTextBox(
         ctx,
-        barcode.value,
+        barcode.displayValue,
         { x: box.x, y: box.y + barHeight, w: box.w, h: captionHeight },
         dpi,
         700,

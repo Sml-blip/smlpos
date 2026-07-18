@@ -665,7 +665,13 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('produits:findByBarcode', (_e, code) => {
-    return db.prepare('SELECT * FROM produits WHERE code_barre = ? AND actif = 1').get(code)
+    const scanned = String(code ?? '').trim()
+    let product = db.prepare('SELECT * FROM produits WHERE code_barre = ? AND actif = 1').get(scanned)
+    if (!product && /^\d{13}$/.test(scanned)) {
+      const smlCode = `SML-${scanned.slice(0, 8)}-${scanned.slice(8)}`
+      product = db.prepare('SELECT * FROM produits WHERE UPPER(code_barre) = ? AND actif = 1').get(smlCode)
+    }
+    return product
   })
 
   ipcMain.handle('produits:get', (_e, id) => {

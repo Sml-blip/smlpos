@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.979",
+  "version": "1.9.980",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",

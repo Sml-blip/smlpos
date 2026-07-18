@@ -88,7 +88,7 @@ export function buildGainschaPrintJob(
         h: sdkLayout.barcode.h,
         visible: sdkLayout.barcode.visible,
         value: barcode.value,
-        displayText: barcode.value,
+        displayText: barcode.displayValue,
         format: barcode.format,
       },
       price: {

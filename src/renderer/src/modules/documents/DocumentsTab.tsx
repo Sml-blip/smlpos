@@ -239,6 +239,7 @@ export default function DocumentsTab() {
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
   const [printAchatId, setPrintAchatId] = useState<string | null>(null)
   const [revoquerDoc, setRevoquerDoc] = useState<DocRow | null>(null)
+  const [cancelDoc, setCancelDoc] = useState<DocRow | null>(null)
   const [editTarget, setEditTarget] = useState<{ mode: 'vente' | 'achat'; id: string } | null>(null)
   const [showPinForEdit, setShowPinForEdit] = useState<{ mode: 'vente' | 'achat'; id: string; numero: string } | null>(null)
 
@@ -270,14 +271,11 @@ export default function DocumentsTab() {
 
   const tiers = (d: DocRow) => d.client_nom || d.fournisseur_nom || '—'
 
-  const annulerDoc = async (d: DocRow) => {
+  const annulerDoc = async (d: DocRow, motif = ''): Promise<boolean> => {
     const isFactureVente = d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F')
-    const motif = isFactureVente ? window.prompt(`Annuler ${d.numero} et créer un avoir ?\nMotif (optionnel) :`) : null
-    if (isFactureVente && motif === null) return
-    if (!isFactureVente && !window.confirm(`Annuler ${d.numero} ?`)) return
-    await runAction('Annulation document', async () => {
+    return runAction('Annulation document', async () => {
       if (isFactureVente) {
-        const res = await api.documentsAnnulerAvecAvoir?.(d.id, motif || undefined) as { success?: boolean; error?: string; avoir?: { numero: string } }
+        const res = await api.documentsAnnulerAvecAvoir?.(d.id, motif.trim() || undefined) as { success?: boolean; error?: string; avoir?: { numero: string } }
         if (!res?.success) throw new Error(res?.error || 'Échec annulation')
       } else if (d._source === 'ff') {
         await api.facturesFournisseursAnnuler(d.id)
@@ -567,7 +565,7 @@ export default function DocumentsTab() {
                         </button>
                       )}
                       {d.statut !== 'ANNULE' && d.statut !== 'REVOQUE' && d.type_document !== 'AVOIR' && (
-                        <button onClick={() => annulerDoc(d)} title="Annuler" className="p-1 rounded text-text-muted hover:text-danger hover:bg-red-50"><Ban size={12} /></button>
+                        <button onClick={() => setCancelDoc(d)} title="Annuler" className="p-1 rounded text-text-muted hover:text-danger hover:bg-red-50"><Ban size={12} /></button>
                       )}
                     </div>
                   </td>
@@ -609,7 +607,7 @@ export default function DocumentsTab() {
                 <button type="button" onClick={() => { startEdit(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-accent-50 hover:bg-accent-100 border border-accent-200 rounded-xl text-sm font-semibold"><Edit2 size={13} /> Modifier</button>
               )}
               {previewDoc.statut !== 'ANNULE' && previewDoc.statut !== 'REVOQUE' && previewDoc.type_document !== 'AVOIR' && (
-                <button type="button" onClick={() => { annulerDoc(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-red-50 hover:bg-red-100 text-danger border border-red-200 rounded-xl text-sm font-semibold"><Ban size={13} /> Annuler</button>
+                <button type="button" onClick={() => { setCancelDoc(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-red-50 hover:bg-red-100 text-danger border border-red-200 rounded-xl text-sm font-semibold"><Ban size={13} /> Annuler</button>
               )}
             </div>
           </div>
@@ -632,6 +630,18 @@ export default function DocumentsTab() {
           doc={revoquerDoc}
           onClose={() => setRevoquerDoc(null)}
           onConfirmed={() => { setRevoquerDoc(null); load() }}
+        />
+      )}
+
+      {cancelDoc && (
+        <CancelDocumentModal
+          doc={cancelDoc}
+          onClose={() => setCancelDoc(null)}
+          onConfirm={async motif => {
+            const success = await annulerDoc(cancelDoc, motif)
+            if (success) setCancelDoc(null)
+            return success
+          }}
         />
       )}
 
@@ -662,6 +672,43 @@ export default function DocumentsTab() {
           onSaved={load}
         />
       )}
+    </div>
+  )
+}
+
+function CancelDocumentModal({ doc, onClose, onConfirm }: {
+  doc: DocRow
+  onClose: () => void
+  onConfirm: (motif: string) => Promise<boolean>
+}) {
+  const [motif, setMotif] = useState('')
+  const [loading, setLoading] = useState(false)
+  const createsAvoir = doc._source !== 'ff' && (doc.type_document === 'FACTURE_VENTE' || doc.type_document === 'FACTURE_JOURNALIERE_F')
+  const confirm = async () => {
+    setLoading(true)
+    try { await onConfirm(motif) } finally { setLoading(false) }
+  }
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[210] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h3 className="font-bold text-sm text-red-700 flex items-center gap-2"><Ban size={15} /> Annuler {doc.numero}</h3>
+          <button type="button" onClick={onClose} disabled={loading}><X size={16} className="text-text-muted" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs text-text-secondary">{createsAvoir ? 'La facture sera annulée et un avoir correspondant sera créé.' : 'Le document sera marqué comme annulé.'}</p>
+          <textarea value={motif} onChange={e => setMotif(e.target.value)} rows={3}
+            className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent-500 resize-none"
+            placeholder="Motif (optionnel)" autoFocus />
+        </div>
+        <div className="flex gap-3 px-5 py-4 border-t border-border">
+          <button type="button" onClick={onClose} disabled={loading} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl text-sm">Fermer</button>
+          <button type="button" onClick={() => void confirm()} disabled={loading}
+            className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm">
+            {loading ? 'Annulation...' : 'Confirmer'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

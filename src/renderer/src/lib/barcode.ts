@@ -81,18 +81,25 @@ export function pickLabelBarcodeValue(code: string, productRef = ''): string {
   return pickLabelBarcodePayload(code, productRef).value
 }
 
-export function pickLabelBarcodePayload(code: string, productRef = ''): { value: string; format: LabelBarcodeFormat } {
+export function pickLabelBarcodePayload(code: string, productRef = ''): { value: string; displayValue: string; format: LabelBarcodeFormat } {
   const candidates = [normalizeBarcodeText(code), normalizeBarcodeText(productRef)].filter(Boolean)
   const picked = candidates[0] ?? normalizeBarcodeText(code)
-  if (!picked) return { value: '0', format: 'CODE128' }
+  if (!picked) return { value: '0', displayValue: '0', format: 'CODE128' }
   const trimmed = picked.trim()
 
   // Prefer real EAN formats for numeric retail barcodes: they scan much better
   // than dense CODE128 on 39x20mm labels.
-  if (/^\d{13}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, format: 'EAN13' }
-  if (/^\d{8}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, format: 'EAN8' }
+  if (/^\d{13}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, displayValue: trimmed, format: 'EAN13' }
+  if (/^\d{8}$/.test(trimmed) && hasValidEanCheckDigit(trimmed)) return { value: trimmed, displayValue: trimmed, format: 'EAN8' }
 
-  return { value: resolveBarcodeFormat(picked, 'CODE128').value, format: 'CODE128' }
+  // SML codes contain 13 useful digits. Encoding those digits in Code 128C is
+  // substantially wider and more reliable on a 40 mm / 203 dpi label than
+  // encoding the punctuation and prefix in Code 128B. Product lookup expands
+  // this compact scan back to the original stored SML code.
+  const sml = /^SML-(\d{8})-(\d{5})$/i.exec(trimmed)
+  if (sml) return { value: `${sml[1]}${sml[2]}`, displayValue: trimmed.toUpperCase(), format: 'CODE128' }
+
+  return { value: resolveBarcodeFormat(picked, 'CODE128').value, displayValue: trimmed.toUpperCase(), format: 'CODE128' }
 }
 
 /** @deprecated Use pickLabelBarcodeValue for labels. */

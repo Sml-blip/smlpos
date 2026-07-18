@@ -199,7 +199,7 @@ export default function LabelVisualEditor({
               textOverflow: 'ellipsis',
               width: '100%',
             }}>
-              {barcodeValue}
+              {barcode.displayValue}
             </div>
           )}
         </div>
