@@ -445,6 +445,7 @@ const mockApi = {
   documentsList: async () => [],
   documentsListAll: async () => [],
   documentsGet: async (id: string) => ({ id, numero: 'FAC-MOCK-001', type_document: 'FACTURE_VENTE', statut: 'ACTIF', total_ht: 0, total_tva: 0, total_ttc: 0, created_at: new Date().toISOString() }),
+  documentsCreateDailyFactureF: async () => ({ success: true, documentId: 'daily-f-mock', numero: '26/#00001', lineCount: 1, totalTTC: 10 }),
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
   documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
   documentsRevoquer: async () => ({ success: true }),

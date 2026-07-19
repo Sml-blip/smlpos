@@ -9,6 +9,7 @@ import {
   isProduitsCacheFresh,
 } from '../../lib/produitsCache'
 import { cn, formatPrice, generateId, generateReference } from '../../lib/utils'
+import { generateInternalEan13 } from '../../lib/ean13'
 import { loadData, runAction } from '../../lib/apiCall'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import ProductImportModal from '../../components/ProductImportModal'
@@ -456,15 +457,13 @@ export default function InventaireTab() {
     if (formErrors.prix_vente) setFormErrors(prev => ({ ...prev, prix_vente: undefined }))
   }
 
-  // Generate unique barcode SML-YYYYMMDD-XXXXX
+  // Generate a unique, standards-compliant EAN-13 retail barcode.
   const generateBarcode = async () => {
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     let code = ''
     let unique = false
     let attempts = 0
     while (!unique && attempts < 10) {
-      const rand = String(Math.floor(Math.random() * 99999)).padStart(5, '0')
-      code = `SML-${date}-${rand}`
+      code = generateInternalEan13()
       const res = await api.produitsCheckBarcodeUnique(code, editingProduct?.id)
       unique = res.unique
       attempts++
@@ -849,7 +848,7 @@ export default function InventaireTab() {
                       value={formData.code_barre}
                       onChange={e => f('code_barre', e.target.value)}
                       className="flex-1 border border-border rounded-lg px-3 py-2 text-sm font-mono"
-                      placeholder="EAN-13 / SML-..."
+                      placeholder="EAN-13"
                     />
                     <button
                       type="button"

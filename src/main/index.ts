@@ -537,29 +537,31 @@ function setupIpcHandlers() {
   /** End-of-day: merge all F sales from today's shifts into one FACTURE_JOURNALIERE_F document. */
   ipcMain.handle('documents:createDailyFactureF', () => {
     try {
-      const today = new Date().toISOString().slice(0, 10)
-      const dayStart = `${today}T00:00:00.000Z`
-      const dayEnd = `${today}T23:59:59.999Z`
-
       const existing = db.prepare(`
-        SELECT id, numero FROM documents
+        SELECT id, numero, created_at FROM documents
         WHERE type_document = 'FACTURE_JOURNALIERE_F'
-        AND created_at >= ? AND created_at <= ?
-      `).get(dayStart, dayEnd) as { id: string; numero: string } | undefined
-      if (existing) {
-        return { success: true, skipped: true, reason: 'already_exists', documentId: existing.id, numero: existing.numero }
-      }
+        AND date(created_at, 'localtime') = date('now', 'localtime')
+        AND statut NOT IN ('ANNULE', 'REVOQUE')
+        ORDER BY created_at DESC LIMIT 1
+      `).get() as { id: string; numero: string; created_at: string } | undefined
 
       const lignesF = db.prepare(`
         SELECT lv.produit_id, lv.designation, lv.quantite, lv.prix_unitaire, lv.remise_pct, lv.total_ligne
         FROM lignes_vente lv
         INNER JOIN ventes v ON v.id = lv.vente_id
-        INNER JOIN shifts s ON s.id = v.shift_id
         WHERE lv.type_produit = 'F'
-        AND s.started_at >= ? AND s.started_at <= ?
+        AND v.type = 'VENTE'
+        AND date(v.created_at, 'localtime') = date('now', 'localtime')
         AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
+        AND COALESCE(v.a_facture, 0) = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM documents manual_doc
+          WHERE manual_doc.vente_id = v.id
+          AND manual_doc.type_document IN ('FACTURE_VENTE', 'FACTURE_JOURNALIERE_F')
+          AND manual_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+        )
         ORDER BY v.created_at ASC, lv.designation ASC
-      `).all(dayStart, dayEnd) as Array<{
+      `).all() as Array<{
         produit_id: string | null
         designation: string
         quantite: number
@@ -577,15 +579,18 @@ function setupIpcHandlers() {
         return { success: true, skipped: true, reason: 'zero_total', count: 0 }
       }
 
-      const year = new Date().getFullYear()
-      const yy = String(year).slice(-2)
-      const seqKey = `facture_vente_sequence_${year}`
-      const prevRow = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(seqKey) as { value?: string } | undefined
-      const nextSeq = (parseInt(prevRow?.value ?? '0', 10) || 0) + 1
-      db.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`).run(seqKey, String(nextSeq))
-      const numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
+      let numero = existing?.numero
+      if (!numero) {
+        const year = new Date().getFullYear()
+        const yy = String(year).slice(-2)
+        const seqKey = `facture_vente_sequence_${year}`
+        const prevRow = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(seqKey) as { value?: string } | undefined
+        const nextSeq = (parseInt(prevRow?.value ?? '0', 10) || 0) + 1
+        db.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`).run(seqKey, String(nextSeq))
+        numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
+      }
       const now = new Date().toISOString()
-      const docId = randomUUID()
+      const docId = existing?.id ?? randomUUID()
 
       const doc = {
         id: docId,
@@ -608,7 +613,7 @@ function setupIpcHandlers() {
         date_echeance: null,
         layout_snapshot: null,
         contenu_json: null,
-        created_at: now,
+        created_at: existing?.created_at ?? now,
         updated_at: now,
       }
 
@@ -626,12 +631,21 @@ function setupIpcHandlers() {
         total_ttc: l.total_ligne,
         type_produit: 'F',
       }))
+      const replacedLineIds = existing
+        ? db.prepare(`SELECT id FROM lignes_document WHERE document_id = ?`).all(docId) as Array<{ id: string }>
+        : []
 
       db.transaction(() => {
-        db.prepare(`
-          INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at)
-          VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)
-        `).run(doc)
+        if (existing) {
+          db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(docId)
+          db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, montant_paye=?, updated_at=? WHERE id=?`)
+            .run(totalTTC, 0, totalTTC, totalTTC, now, docId)
+        } else {
+          db.prepare(`
+            INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at)
+            VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)
+          `).run(doc)
+        }
         const insertLigne = db.prepare(`
           INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit)
           VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit)
@@ -640,10 +654,11 @@ function setupIpcHandlers() {
       })()
 
       addActivityLog({ action: 'DOCUMENT_CREATED', details: { type_document: 'FACTURE_JOURNALIERE_F', numero, lineCount: docLignes.length }, montant: totalTTC })
-      enqueueSync('documents', 'INSERT', doc)
+      enqueueSync('documents', existing ? 'UPDATE' : 'INSERT', doc)
+      for (const old of replacedLineIds) enqueueSync('lignes_document', 'DELETE', { id: old.id })
       for (const l of docLignes) enqueueSync('lignes_document', 'INSERT', l)
 
-      return { success: true, documentId: docId, numero, lineCount: docLignes.length, totalTTC }
+      return { success: true, updated: !!existing, documentId: docId, numero, lineCount: docLignes.length, totalTTC }
     } catch (e) {
       return { success: false, error: String(e) }
     }
@@ -2465,6 +2480,11 @@ function setupIpcHandlers() {
     return db.prepare(`SELECT * FROM personnels WHERE actif = 1 ORDER BY nom`).all()
   })
   ipcMain.handle('personnels:create', (_e, p: Record<string, unknown>) => {
+    const normalizedCin = String(p.cin ?? '').trim() || null
+    if (normalizedCin) {
+      const duplicate = db.prepare(`SELECT id FROM personnels WHERE cin = ?`).get(normalizedCin)
+      if (duplicate) throw new Error('Ce CIN est déjà utilisé par un autre employé')
+    }
     const row = bindRow({
       id: '',
       nom: '',
@@ -2473,22 +2493,35 @@ function setupIpcHandlers() {
       telephone: null,
       cin: null,
       date_embauche: null,
-      salaire_base: null,
+      salaire_base: 0,
       notes: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    }, p)
+    }, {
+      ...p,
+      cin: normalizedCin,
+      salaire_base: money3(p.salaire_base),
+    })
     db.prepare(`INSERT INTO personnels (id,nom,prenom,poste,telephone,cin,date_embauche,salaire_base,notes,created_at,updated_at) VALUES (@id,@nom,@prenom,@poste,@telephone,@cin,@date_embauche,@salaire_base,@notes,@created_at,@updated_at)`).run(row)
     addActivityLog({ action: 'STAFF_CREATED', details: { id: row.id, nom: row.nom, poste: row.poste } })
     enqueueSync('personnels', 'INSERT', row)
     return { success: true }
   })
   ipcMain.handle('personnels:update', (_e, id: string, data: Record<string, unknown>) => {
-    const cols = Object.keys(data)
+    const normalized = { ...data }
+    if ('cin' in normalized) {
+      normalized.cin = String(normalized.cin ?? '').trim() || null
+      if (normalized.cin) {
+        const duplicate = db.prepare(`SELECT id FROM personnels WHERE cin = ? AND id != ?`).get(normalized.cin, id)
+        if (duplicate) throw new Error('Ce CIN est déjà utilisé par un autre employé')
+      }
+    }
+    if ('salaire_base' in normalized) normalized.salaire_base = money3(normalized.salaire_base)
+    const cols = Object.keys(normalized)
     const sets = cols.map(k => `${k}=@${k}`).join(',')
-    db.prepare(`UPDATE personnels SET ${sets}, updated_at=datetime('now') WHERE id=@id`).run({ ...data, id })
-    addActivityLog({ action: 'STAFF_UPDATED', details: { id, ...data } })
-    enqueueSync('personnels', 'UPDATE', { id, ...data })
+    db.prepare(`UPDATE personnels SET ${sets}, updated_at=datetime('now') WHERE id=@id`).run({ ...normalized, id })
+    addActivityLog({ action: 'STAFF_UPDATED', details: { id, ...normalized } })
+    enqueueSync('personnels', 'UPDATE', { id, ...normalized })
     return { success: true }
   })
   ipcMain.handle('personnels:delete', (_e, id: string) => {

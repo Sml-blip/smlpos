@@ -366,7 +366,7 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
               </Field>
             </div>
             <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
-              On the second cash close of the day, the app creates one Client Passager invoice from F-product sales only. NF lines from mixed sales are excluded automatically.
+              Each cash close creates or refreshes one Client Passager invoice from today&apos;s uninvoiced F-product sales. NF lines and manually invoiced sales are excluded automatically.
             </div>
           </div>
         </Section>

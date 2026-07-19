@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { formatPrice } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
+import { showToast } from '../lib/toast'
 import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText } from 'lucide-react'
 
 const api = window.api
@@ -23,9 +24,10 @@ const MODE_LABELS: Record<string, string> = {
 
 interface Props {
   onClose: () => void
+  onInvoiceCreated?: (documentId: string) => void | Promise<void>
 }
 
-export default function FermetureCaisseModal({ onClose }: Props) {
+export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Props) {
   const { currentShift, setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
   const [summary, setSummary] = useState<ShiftSummary | null>(null)
   const [soldeCaisse, setSoldeCaisse] = useState('')
@@ -34,8 +36,6 @@ export default function FermetureCaisseModal({ onClose }: Props) {
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
   const [closedShiftsToday, setClosedShiftsToday] = useState(0)
-
-  const isEndOfDayClose = closedShiftsToday >= 1
 
   useEffect(() => {
     if (!currentShift) return
@@ -73,7 +73,8 @@ export default function FermetureCaisseModal({ onClose }: Props) {
 
   const handleClose = async () => {
     if (!confirmed) { setConfirmed(true); return }
-    await runAction('Fermeture de caisse', async () => {
+    let dailyInvoice: { documentId?: string; numero?: string; skipped?: boolean; reason?: string } | undefined
+    const succeeded = await runAction('Fermeture de caisse', async () => {
       const now = new Date().toISOString()
       await api.shiftsClose(currentShift.id, {
         ended_at: now,
@@ -81,20 +82,19 @@ export default function FermetureCaisseModal({ onClose }: Props) {
         notes_cloture: notes || null,
       })
 
-      if (isEndOfDayClose) {
-        const facture = await api.documentsCreateDailyFactureF?.() as {
-          success?: boolean
-          skipped?: boolean
-          numero?: string
-          lineCount?: number
-          reason?: string
-          error?: string
-        } | undefined
-        if (facture?.success && !facture.skipped && facture.numero) {
-          console.info(`[FermetureCaisse] Facture journalière F ${facture.numero} (${facture.lineCount} lignes)`)
-        } else if (facture?.error) {
-          console.warn('[FermetureCaisse] Facture journalière F:', facture.error)
-        }
+      const facture = await api.documentsCreateDailyFactureF?.() as {
+        success?: boolean
+        skipped?: boolean
+        documentId?: string
+        numero?: string
+        lineCount?: number
+        reason?: string
+        error?: string
+      } | undefined
+      if (!facture?.success) throw new Error(facture?.error || 'La facture Client Passager n’a pas pu être créée')
+      dailyInvoice = facture
+      if (!facture.skipped && facture.documentId) {
+        await onInvoiceCreated?.(facture.documentId)
       }
 
       await api.caisseInterneTransferShift(currentShift.id)
@@ -102,12 +102,12 @@ export default function FermetureCaisseModal({ onClose }: Props) {
       setCurrentOperateur(null)
       setShowShiftModal(true)
       onClose()
-    }, {
-      setLoading,
-      successMessage: isEndOfDayClose
-        ? 'Caisse fermée — facture journalière F générée (Documents)'
-        : 'Caisse fermée',
-    })
+    }, { setLoading })
+    if (succeeded) {
+      showToast('success', dailyInvoice?.documentId
+        ? `Caisse fermée — facture Client Passager ${dailyInvoice.numero ?? ''} créée`
+        : 'Caisse fermée — aucune vente F non facturée à regrouper')
+    }
   }
 
   return (
@@ -127,23 +127,13 @@ export default function FermetureCaisseModal({ onClose }: Props) {
         </div>
 
         <div className="p-6 space-y-5">
-          {isEndOfDayClose ? (
-            <div className="flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
-              <FileText size={14} className="flex-shrink-0 mt-0.5" />
-              <span>
-                <strong>Clôture fin de journée</strong> — toutes les ventes produits <strong>F</strong> du jour
-                seront regroupées en une facture unique dans l&apos;onglet <strong>Documents</strong>.
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900">
-              <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
-              <span>
-                <strong>Première clôture du jour</strong> — fermeture normale. La facture journalière F sera créée
-                à la <strong>deuxième</strong> clôture (fin de journée).
-              </span>
-            </div>
-          )}
+          <div className="flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
+            <FileText size={14} className="flex-shrink-0 mt-0.5" />
+            <span>
+              <strong>Facture de fin de journée</strong> — les ventes <strong>F</strong> non encore facturées seront regroupées
+              pour <strong>Client Passager</strong>. Les produits NF et ventes déjà converties en facture sont exclus.
+            </span>
+          </div>
 
           {/* Shift info */}
           <div className="bg-muted rounded-xl p-4">

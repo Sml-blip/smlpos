@@ -164,7 +164,7 @@ interface Window {
     documentsListAll?: (filters?: unknown) => Promise<unknown[]>
     documentsGet?: (id: string) => Promise<Record<string, unknown> | null | undefined>
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
-    documentsCreateDailyFactureF?: () => Promise<{ success?: boolean; skipped?: boolean; numero?: string; lineCount?: number; reason?: string; error?: string }>
+    documentsCreateDailyFactureF?: () => Promise<{ success?: boolean; skipped?: boolean; updated?: boolean; documentId?: string; numero?: string; lineCount?: number; reason?: string; error?: string }>
     documentsUpdate: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
     documentsRevoquer?: (id: string, motif: string, par: string) => Promise<{ success?: boolean }>
     documentsAnnulerAvecAvoir?: (id: string, motif?: string) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>

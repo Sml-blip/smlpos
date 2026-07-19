@@ -1,4 +1,5 @@
 import { generateId, generateReference } from '../../lib/utils'
+import { generateInternalEan13 } from '../../lib/ean13'
 
 export type PendingProduct = {
   nom: string
@@ -167,9 +168,7 @@ export function newLineFromProduct(
 }
 
 export function generatePendingBarcode(): string {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const rand = String(Math.floor(Math.random() * 99999)).padStart(5, '0')
-  return `SML-${date}-${rand}`
+  return generateInternalEan13()
 }
 
 export function pendingFromQuickCreate(

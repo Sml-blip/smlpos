@@ -3,6 +3,7 @@ import Fuse from 'fuse.js'
 import type { Fournisseur, FactureFournisseur, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReference } from '../../lib/utils'
 import { cn } from '../../lib/utils'
+import { generateInternalEan13 } from '../../lib/ean13'
 import { runAction, loadData } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
 import { saveBalanceReport } from '../../lib/reportPdf'
@@ -812,11 +813,9 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
 
   const generateBarcode = async () => {
     await runAction('Génération code-barres', async () => {
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
       let code = '', unique = false, attempts = 0
       while (!unique && attempts < 10) {
-        const rand = String(Math.floor(Math.random() * 99999)).padStart(5, '0')
-        code = `SML-${date}-${rand}`
+        code = generateInternalEan13()
         const res = await api.produitsCheckBarcodeUnique(code, undefined)
         unique = res.unique
         attempts++
@@ -968,7 +967,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
                   value={formData.code_barre}
                   onChange={e => f('code_barre', e.target.value)}
                   className="flex-1 border border-border rounded-lg px-3 py-2 text-sm font-mono"
-                  placeholder="EAN-13 / SML-..."
+                  placeholder="EAN-13"
                 />
                 <button type="button" onClick={generateBarcode} title="Générer code-barres unique"
                   className="px-2 py-1 border border-border rounded-lg text-text-muted hover:text-accent-600 hover:bg-accent-50 transition-colors">
@@ -2136,7 +2135,7 @@ function FactureFournisseurModal({
                           />
                         </div>
                         <div className="flex items-end">
-                          <p className="text-[10px] text-text-muted">Code-barres auto-généré (SML-...)</p>
+                          <p className="text-[10px] text-text-muted">Code-barres auto-généré (EAN-13 standard)</p>
                         </div>
                       </div>
                       <div className="flex gap-2 justify-end">

@@ -281,13 +281,15 @@ export default function PersonnelsTab() {
                         <td className="px-4 py-3 text-right text-orange-600 font-price">{p.avance_solde > 0 ? `- ${formatPrice(Math.min(p.avance_solde, p.salaire_base))}` : '—'}</td>
                         <td className="px-4 py-3 text-right font-bold font-price">{formatPrice(Math.max(0, net))}</td>
                         <td className="px-4 py-3 text-center">
-                          {paid
+                          {p.salaire_base <= 0
+                            ? <span className="text-xs text-text-muted">Non défini</span>
+                            : paid
                             ? <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full"><CheckCircle size={11} /> Payé</span>
                             : <span className="text-xs text-text-muted">En attente</span>
                           }
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {!paid && (
+                          {!paid && p.salaire_base > 0 && (
                             <button
                               type="button"
                               onClick={() => setPayTarget(p)}
@@ -371,7 +373,7 @@ function SimplePersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySa
         <button onClick={() => onMouvement('AVANCE')} className="flex items-center justify-center gap-1.5 border border-accent-500 text-accent-700 hover:bg-accent-50 rounded-lg py-2 text-xs font-semibold"><Plus size={13} /> Ajouter</button>
         <button onClick={() => onMouvement('AVANCE_REMBOURSEMENT')} className="flex items-center justify-center gap-1.5 border border-border hover:bg-muted rounded-lg py-2 text-xs font-semibold"><Minus size={13} /> Retirer</button>
         <button onClick={() => setShowHistory(true)} className="flex items-center justify-center gap-1.5 border border-blue-400 text-blue-600 hover:bg-blue-50 rounded-lg py-2 text-xs font-semibold"><HistoryIcon size={13} /> Historique</button>
-        <button onClick={onPaySalary} disabled={paidThisMonth} className="flex items-center justify-center gap-1.5 bg-accent-500 hover:bg-accent-400 disabled:bg-gray-200 disabled:text-gray-400 text-black rounded-lg py-2 text-xs font-bold"><Banknote size={13} /> {paidThisMonth ? 'Salaire payé' : 'Payer salaire'}</button>
+        <button onClick={onPaySalary} disabled={paidThisMonth || p.salaire_base <= 0} title={p.salaire_base <= 0 ? 'Définissez un salaire avant le paiement mensuel' : undefined} className="flex items-center justify-center gap-1.5 bg-accent-500 hover:bg-accent-400 disabled:bg-gray-200 disabled:text-gray-400 text-black rounded-lg py-2 text-xs font-bold"><Banknote size={13} /> {p.salaire_base <= 0 ? 'Salaire non défini' : paidThisMonth ? 'Salaire payé' : 'Payer salaire'}</button>
       </div>
       {showHistory && <PersonnelHistoryModal personnel={p} onClose={() => setShowHistory(false)} />}
     </div>
@@ -484,21 +486,23 @@ function AddPersonnelModal({ onClose, onSaved }: { onClose: () => void; onSaved:
 
   const handleSave = async () => {
     if (!form.nom.trim()) { setError('Nom requis'); return }
-    if (!form.salaire_base || isNaN(parseFloat(form.salaire_base))) { setError('Salaire base requis'); return }
+    const salary = form.salaire_base.trim() ? parseFloat(form.salaire_base.replace(',', '.')) : 0
+    if (!Number.isFinite(salary) || salary < 0) { setError('Salaire base invalide'); return }
     setError('')
     const ok = await runAction('Enregistrement personnel', async () => {
       const now = new Date().toISOString()
-      await api.personnelsCreate({
+      const result = await api.personnelsCreate({
         id: generateId(), ...form,
-        salaire_base: parseFloat(form.salaire_base),
-        cin: form.cin || null,
+        salaire_base: salary,
+        cin: form.cin.trim() || null,
         prenom: form.prenom || null,
         poste: form.poste || null,
         telephone: form.telephone || null,
         date_embauche: form.date_embauche || null,
         notes: form.notes || null,
         created_at: now, updated_at: now,
-      })
+      }) as { success?: boolean; error?: string } | undefined
+      if (result?.success === false) throw new Error(result.error || 'Impossible d’ajouter cet employé')
     }, {
       setSaving,
       successMessage: 'Personnel ajouté',
@@ -522,7 +526,7 @@ function AddPersonnelModal({ onClose, onSaved }: { onClose: () => void; onSaved:
             { key: 'poste', label: 'Poste', placeholder: 'Technicien, Caissier...' },
             { key: 'telephone', label: 'Téléphone', placeholder: '+216...' },
             { key: 'cin', label: 'CIN', placeholder: '0....' },
-            { key: 'salaire_base', label: 'Salaire base (DT) *', placeholder: '1000.000' },
+            { key: 'salaire_base', label: 'Salaire base (DT)', placeholder: 'Optionnel — 0.000' },
           ].map(f => (
             <div key={f.key} className="flex flex-col gap-1">
               <label className="text-xs font-medium text-text-secondary">{f.label}</label>
