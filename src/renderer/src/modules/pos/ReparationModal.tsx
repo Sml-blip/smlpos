@@ -5,28 +5,48 @@ import { formatPrice, generateId, generateReparationNumber } from '../../lib/uti
 import { runAction } from '../../lib/apiCall'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import InventoryProductPickerModal from '../../components/InventoryProductPickerModal'
+import { openPrintManager } from '../../lib/printManager'
 import { printLabelHtml } from '../../lib/nativePrint'
-import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Wrench, PackageSearch } from 'lucide-react'
+import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Wrench, PackageSearch, CheckCircle, Tag } from 'lucide-react'
 
 const api = window.api
 
-function printFicheReparation(data: {
+interface CreatedRepairPrintData {
   numero: string; clientNom: string; clientTel: string
   typeAppareil: string; marque: string; modele: string
-  panne: string; totalFinal: number
-}) {
-  const dateStr = new Date().toLocaleDateString('fr-TN')
+  panne: string; totalFinal: number; acompte: number
+  operateur: string; estimatedCompletion?: string
+  pieces: { designation: string; quantite: number }[]
+  createdAt: string
+}
+
+const esc = (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+function printCompactRepairLabel(data: CreatedRepairPrintData) {
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(data.numero)}</title><style>
+  @page{size:40mm 20mm;margin:0}*{box-sizing:border-box}html,body{width:40mm;height:20mm;margin:0;overflow:hidden;font-family:Arial,sans-serif;color:#000}.ticket{width:40mm;height:20mm;padding:1.2mm 1.5mm;display:flex;flex-direction:column;justify-content:center}.name{font-size:9pt;font-weight:800;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.phone{font-size:8pt;font-weight:600;margin-top:.8mm}.total{font-size:12pt;font-weight:900;margin-top:1.5mm;border-top:.35mm solid #000;padding-top:1mm}</style></head><body><div class="ticket">
+  <div class="name">${esc(data.clientNom || 'Client')}</div><div class="phone">Tél: ${esc(data.clientTel || '—')}</div><div class="total">${data.totalFinal.toFixed(3)} DT</div>
+  </div></body></html>`
+  openPrintManager({
+    html, printKind: 'label', defaultPageSize: '40x20mm', settingsKey: 'impression_printer_label',
+    labelConfig: { labelEngine: 'html', widthMm: 40, heightMm: 20 },
+  })
+}
+
+function printFicheReparation(data: CreatedRepairPrintData) {
+  const dateStr = new Date(data.createdAt).toLocaleString('fr-TN')
+  const piecesHtml = data.pieces.length
+    ? `<div class="section"><div class="section-title">Pièces / composants</div>${data.pieces.map(p => `<div class="item"><span>${esc(p.designation)}</span><strong>x${p.quantite}</strong></div>`).join('')}</div>`
+    : ''
+  const reste = Math.max(0, data.totalFinal - data.acompte)
   const html = `<!DOCTYPE html><html><head><title>Ticket Réparation ${data.numero}</title>
-  <style>@page{size:80mm auto;margin:4mm}body{font-family:Arial,sans-serif;width:72mm;margin:0;font-size:12px;color:#111}.center{text-align:center}.line{border-top:1px dashed #777;margin:10px 0}.row{margin:6px 0}.label{font-size:10px;color:#666}.value{font-weight:700}.total{font-size:20px;font-weight:800;text-align:center;border:2px solid #111;padding:8px;margin-top:12px}</style></head><body>
-  <h2 class="center">SML POS</h2><div class="center">Ticket de réparation</div><div class="line"></div>
-  <div class="row"><div class="label">N° réparation</div><div class="value">${data.numero}</div></div>
-  <div class="row"><div class="label">Date</div><div class="value">${dateStr}</div></div>
-  <div class="row"><div class="label">Client</div><div class="value">${data.clientNom || '—'}</div></div>
-  <div class="row"><div class="label">Téléphone</div><div class="value">${data.clientTel || '—'}</div></div>
-  <div class="row"><div class="label">Appareil</div><div class="value">${[data.typeAppareil, data.marque, data.modele].filter(Boolean).join(' ')}</div></div>
-  <div class="row"><div class="label">Panne</div><div class="value">${data.panne}</div></div>
-  <div class="total">TOTAL<br>${data.totalFinal.toFixed(3)} DT</div>
-  <div class="line"></div><div class="center">Merci pour votre confiance</div></body></html>`
+  <style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}body{font-family:Arial,sans-serif;width:80mm;margin:0;padding:5mm 4mm;font-size:11px;color:#171717}.header{text-align:center;padding-bottom:3mm;border-bottom:1px dashed #777}.brand{font-size:19px;font-weight:900;letter-spacing:.5px}.subtitle{font-size:10px;margin-top:1mm}.number{display:inline-block;margin-top:2mm;border:1px solid #111;border-radius:10px;padding:1mm 3mm;font-family:monospace;font-weight:700}.section{padding:3mm 0;border-bottom:1px dashed #aaa}.section-title{font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:#666;font-weight:800;margin-bottom:1.5mm}.row,.item{display:flex;justify-content:space-between;gap:3mm;margin:1.2mm 0}.row span:first-child{color:#666}.value{font-weight:700;text-align:right}.problem{font-weight:700;line-height:1.35}.summary{margin-top:3mm;border:1.5px solid #111;border-radius:3mm;padding:3mm}.summary .row{font-size:12px}.grand{font-size:19px;font-weight:900;border-top:1px solid #111;padding-top:2mm;margin-top:2mm}.footer{text-align:center;margin-top:4mm;font-size:9px;color:#555}</style></head><body>
+  <div class="header"><div class="brand">SML POS</div><div class="subtitle">Ticket de réparation</div><div class="number">${esc(data.numero)}</div></div>
+  <div class="section"><div class="section-title">Client</div><div class="row"><span>Nom</span><span class="value">${esc(data.clientNom || '—')}</span></div><div class="row"><span>Téléphone</span><span class="value">${esc(data.clientTel || '—')}</span></div></div>
+  <div class="section"><div class="section-title">Réparation</div><div class="row"><span>Date</span><span class="value">${esc(dateStr)}</span></div><div class="row"><span>Appareil</span><span class="value">${esc([data.typeAppareil, data.marque, data.modele].filter(Boolean).join(' '))}</span></div><div class="problem">${esc(data.panne)}</div>${data.estimatedCompletion ? `<div class="row"><span>Prévue pour</span><span class="value">${esc(new Date(data.estimatedCompletion).toLocaleString('fr-TN'))}</span></div>` : ''}</div>
+  ${piecesHtml}
+  <div class="summary">${data.acompte > 0 ? `<div class="row"><span>Acompte</span><strong>${data.acompte.toFixed(3)} DT</strong></div><div class="row"><span>Reste à payer</span><strong>${reste.toFixed(3)} DT</strong></div>` : ''}<div class="row grand"><span>TOTAL</span><span>${data.totalFinal.toFixed(3)} DT</span></div></div>
+  ${data.operateur ? `<div class="footer">Pris en charge par ${esc(data.operateur)}<br>` : '<div class="footer">'}Merci pour votre confiance</div></body></html>`
   void printLabelHtml(html, '80mm')
 }
 
@@ -75,6 +95,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [totalFinal, setTotalFinal] = useState('')
   const [loading, setLoading] = useState(false)
   const [showInventoryPicker, setShowInventoryPicker] = useState(false)
+  const [createdRepair, setCreatedRepair] = useState<CreatedRepairPrintData | null>(null)
 
   const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
   const totalFinalNum = parseMoney(totalFinal)
@@ -165,9 +186,49 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       }))
 
       await api.reparationsCreate(rep, piecesData)
-
-      onClose()
+      setCreatedRepair({
+        numero,
+        clientNom: clientForm.nom,
+        clientTel: clientForm.tel,
+        typeAppareil,
+        marque,
+        modele,
+        panne: panneFinale,
+        totalFinal: totalFinalNum,
+        acompte: acompteNum,
+        operateur: currentShift?.operateur_nom ?? '',
+        estimatedCompletion: rep.estimated_completion ?? undefined,
+        pieces: piecesForSave.map(p => ({ designation: p.designation, quantite: p.quantite })),
+        createdAt: now,
+      })
     }, { setLoading, successMessage: 'Réparation créée' })
+  }
+
+  if (createdRepair) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in overflow-hidden">
+          <div className="p-6 text-center border-b border-border">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100 text-green-700"><CheckCircle size={30} /></div>
+            <h2 className="text-xl font-bold">Réparation créée</h2>
+            <p className="mt-1 font-mono text-sm text-text-secondary">{createdRepair.numero}</p>
+          </div>
+          <div className="p-6 space-y-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-text-muted">Choisir le format d’impression</p>
+            <button type="button" onClick={() => printCompactRepairLabel(createdRepair)} className="w-full rounded-xl border border-border p-4 text-left hover:border-accent-500 hover:bg-accent-50 transition-colors flex items-center gap-4">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-700"><Tag size={21} /></span>
+              <span><strong className="block text-sm">Imprimer — Ticket compact Gainscha</strong><span className="block mt-1 text-xs text-text-muted">Nom client · téléphone · total client uniquement</span></span>
+            </button>
+            <button type="button" onClick={() => printFicheReparation(createdRepair)} className="w-full rounded-xl border border-border p-4 text-left hover:border-accent-500 hover:bg-accent-50 transition-colors flex items-center gap-4">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><PrinterIcon size={21} /></span>
+              <span><strong className="block text-sm">Imprimer — Reçu POS complet</strong><span className="block mt-1 text-xs text-text-muted">Toutes les informations, sans prix d’achat des pièces</span></span>
+            </button>
+            <p className="text-[10px] text-text-muted">Chaque format mémorise automatiquement l’imprimante choisie.</p>
+          </div>
+          <div className="border-t border-border p-4"><button type="button" onClick={onClose} className="w-full rounded-xl bg-accent-500 py-2.5 font-bold">Terminé</button></div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -281,12 +342,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
 
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Fermer</button>
-          <button type="button" onClick={() => printFicheReparation({
-            numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne: panneFinale,
-            totalFinal: totalFinalNum,
-          })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">
-            <PrinterIcon size={14} /> Aperçu
-          </button>
           <button type="button" onClick={() => void handleSave()} disabled={!canSave || loading}
             className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 font-bold py-2.5 rounded-xl">
             {loading ? 'Enregistrement…' : 'Enregistrer'}
