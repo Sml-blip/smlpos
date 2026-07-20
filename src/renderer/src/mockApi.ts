@@ -266,6 +266,7 @@ const mockApi = {
   },
   reparationsList: async () => REPARATIONS,
   reparationsUpdateStatut: async (id: string, statut: string) => { const r = REPARATIONS.find(x => x.id === id); if (r) r.statut = statut as typeof r.statut; return r; },
+  reparationsFinalize: async (_id: string, totalFinal: number) => ({ success: true, benefice: totalFinal }),
   reparationsGetPieces: async () => [],
   reparationsGetLastNumber: async () => nextRepSeq,
   reparationsGetBeneficeStats: async () => ({

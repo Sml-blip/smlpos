@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { TypeAppareil, Produit } from '../../lib/types'
 import { formatPrice, generateId, generateReparationNumber } from '../../lib/utils'
-import { loadData, runAction } from '../../lib/apiCall'
+import { runAction } from '../../lib/apiCall'
 import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import InventoryProductPickerModal from '../../components/InventoryProductPickerModal'
 import { printLabelHtml } from '../../lib/nativePrint'
-import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Search, Wrench, AlertTriangle, PackageSearch } from 'lucide-react'
+import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Wrench, PackageSearch } from 'lucide-react'
 
 const api = window.api
 
@@ -60,82 +60,9 @@ interface PieceInput {
   stock_actuel?: number
 }
 
-interface DegatPromptPiece {
-  id: string
-  designation: string
-  quantite: number
-  prix_achat: string
-}
-
 const parseMoney = (s: string) => parseFloat(String(s).replace(',', '.')) || 0
 const sanitizeMoneyInput = (s: string) => s.replace(/[^0-9.,]/g, '')
 const formatMoneyInput = (n: number) => (n ? String(n) : '')
-
-function DegatPriceModal({
-  pieces,
-  onConfirm,
-  onSkip,
-}: {
-  pieces: DegatPromptPiece[]
-  onConfirm: (updates: { id: string; prix_achat: number }[]) => void
-  onSkip: () => void
-}) {
-  const [rows, setRows] = useState(pieces)
-  const [loading, setLoading] = useState(false)
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-slide-in">
-        <div className="px-5 py-4 border-b border-border">
-          <h3 className="font-bold flex items-center gap-2 text-orange-800">
-            <AlertTriangle size={16} /> Prix des pièces dégât / incident
-          </h3>
-          <p className="text-xs text-text-muted mt-1">Saisissez le coût d&apos;achat ou valeur du dégât pour chaque pièce.</p>
-        </div>
-        <div className="p-5 space-y-3 max-h-[50vh] overflow-y-auto">
-          {rows.map((p, i) => (
-            <div key={p.id} className="flex items-center gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{p.designation}</div>
-                <div className="text-[10px] text-text-muted">Qté {p.quantite}</div>
-              </div>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={p.prix_achat}
-                onChange={e => {
-                  const u = [...rows]
-                  u[i] = { ...u[i], prix_achat: e.target.value.replace(/[^0-9.,]/g, '') }
-                  setRows(u)
-                }}
-                className="w-28 border border-border rounded-lg px-2 py-1.5 text-sm font-price text-right"
-                placeholder="0.000"
-                autoFocus={i === 0}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 px-5 py-4 border-t border-border">
-          <button type="button" onClick={onSkip} className="flex-1 py-2.5 rounded-xl bg-muted hover:bg-border text-sm font-semibold">
-            Plus tard
-          </button>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => {
-              void runAction('Enregistrement dégâts', async () => {
-                onConfirm(rows.map(r => ({ id: r.id, prix_achat: parseMoney(r.prix_achat) })))
-              }, { setLoading, successMessage: 'Prix dégât enregistrés' })
-            }}
-            className="flex-1 py-2.5 rounded-xl bg-accent-500 hover:bg-accent-600 font-bold text-sm disabled:bg-gray-200"
-          >
-            {loading ? '…' : 'Valider'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const { currentShift } = useAppStore()
@@ -147,10 +74,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [pieces, setPieces] = useState<PieceInput[]>([])
   const [acompte, setAcompte] = useState('')
   const [totalFinal, setTotalFinal] = useState('')
-  const [pieceSearch, setPieceSearch] = useState('')
-  const [pieceResults, setPieceResults] = useState<Produit[]>([])
   const [loading, setLoading] = useState(false)
-  const [degatPrompt, setDegatPrompt] = useState<{ repId: string; pieces: DegatPromptPiece[] } | null>(null)
   const [showInventoryPicker, setShowInventoryPicker] = useState(false)
 
   const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
@@ -158,12 +82,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const totalFinalNum = parseMoney(totalFinal)
   const acompteNum = parseMoney(acompte)
   const benefice = totalFinalNum - piecesAchat
-
-  const searchPieces = async (q: string) => {
-    if (q.length < 2) { setPieceResults([]); return }
-    const results = await loadData('Recherche pièces', () => api.produitsList({ search: q }) as Promise<Produit[]>, { silent: true })
-    if (results) setPieceResults(results.slice(0, 6))
-  }
 
   const addPiece = (p?: Produit) => {
     if (p) {
@@ -193,20 +111,14 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         type: 'NF',
       }])
     }
-    setPieceSearch('')
-    setPieceResults([])
   }
 
   const updatePiece = (index: number, patch: Partial<PieceInput>) => {
     setPieces(prev => prev.map((piece, i) => (i === index ? { ...piece, ...patch } : piece)))
   }
 
-  const canSave = panne.trim() && pieces.length > 0 && totalFinalNum > 0
-
-  const finishClose = () => {
-    setDegatPrompt(null)
-    onClose()
-  }
+  const validPieces = pieces.every(p => p.designation.trim() && p.quantite > 0 && p.prix_achat >= 0)
+  const canSave = !!clientForm.nom.trim() && !!clientForm.tel.trim() && !!panne.trim() && validPieces
 
   const handleSave = async () => {
     if (!canSave) return
@@ -234,8 +146,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         main_oeuvre: mainOeuvre,
         acompte: acompteNum,
         total_estime: totalFinalNum,
-        total_final: totalFinalNum,
-        benefice: totalFinalNum - mainOeuvre,
+        total_final: 0,
+        benefice: 0,
         statut: 'EN_ATTENTE',
         created_at: now,
         updated_at: now,
@@ -255,35 +167,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
 
       await api.reparationsCreate(rep, piecesData)
 
-      const degatPieces = pieces.filter(p => p.destock_stock)
-      const degatNeedingPrice = degatPieces.filter(p => !p.prix_achat || p.prix_achat <= 0)
-      if (degatNeedingPrice.length > 0) {
-        setDegatPrompt({
-          repId,
-          pieces: degatNeedingPrice.map(p => ({
-            id: p.id,
-            designation: p.designation,
-            quantite: p.quantite,
-            prix_achat: p.prix_achat ? String(p.prix_achat) : '',
-          })),
-        })
-      } else {
-        onClose()
-      }
+      onClose()
     }, { setLoading, successMessage: 'Réparation créée' })
-  }
-
-  if (degatPrompt) {
-    return (
-      <DegatPriceModal
-        pieces={degatPrompt.pieces}
-        onSkip={finishClose}
-        onConfirm={async updates => {
-          await api.reparationsApplyDegatPrices?.(degatPrompt.repId, updates)
-          finishClose()
-        }}
-      />
-    )
   }
 
   return (
@@ -297,7 +182,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         <div className="p-6 space-y-5">
           <ClientPicker compact value={clientForm} onChange={setClientForm} />
 
-          <div>
+          <div className="rounded-xl border border-border p-4 space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wide text-text-secondary">Appareil et panne</h3>
             <label className="block text-xs font-semibold text-text-secondary mb-2">Type d&apos;appareil</label>
             <div className="flex gap-2 flex-wrap">
               {APPAREILS.map(a => (
@@ -309,45 +195,29 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 -mt-2 px-4">
             <input value={marque} onChange={e => setMarque(e.target.value)} placeholder="Marque" className="border border-border rounded-lg px-3 py-2 text-sm" />
             <input value={modele} onChange={e => setModele(e.target.value)} placeholder="Modèle" className="border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
 
-          <div>
+          <div className="px-4 -mt-2">
             <label className="block text-xs font-semibold text-text-secondary mb-1.5">Description de la panne *</label>
             <textarea value={panne} onChange={e => setPanne(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm h-20 resize-none" />
           </div>
 
-          <div>
+          <div className="rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-text-secondary">Pièces / composants</label>
+              <div>
+                <label className="text-xs font-semibold text-text-secondary">Pièces / composants (optionnel)</label>
+                <p className="text-[10px] text-text-muted mt-0.5">Ajoutez uniquement les pièces utilisées pour calculer le coût et le bénéfice.</p>
+              </div>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={() => setShowInventoryPicker(true)} className="text-xs text-blue-700 font-semibold flex items-center gap-1">
-                  <PackageSearch size={12} /> Inventory
+                  <PackageSearch size={12} /> Depuis le stock
                 </button>
                 <button type="button" onClick={() => addPiece()} className="text-xs text-accent-600 font-semibold flex items-center gap-1"><Plus size={12} /> Ligne libre</button>
               </div>
             </div>
-            <div className="relative mb-2">
-              <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-2 bg-muted">
-                <Search size={13} className="text-text-muted" />
-                <input value={pieceSearch} onChange={e => { setPieceSearch(e.target.value); void searchPieces(e.target.value) }}
-                  className="flex-1 bg-transparent text-sm outline-none" placeholder="Rechercher stock ou saisir une ligne libre…" />
-              </div>
-              {pieceResults.length > 0 && (
-                <div className="absolute top-full left-0 right-0 z-10 bg-white border border-border rounded-lg shadow-lg mt-1">
-                  {pieceResults.map(p => (
-                    <button key={p.id} type="button" onClick={() => addPiece(p)} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted text-left text-sm border-b last:border-0">
-                      <span className={p.type === 'F' ? 'badge-F' : 'badge-NF'}>{p.type}</span>
-                      <span className="flex-1 truncate">{p.nom}</span>
-                      <span className="text-xs text-text-muted">Stock: {p.stock_actuel}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {pieces.map((p, i) => (
               <div key={p.id} className="flex flex-wrap items-center gap-2 mb-2 p-2 border border-border rounded-lg bg-muted/30">
                 <input value={p.designation} onChange={e => updatePiece(i, { designation: e.target.value })}
@@ -361,9 +231,9 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
                   onChange={e => { const val = sanitizeMoneyInput(e.target.value); updatePiece(i, { prix_achat_input: val, prix_achat: parseMoney(val) }) }}
                   className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price"
                   title="Prix achat TND" placeholder="Prix achat" />
-                <label className="flex items-center gap-1 text-[10px] font-semibold text-orange-700 cursor-pointer whitespace-nowrap">
+                <label className="flex items-center gap-1 text-[10px] font-semibold text-blue-700 cursor-pointer whitespace-nowrap">
                   <input type="checkbox" checked={p.destock_stock} onChange={e => updatePiece(i, { destock_stock: e.target.checked })} />
-                  <AlertTriangle size={11} /> Dégât
+                  Déduire du stock
                 </label>
                 {p.produit_id && p.destock_stock && (
                   <span className="text-[10px] text-text-muted">Stock: {p.stock_actuel ?? '?'}</span>
@@ -396,21 +266,21 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
                 className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price" placeholder="0.000" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Total client (TND) *</label>
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Prix estimé (TND, optionnel)</label>
               <input type="text" inputMode="decimal" value={totalFinal} onFocus={e => e.currentTarget.select()} onChange={e => setTotalFinal(sanitizeMoneyInput(e.target.value))}
                 className="w-full border border-accent-400 rounded-lg px-3 py-2 text-sm font-price font-bold" placeholder="0.000" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Bénéfice technicien</label>
+              <label className="block text-xs font-semibold text-text-secondary mb-1.5">Bénéfice estimé</label>
               <div className={`border rounded-lg px-3 py-2 font-price font-bold text-sm ${benefice >= 0 ? 'border-green-300 bg-green-50 text-green-800' : 'border-red-300 bg-red-50 text-red-800'}`}>
-                {benefice >= 0 ? '+' : ''}{formatPrice(benefice)}
+                {totalFinalNum > 0 ? `${benefice >= 0 ? '+' : ''}${formatPrice(benefice)}` : '—'}
               </div>
             </div>
           </div>
         </div>
 
         <div className="flex gap-3 px-6 py-4 border-t border-border">
-          <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Annuler</button>
+          <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Fermer</button>
           <button type="button" onClick={() => printFicheReparation({
             numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne,
             pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, prix_unitaire: p.prix_unitaire, destock: p.destock_stock })),
@@ -423,6 +293,9 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
             {loading ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </div>
+        {!canSave && (
+          <p className="px-6 pb-3 text-[10px] text-text-muted text-right">Nom, téléphone et description de panne sont requis. Le prix et les pièces peuvent être ajoutés plus tard.</p>
+        )}
       </div>
       {showInventoryPicker && (
         <InventoryProductPickerModal

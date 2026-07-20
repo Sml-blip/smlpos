@@ -73,6 +73,7 @@ interface Window {
     reparationsCreate: (rep: unknown, pieces: unknown[]) => Promise<unknown>
     reparationsList: (filters?: unknown) => Promise<unknown[]>
     reparationsUpdateStatut: (id: string, statut: string) => Promise<unknown>
+    reparationsFinalize: (id: string, totalFinal: number) => Promise<{ success?: boolean; error?: string; benefice?: number }>
     reparationsGetPieces: (repId: string) => Promise<unknown[]>
     reparationsGetLastNumber: (prefix: string) => Promise<number>
     reparationsGetBeneficeStats: (mois?: string) => Promise<unknown>

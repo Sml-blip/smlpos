@@ -1139,7 +1139,9 @@ function setupIpcHandlers() {
       created_at: now, updated_at: now,
       ...rep,
     }
-    normalizedRep.benefice = (normalizedRep.total_final ?? 0) - (normalizedRep.main_oeuvre ?? 0)
+    normalizedRep.benefice = Number(normalizedRep.total_final) > 0
+      ? Number(normalizedRep.total_final) - Number(normalizedRep.main_oeuvre ?? 0)
+      : 0
 
     const insertRep = db.prepare(`
       INSERT INTO reparations (id, numero, shift_id, operateur_nom, client_nom, client_tel,
@@ -1217,14 +1219,14 @@ function setupIpcHandlers() {
     const targetMois = mois || new Date().toISOString().slice(0, 7)
     const overall = db.prepare(`
       SELECT SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net, COUNT(*) as nb
-      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut != 'ANNULE'
+      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut IN ('TERMINE', 'RENDU')
     `).get(targetMois) as { benefice_net: number; nb: number }
     const breakdown = db.prepare(`
       SELECT type_appareil, COUNT(*) as nb,
              SUM(COALESCE(main_oeuvre,0)) as total_pieces,
              SUM(COALESCE(total_final,0)) as total_encaisse,
              SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net
-      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut != 'ANNULE'
+      FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut IN ('TERMINE', 'RENDU')
       GROUP BY type_appareil
     `).all(targetMois) as { type_appareil: string; nb: number; total_pieces: number; total_encaisse: number; benefice_net: number }[]
 
@@ -1272,6 +1274,21 @@ function setupIpcHandlers() {
     const row = db.prepare('SELECT * FROM reparations WHERE id = ?').get(id) as Record<string, unknown> | undefined
     if (row) enqueueSync('reparations', 'UPDATE', row)
     return result
+  })
+
+  ipcMain.handle('reparations:finalize', (_e, id: string, totalFinal: number) => {
+    const finalPrice = money3(totalFinal)
+    if (finalPrice <= 0) return { success: false, error: 'Le prix final doit être supérieur à zéro' }
+    const rep = db.prepare(`SELECT id, main_oeuvre FROM reparations WHERE id = ?`).get(id) as { id: string; main_oeuvre?: number } | undefined
+    if (!rep) return { success: false, error: 'Réparation introuvable' }
+    const benefice = money3(finalPrice - money3(rep.main_oeuvre))
+    const now = new Date().toISOString()
+    db.prepare(`UPDATE reparations SET total_final=?, total_estime=?, benefice=?, statut='TERMINE', updated_at=? WHERE id=?`)
+      .run(finalPrice, finalPrice, benefice, now, id)
+    const row = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown>
+    addActivityLog({ action: 'REPAIR_FINALIZED', details: { id, total_final: finalPrice, benefice }, montant: finalPrice })
+    enqueueSync('reparations', 'UPDATE', row)
+    return { success: true, benefice }
   })
 
   ipcMain.handle('reparations:getPieces', (_e, repId) => {

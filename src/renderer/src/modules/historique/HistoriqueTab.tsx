@@ -99,6 +99,7 @@ export default function HistoriqueTab() {
   const [venteLignes, setVenteLignes] = useState<Record<string, LigneVente[]>>({})
   const [expandedRep, setExpandedRep] = useState<string | null>(null)
   const [updatingStatut, setUpdatingStatut] = useState<string | null>(null)
+  const [finalizeRepair, setFinalizeRepair] = useState<Reparation | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
@@ -189,6 +190,11 @@ export default function HistoriqueTab() {
   }
 
   const updateStatut = async (repId: string, statut: StatutRep) => {
+    if (statut === 'TERMINE') {
+      const repair = reparations.find(r => r.id === repId)
+      if (repair) setFinalizeRepair(repair)
+      return
+    }
     setUpdatingStatut(repId)
     await runAction('Mise à jour réparation', async () => {
       await api.reparationsUpdateStatut(repId, statut)
@@ -537,6 +543,13 @@ export default function HistoriqueTab() {
           onConfirm={(motif) => handleCancelVente(cancelTarget, motif)}
         />
       )}
+      {finalizeRepair && (
+        <FinalizeRepairModal
+          repair={finalizeRepair}
+          onClose={() => setFinalizeRepair(null)}
+          onSaved={() => { setFinalizeRepair(null); void load() }}
+        />
+      )}
       {/* New Document Modal */}
       {showNewDoc && (
         <NewDocumentModal
@@ -695,9 +708,57 @@ function VentesTable({
   )
 }
 
+function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation; onClose: () => void; onSaved: () => void }) {
+  const initialPrice = Number(repair.total_estime) > 0 ? Number(repair.total_estime).toFixed(3) : ''
+  const [price, setPrice] = useState(initialPrice)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const finalPrice = parseFloat(price.replace(',', '.')) || 0
+  const benefit = finalPrice - Number(repair.main_oeuvre || 0)
+
+  const save = async () => {
+    if (finalPrice <= 0) { setError('Saisissez un prix final supérieur à zéro'); return }
+    const ok = await runAction('Finalisation réparation', async () => {
+      const result = await api.reparationsFinalize(repair.id, finalPrice)
+      if (!result?.success) throw new Error(result?.error || 'Finalisation impossible')
+    }, { setSaving, onError: msg => setError(msg.replace(/^Finalisation réparation : /, '')), successMessage: 'Réparation terminée et bénéfice calculé' })
+    if (ok) onSaved()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[150] bg-black/50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div><h3 className="font-bold">Terminer la réparation</h3><p className="text-xs text-text-muted mt-0.5">{repair.numero} · {repair.client_nom || 'Client'}</p></div>
+          <button type="button" onClick={onClose} disabled={saving}><X size={17} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Prix final client (TND)</label>
+            <input autoFocus inputMode="decimal" value={price} onFocus={e => e.currentTarget.select()}
+              onChange={e => { setPrice(e.target.value.replace(/[^0-9.,]/g, '')); setError('') }}
+              className="w-full rounded-xl border border-accent-400 px-4 py-3 text-xl font-price font-bold outline-none focus:ring-2 focus:ring-accent-300" placeholder="0.000" />
+          </div>
+          <div className="rounded-xl bg-muted p-3 text-sm space-y-1">
+            <div className="flex justify-between"><span className="text-text-muted">Coût des pièces</span><span className="font-price">{formatPrice(repair.main_oeuvre || 0)}</span></div>
+            <div className={cn('flex justify-between font-bold border-t border-border pt-1', benefit >= 0 ? 'text-success' : 'text-danger')}>
+              <span>Bénéfice</span><span className="font-price">{benefit >= 0 ? '+' : ''}{formatPrice(benefit)}</span>
+            </div>
+          </div>
+          {error && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
+        </div>
+        <div className="flex gap-2 border-t border-border px-5 py-4">
+          <button type="button" onClick={onClose} disabled={saving} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Fermer</button>
+          <button type="button" onClick={() => void save()} disabled={saving || finalPrice <= 0} className="flex-1 rounded-xl bg-accent-500 py-2.5 font-bold disabled:opacity-50">{saving ? 'Enregistrement…' : 'Terminer'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Réparations Table ────────────────────────────────────────────────────────
 
-const STATUTS: StatutRep[] = ['EN_ATTENTE', 'EN_COURS', 'TERMINE', 'RENDU', 'ANNULE']
+const STATUTS: StatutRep[] = ['EN_ATTENTE', 'EN_COURS', 'TERMINE', 'RENDU']
 
 function ReparationsTable({
   reparations,
@@ -712,18 +773,59 @@ function ReparationsTable({
   updatingStatut: string | null
   onUpdateStatut: (id: string, statut: StatutRep) => void
 }) {
-  if (reparations.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 text-text-muted">
-        <Wrench size={36} className="mb-3 opacity-30" />
-        <p className="font-medium">Aucune réparation sur cette période</p>
-      </div>
-    )
-  }
+  const [searchRepairs, setSearchRepairs] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [deviceFilter, setDeviceFilter] = useState('all')
+
+  const query = searchRepairs.trim().toLowerCase()
+  const filteredRepairs = reparations.filter(r => {
+    const matchesSearch = !query || [r.numero, r.client_nom, r.client_tel, r.marque, r.modele, r.description_panne]
+      .some(value => String(value ?? '').toLowerCase().includes(query))
+    const matchesStatus = statusFilter === 'all' || r.statut === statusFilter
+    const matchesDevice = deviceFilter === 'all' || r.type_appareil === deviceFilter
+    return matchesSearch && matchesStatus && matchesDevice
+  })
+
+  const inProgress = reparations.filter(r => r.statut === 'EN_ATTENTE' || r.statut === 'EN_COURS').length
+  const completed = reparations.filter(r => r.statut === 'TERMINE' || r.statut === 'RENDU').length
 
   const toggle = (id: string) => setExpandedRep(expandedRep === id ? null : id)
 
   return (
+    <div className="p-4 space-y-4 bg-slate-50/60 min-h-full">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Total réparations</div>
+          <div className="mt-1 text-2xl font-bold text-slate-900">{reparations.length}</div>
+        </div>
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-600">En cours</div>
+          <div className="mt-1 text-2xl font-bold text-blue-900">{inProgress}</div>
+        </div>
+        <div className="rounded-xl border border-green-200 bg-green-50 p-4 shadow-sm">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-green-600">Terminées</div>
+          <div className="mt-1 text-2xl font-bold text-green-900">{completed}</div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="flex flex-col lg:flex-row gap-3 p-4 border-b border-slate-200">
+          <div className="relative flex-1">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={searchRepairs} onChange={e => setSearchRepairs(e.target.value)}
+              placeholder="Rechercher nom, téléphone, numéro ou appareil…"
+              className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-200" />
+          </div>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none">
+            <option value="all">Tous les statuts</option>
+            {STATUTS.map(s => <option key={s} value={s}>{STATUT_CONFIG[s].label}</option>)}
+          </select>
+          <select value={deviceFilter} onChange={e => setDeviceFilter(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none">
+            <option value="all">Tous les appareils</option>
+            <option value="SMARTPHONE">Smartphone</option><option value="PC">PC</option><option value="IMPRIMANTE">Imprimante</option><option value="SCOOTER">Scooter</option>
+          </select>
+        </div>
+        <div className="overflow-x-auto">
     <table className="w-full text-sm">
       <thead className="sticky top-0 bg-muted border-b border-border z-10">
         <tr>
@@ -738,13 +840,14 @@ function ReparationsTable({
         </tr>
       </thead>
       <tbody>
-        {reparations.map(r => {
+        {filteredRepairs.map(r => {
           const sc = STATUT_CONFIG[r.statut as StatutRep] || STATUT_CONFIG.EN_ATTENTE
+          const deviceIcon = r.type_appareil === 'PC' ? '💻' : r.type_appareil === 'SCOOTER' ? '🛵' : r.type_appareil === 'IMPRIMANTE' ? '🖨️' : '📱'
           return (
             <Fragment key={r.id}>
               <tr
                 onClick={() => toggle(r.id)}
-                className="border-b border-border hover:bg-muted/50 cursor-pointer transition-colors"
+                className="border-b border-slate-100 hover:bg-amber-50/50 cursor-pointer transition-colors"
               >
                 <td className="px-4 py-2.5 font-mono text-xs font-semibold text-text-secondary">{r.numero}</td>
                 <td className="px-4 py-2.5 text-xs text-text-secondary">{formatDate(r.created_at, 'dd/MM/yy HH:mm')}</td>
@@ -753,10 +856,10 @@ function ReparationsTable({
                   {r.client_tel && <div className="text-xs text-text-muted font-mono">{r.client_tel}</div>}
                 </td>
                 <td className="px-4 py-2.5">
-                  <div className="text-xs font-medium">{r.type_appareil}</div>
-                  {(r.marque || r.modele) && (
-                    <div className="text-xs text-text-muted">{[r.marque, r.modele].filter(Boolean).join(' ')}</div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-base">{deviceIcon}</span>
+                    <div><div className="text-xs font-semibold">{[r.marque, r.modele].filter(Boolean).join(' ') || r.type_appareil}</div><div className="text-[10px] text-text-muted">{r.type_appareil}</div></div>
+                  </div>
                 </td>
                 <td className="px-4 py-2.5 text-xs text-text-secondary max-w-[180px] truncate">{r.description_panne}</td>
                 <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
@@ -776,27 +879,27 @@ function ReparationsTable({
                     </select>
                   </div>
                 </td>
-                <td className="px-4 py-2.5 text-right font-price font-bold text-sm">{formatPrice(r.total_estime)}</td>
+                <td className="px-4 py-2.5 text-right font-price font-bold text-sm">{Number(r.total_final || r.total_estime) > 0 ? formatPrice(r.total_final || r.total_estime) : '—'}</td>
                 <td className="px-4 py-2.5 text-center text-text-muted">
                   {expandedRep === r.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </td>
               </tr>
               {expandedRep === r.id && (
-                <tr className="bg-accent-50">
+                <tr className="bg-amber-50/70">
                   <td colSpan={8} className="px-6 py-3">
                     <div className="text-xs font-semibold text-text-secondary mb-2 flex items-center gap-1">
                       <Eye size={12} /> Détail de la réparation
                     </div>
-                    <div className="grid grid-cols-3 gap-4 text-xs">
-                      <div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      <div className="rounded-lg bg-white border border-amber-100 p-3">
                         <div className="text-text-muted mb-1">Description panne</div>
                         <div className="font-medium">{r.description_panne}</div>
                       </div>
-                      <div>
+                      <div className="rounded-lg bg-white border border-amber-100 p-3">
                         <div className="text-text-muted mb-1">Opérateur</div>
                         <div className="font-medium">{r.operateur_nom || '—'}</div>
                       </div>
-                      <div className="text-right">
+                      <div className="rounded-lg bg-white border border-amber-100 p-3 text-right">
                         <div className="flex justify-between font-price">
                           <span className="text-text-muted">Pièces (M.O.):</span>
                           <span>{formatPrice(r.main_oeuvre)}</span>
@@ -809,7 +912,7 @@ function ReparationsTable({
                           <span>Total client:</span>
                           <span>{formatPrice(r.total_final ?? r.total_estime)}</span>
                         </div>
-                        {r.benefice !== undefined && (
+                        {(r.statut === 'TERMINE' || r.statut === 'RENDU') && r.benefice !== undefined && (
                           <div className={`flex justify-between font-price font-bold ${(r.benefice ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                             <span>Bénéfice:</span>
                             <span>{(r.benefice ?? 0) >= 0 ? '+' : ''}{formatPrice(r.benefice ?? 0)}</span>
@@ -823,8 +926,15 @@ function ReparationsTable({
             </Fragment>
           )
         })}
+        {filteredRepairs.length === 0 && (
+          <tr><td colSpan={8} className="px-6 py-12 text-center text-sm text-text-muted"><Wrench size={28} className="mx-auto mb-2 opacity-30" />Aucune réparation ne correspond à cette recherche.</td></tr>
+        )}
       </tbody>
     </table>
+        </div>
+        <div className="border-t border-slate-200 px-4 py-2 text-right text-xs text-slate-500">{filteredRepairs.length} résultat{filteredRepairs.length !== 1 ? 's' : ''}</div>
+      </div>
+    </div>
   )
 }
 
