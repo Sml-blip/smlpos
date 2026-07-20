@@ -1,6 +1,6 @@
 export type TypeFacturation = 'F' | 'NF'
 export type ModePaiement = 'ESPECES' | 'CARTE' | 'CHEQUE' | 'MIXTE'
-export type StatutReparation = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'RENDU' | 'ANNULE'
+export type StatutReparation = 'EN_ATTENTE' | 'DIAGNOSTIC' | 'DEVIS' | 'ATTENTE_PIECES' | 'EN_COURS' | 'TERMINE' | 'NON_REPARABLE' | 'RENDU' | 'ANNULE'
 export type TypeAppareil = 'PC' | 'SCOOTER' | 'SMARTPHONE' | 'IMPRIMANTE'
 export type StatutPaiement = 'EN_ATTENTE' | 'PARTIEL' | 'PAYE' | 'EN_RETARD'
 
@@ -150,6 +150,8 @@ export interface LigneVente {
 export interface Reparation {
   id: string
   numero: string
+  repair_token?: string
+  estimated_completion?: string
   shift_id?: string
   operateur_nom?: string
   client_nom?: string

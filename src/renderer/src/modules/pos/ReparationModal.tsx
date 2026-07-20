@@ -13,12 +13,12 @@ const api = window.api
 function printFicheReparation(data: {
   numero: string; clientNom: string; clientTel: string
   typeAppareil: string; marque: string; modele: string
-  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; prix_unitaire: number; destock: boolean }[]
+  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; destock: boolean }[]
   piecesAchat: number; totalFinal: number; acompte: number; benefice: number
 }) {
   const dateStr = new Date().toLocaleDateString('fr-TN')
   const lignesPieces = data.pieces.map(p =>
-    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_unitaire.toFixed(3)}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
+    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
   ).join('')
   const html = `<!DOCTYPE html><html><head><title>Fiche Réparation ${data.numero}</title>
   <style>@page{size:A4;margin:15mm} body{font-family:Arial,sans-serif;font-size:12px}
@@ -28,13 +28,13 @@ function printFicheReparation(data: {
   <p>Date: ${dateStr} · Client: ${data.clientNom} · Tél: ${data.clientTel}</p>
   <p>Appareil: ${data.typeAppareil} ${data.marque} ${data.modele}</p>
   <p><b>Panne:</b> ${data.panne}</p>
-  <table><thead><tr><th>Pièce</th><th>Qté</th><th>Prix client</th><th>PU achat</th><th>Total achat</th></tr></thead><tbody>
+  <table><thead><tr><th>Pièce</th><th>Qté</th><th>Prix achat</th><th>Total achat</th></tr></thead><tbody>
   ${lignesPieces}
-  <tr class="total"><td colspan="4">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
-  <tr class="total"><td colspan="4">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
-  ${data.acompte > 0 ? `<tr><td colspan="4">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
-  ${data.acompte > 0 ? `<tr class="total"><td colspan="4">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
-  <tr class="total"><td colspan="4">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
+  <tr class="total"><td colspan="3">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
+  <tr class="total"><td colspan="3">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
+  ${data.acompte > 0 ? `<tr><td colspan="3">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
+  ${data.acompte > 0 ? `<tr class="total"><td colspan="3">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
+  <tr class="total"><td colspan="3">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
   </tbody></table></body></html>`
   void printLabelHtml(html, 'A4')
 }
@@ -46,6 +46,13 @@ const APPAREILS: { id: TypeAppareil; label: string; icon: React.ReactNode }[] = 
   { id: 'IMPRIMANTE', label: 'Imprimante', icon: <PrinterIcon size={16} /> },
 ]
 
+const PANNES: Record<TypeAppareil, string[]> = {
+  SMARTPHONE: ['Afficheur / Écran', 'Connecteur de charge', 'Micro', 'Haut-parleur', 'Carte de charge', 'Batterie', 'Caméra avant / arrière', 'Bouton power / volume', 'Carte mère', 'Réseau / Signal', 'Wi-Fi / Bluetooth', 'Oxydation / Eau', 'Flash / FRP', 'Autre'],
+  PC: ['Écran cassé / LCD', 'Clavier défectueux', 'Batterie faible / HS', 'Chargeur ne fonctionne pas', 'Port de charge', 'Disque dur / SSD', 'RAM défectueuse', 'Surchauffe', 'Ventilateur', 'Carte mère', 'Windows ne démarre pas', 'Virus / lenteur', 'Formatage + Windows', 'Autre'],
+  IMPRIMANTE: ['Encre non détectée', 'Cartouche vide', 'Bourrage papier', "Tête d'impression", 'Impression pâle', 'Connectivité Wi-Fi', 'Tambour', 'Unité de chauffe', 'Scanner ne fonctionne pas', 'Maintenance / nettoyage', 'Autre'],
+  SCOOTER: ['Batterie ne charge pas', 'Autonomie faible', "Scooter ne s'allume pas", 'Moteur ne fonctionne pas', 'Vitesse faible', 'Problème de frein', 'Pneu crevé', 'Écran ne fonctionne pas', 'Contrôleur', 'Chargeur ne fonctionne pas', 'Autre'],
+}
+
 interface PieceInput {
   id: string
   produit_id?: string
@@ -54,7 +61,6 @@ interface PieceInput {
   prix_achat: number
   prix_unitaire: number
   prix_achat_input?: string
-  prix_unitaire_input?: string
   destock_stock: boolean
   type: 'F' | 'NF'
   stock_actuel?: number
@@ -71,6 +77,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [marque, setMarque] = useState('')
   const [modele, setModele] = useState('')
   const [panne, setPanne] = useState('')
+  const [customPanne, setCustomPanne] = useState('')
+  const [estimatedCompletion, setEstimatedCompletion] = useState('')
   const [pieces, setPieces] = useState<PieceInput[]>([])
   const [acompte, setAcompte] = useState('')
   const [totalFinal, setTotalFinal] = useState('')
@@ -78,7 +86,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   const [showInventoryPicker, setShowInventoryPicker] = useState(false)
 
   const piecesAchat = pieces.reduce((s, p) => s + p.quantite * p.prix_achat, 0)
-  const piecesClientTotal = pieces.reduce((s, p) => s + p.quantite * p.prix_unitaire, 0)
   const totalFinalNum = parseMoney(totalFinal)
   const acompteNum = parseMoney(acompte)
   const benefice = totalFinalNum - piecesAchat
@@ -91,9 +98,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         designation: p.nom,
         quantite: 1,
         prix_achat: p.prix_achat ?? 0,
-        prix_unitaire: p.prix_vente ?? 0,
+        prix_unitaire: 0,
         prix_achat_input: formatMoneyInput(p.prix_achat ?? 0),
-        prix_unitaire_input: formatMoneyInput(p.prix_vente ?? 0),
         destock_stock: false,
         type: p.type,
         stock_actuel: p.stock_actuel,
@@ -106,7 +112,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         prix_achat: 0,
         prix_unitaire: 0,
         prix_achat_input: '',
-        prix_unitaire_input: '',
         destock_stock: false,
         type: 'NF',
       }])
@@ -118,7 +123,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
   }
 
   const validPieces = pieces.every(p => p.designation.trim() && p.quantite > 0 && p.prix_achat >= 0)
-  const canSave = !!clientForm.nom.trim() && !!clientForm.tel.trim() && !!panne.trim() && validPieces
+  const panneFinale = panne === 'Autre' ? customPanne.trim() : panne.trim()
+  const canSave = !!clientForm.nom.trim() && !!clientForm.tel.trim() && !!panneFinale && validPieces
 
   const handleSave = async () => {
     if (!canSave) return
@@ -135,6 +141,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
       const rep = {
         id: repId,
         numero,
+        repair_token: numero,
         shift_id: currentShift?.id ?? null,
         operateur_nom: currentShift?.operateur_nom ?? null,
         client_nom: clientForm.nom || null,
@@ -142,13 +149,14 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         type_appareil: typeAppareil,
         marque: marque || null,
         modele: modele || null,
-        description_panne: panne,
+        description_panne: panneFinale,
         main_oeuvre: mainOeuvre,
         acompte: acompteNum,
         total_estime: totalFinalNum,
         total_final: 0,
         benefice: 0,
         statut: 'EN_ATTENTE',
+        estimated_completion: estimatedCompletion ? new Date(estimatedCompletion).toISOString() : null,
         created_at: now,
         updated_at: now,
       }
@@ -202,7 +210,22 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
 
           <div className="px-4 -mt-2">
             <label className="block text-xs font-semibold text-text-secondary mb-1.5">Description de la panne *</label>
-            <textarea value={panne} onChange={e => setPanne(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm h-20 resize-none" />
+            <select value={panne} onChange={e => setPanne(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="">Sélectionnez un problème…</option>
+              {PANNES[typeAppareil].map(problem => <option key={problem} value={problem}>{problem}</option>)}
+            </select>
+            {panne === 'Autre' && <textarea value={customPanne} onChange={e => setCustomPanne(e.target.value)} className="mt-2 w-full border border-border rounded-lg px-3 py-2 text-sm h-20 resize-none" placeholder="Décrivez le problème…" autoFocus />}
+          </div>
+
+          <div className="px-4 -mt-2">
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Temps estimé (optionnel)</label>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {[['2 h', 2], ['4 h', 4], ['Demain', 24], ['2 jours', 48], ['1 semaine', 168]].map(([label, hours]) => (
+                <button key={String(label)} type="button" onClick={() => { const d = new Date(Date.now() + Number(hours) * 3600000); setEstimatedCompletion(new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)) }}
+                  className="rounded-lg border border-border bg-muted px-3 py-1.5 text-xs font-semibold hover:border-accent-500 hover:bg-accent-50">{label}</button>
+              ))}
+            </div>
+            <input type="datetime-local" value={estimatedCompletion} onChange={e => setEstimatedCompletion(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
           </div>
 
           <div className="rounded-xl border border-border p-4">
@@ -224,8 +247,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
                   className="flex-1 min-w-[100px] border border-border rounded-lg px-2 py-1.5 text-sm" placeholder="Désignation" />
                 <input type="text" inputMode="numeric" value={p.quantite} onChange={e => updatePiece(i, { quantite: parseInt(e.target.value.replace(/\D/g, '')) || 1 })}
                   className="w-11 border border-border rounded-lg px-2 py-1.5 text-sm text-center" title="Qté" />
-                <input type="text" inputMode="decimal" value={p.prix_unitaire_input ?? formatMoneyInput(p.prix_unitaire)} onFocus={e => e.currentTarget.select()} onChange={e => { const val = sanitizeMoneyInput(e.target.value); updatePiece(i, { prix_unitaire_input: val, prix_unitaire: parseMoney(val) }) }}
-                  className="w-24 border border-border rounded-lg px-2 py-1.5 text-sm font-price" title="Prix pièce client (TND)" placeholder="Prix client" />
                 <input type="text" inputMode="decimal" value={p.prix_achat_input ?? formatMoneyInput(p.prix_achat)}
                   onFocus={e => e.currentTarget.select()}
                   onChange={e => { const val = sanitizeMoneyInput(e.target.value); updatePiece(i, { prix_achat_input: val, prix_achat: parseMoney(val) }) }}
@@ -244,18 +265,6 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {pieces.length > 0 && (
-              <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
-                <div className="text-xs text-blue-900">
-                  <span className="font-semibold">Suggested client total from pieces:</span>{' '}
-                  <strong className="font-price">{formatPrice(piecesClientTotal)}</strong>
-                </div>
-                <button type="button" onClick={() => setTotalFinal(piecesClientTotal.toFixed(3))}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs font-bold hover:bg-blue-100">
-                  Use this total
-                </button>
-              </div>
-            )}
             <div>
               <label className="block text-xs font-semibold text-text-secondary mb-1.5">Pièces achat (TND)</label>
               <div className="border border-border bg-muted rounded-lg px-3 py-2 font-price text-sm">{formatPrice(piecesAchat)}</div>
@@ -282,8 +291,8 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Fermer</button>
           <button type="button" onClick={() => printFicheReparation({
-            numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne,
-            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, prix_unitaire: p.prix_unitaire, destock: p.destock_stock })),
+            numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne: panneFinale,
+            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, destock: p.destock_stock })),
             piecesAchat, totalFinal: totalFinalNum, acompte: acompteNum, benefice,
           })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">
             <PrinterIcon size={14} /> Aperçu

@@ -23,13 +23,17 @@ const HISTORIQUE_FROM_KEY = 'smlpos_historique_from'
 const HISTORIQUE_TO_KEY = 'smlpos_historique_to'
 
 type SubTab = 'ventes' | 'reparations' | 'documents' | 'journal'
-type StatutRep = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'RENDU' | 'ANNULE'
+type StatutRep = 'EN_ATTENTE' | 'DIAGNOSTIC' | 'DEVIS' | 'ATTENTE_PIECES' | 'EN_COURS' | 'TERMINE' | 'NON_REPARABLE' | 'RENDU' | 'ANNULE'
 
 const STATUT_CONFIG: Record<StatutRep, { label: string; color: string; icon: ReactNode }> = {
   EN_ATTENTE: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800 border border-yellow-200', icon: <Clock size={11} /> },
+  DIAGNOSTIC: { label: 'Diagnostic', color: 'bg-purple-100 text-purple-800 border border-purple-200', icon: <Search size={11} /> },
+  DEVIS: { label: 'Devis', color: 'bg-orange-100 text-orange-800 border border-orange-200', icon: <FileText size={11} /> },
+  ATTENTE_PIECES: { label: 'Attente pièces', color: 'bg-cyan-100 text-cyan-800 border border-cyan-200', icon: <Package size={11} /> },
   EN_COURS: { label: 'En cours', color: 'bg-blue-100 text-blue-800 border border-blue-200', icon: <RefreshCw size={11} /> },
   TERMINE: { label: 'Terminé', color: 'bg-green-100 text-green-800 border border-green-200', icon: <CheckCircle size={11} /> },
   RENDU: { label: 'Rendu', color: 'bg-gray-100 text-gray-600 border border-gray-200', icon: <Package size={11} /> },
+  NON_REPARABLE: { label: 'Non réparable', color: 'bg-red-100 text-red-700 border border-red-200', icon: <Ban size={11} /> },
   ANNULE: { label: 'Annulé', color: 'bg-red-100 text-red-700 border border-red-200', icon: <X size={11} /> },
 }
 
@@ -758,7 +762,7 @@ function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation;
 
 // ─── Réparations Table ────────────────────────────────────────────────────────
 
-const STATUTS: StatutRep[] = ['EN_ATTENTE', 'EN_COURS', 'TERMINE', 'RENDU']
+const STATUTS: StatutRep[] = ['EN_ATTENTE', 'DIAGNOSTIC', 'DEVIS', 'ATTENTE_PIECES', 'EN_COURS', 'TERMINE', 'NON_REPARABLE', 'RENDU']
 
 function ReparationsTable({
   reparations,
@@ -786,7 +790,7 @@ function ReparationsTable({
     return matchesSearch && matchesStatus && matchesDevice
   })
 
-  const inProgress = reparations.filter(r => r.statut === 'EN_ATTENTE' || r.statut === 'EN_COURS').length
+  const inProgress = reparations.filter(r => ['EN_ATTENTE', 'DIAGNOSTIC', 'DEVIS', 'ATTENTE_PIECES', 'EN_COURS'].includes(r.statut)).length
   const completed = reparations.filter(r => r.statut === 'TERMINE' || r.statut === 'RENDU').length
 
   const toggle = (id: string) => setExpandedRep(expandedRep === id ? null : id)

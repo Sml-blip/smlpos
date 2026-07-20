@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { seedProductsIfEmpty } from './seedProducts'
 import { applyPendingWipeBeforeDbOpen, getActiveDbPath, recoverLegacyDatabaseIfNeeded } from './userDataWipe'
 import { migrateLegacyDataToCanonical } from './dataPaths'
@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.9.7'
+export const SCHEMA_VERSION = '1.9.8'
 
 export function initDatabase() {
   const db = getDb()
@@ -731,6 +731,74 @@ export function initDatabase() {
 
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
+
+  // SMLFIXv2 repair compatibility + one-time legacy JSON import.
+  try { db.exec(`ALTER TABLE reparations ADD COLUMN repair_token TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE reparations ADD COLUMN estimated_completion TEXT`) } catch { /* exists */ }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reparation_status_history (
+      id TEXT PRIMARY KEY,
+      reparation_id TEXT NOT NULL REFERENCES reparations(id) ON DELETE CASCADE,
+      statut TEXT NOT NULL,
+      source_status TEXT,
+      note TEXT,
+      changed_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `)
+
+  const legacyImportDone = db.prepare(`SELECT value FROM app_settings WHERE key = 'smlfixv2_json_import_v1'`).get() as { value?: string } | undefined
+  const downloadsDir = join(process.env.USERPROFILE || '', 'Downloads')
+  const legacyRepairsPath = join(downloadsDir, 'repairs_export.json')
+  const legacyHistoryPath = join(downloadsDir, 'status_history_export.json')
+  if (!legacyImportDone && existsSync(legacyRepairsPath) && existsSync(legacyHistoryPath)) {
+    const legacyRepairs = JSON.parse(readFileSync(legacyRepairsPath, 'utf8')) as Array<Record<string, unknown>>
+    const legacyStatusHistory = JSON.parse(readFileSync(legacyHistoryPath, 'utf8')) as Array<Record<string, unknown>>
+    const repairStatus = (status: string) => ({
+      new: 'EN_ATTENTE', en_cours: 'EN_COURS', diag: 'DIAGNOSTIC', quoting: 'DEVIS',
+      waiting_parts: 'ATTENTE_PIECES', termine: 'TERMINE', non_reparable: 'NON_REPARABLE',
+    }[status] ?? 'EN_COURS')
+    const deviceType = (type: string) => ({ phone: 'SMARTPHONE', pc: 'PC', printer: 'IMPRIMANTE', scooter: 'SCOOTER' }[type] ?? 'SMARTPHONE')
+    const cleanLegacyText = (value: unknown) => {
+      const text = String(value ?? '').trim()
+      if (!/[ÃØÙ]/.test(text)) return text
+      try { return Buffer.from(text, 'latin1').toString('utf8') } catch { return text }
+    }
+    const insertRepair = db.prepare(`
+      INSERT OR IGNORE INTO reparations
+        (id, numero, repair_token, client_nom, client_tel, type_appareil, marque, modele,
+         description_panne, main_oeuvre, acompte, total_estime, total_final, statut,
+         estimated_completion, created_at, updated_at)
+      VALUES
+        (@id, @numero, @repair_token, @client_nom, @client_tel, @type_appareil, @marque, @modele,
+         @description_panne, 0, 0, 0, NULL, @statut, @estimated_completion, @created_at, @updated_at)
+    `)
+    const insertHistory = db.prepare(`
+      INSERT OR IGNORE INTO reparation_status_history
+        (id, reparation_id, statut, source_status, note, changed_by, created_at)
+      VALUES (@id, @reparation_id, @statut, @source_status, @note, @changed_by, @created_at)
+    `)
+    db.transaction(() => {
+      for (const item of legacyRepairs) {
+        const brandModel = cleanLegacyText(item.brand_model)
+        insertRepair.run({
+          id: String(item.id), numero: String(item.repair_token), repair_token: String(item.repair_token),
+          client_nom: cleanLegacyText(item.client_name), client_tel: cleanLegacyText(item.client_phone),
+          type_appareil: deviceType(String(item.device_type)), marque: brandModel, modele: '',
+          description_panne: cleanLegacyText(item.problem_description), statut: repairStatus(String(item.status)),
+          estimated_completion: item.estimated_completion || null, created_at: item.created_at, updated_at: item.updated_at,
+        })
+      }
+      for (const item of legacyStatusHistory) {
+        insertHistory.run({
+          id: String(item.id), reparation_id: String(item.repair_id), statut: repairStatus(String(item.status)),
+          source_status: String(item.status), note: cleanLegacyText(item.note), changed_by: item.changed_by || null,
+          created_at: item.created_at,
+        })
+      }
+      db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('smlfixv2_json_import_v1', 'done', datetime('now'))`).run()
+    })()
+  }
 
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN updated_at TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN stock_applied INTEGER DEFAULT 0`) } catch { /* already exists */ }

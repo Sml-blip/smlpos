@@ -1135,6 +1135,7 @@ function setupIpcHandlers() {
     const normalizedRep = {
       shift_id: null, operateur_nom: null, client_nom: null, client_tel: null,
       marque: null, modele: null, total_final: 0, benefice: 0,
+      repair_token: null, estimated_completion: null,
       technicien: null, notes_technicien: null,
       created_at: now, updated_at: now,
       ...rep,
@@ -1146,10 +1147,10 @@ function setupIpcHandlers() {
     const insertRep = db.prepare(`
       INSERT INTO reparations (id, numero, shift_id, operateur_nom, client_nom, client_tel,
         type_appareil, marque, modele, description_panne, main_oeuvre, acompte,
-        total_estime, total_final, benefice, statut, created_at, updated_at)
+        total_estime, total_final, benefice, statut, repair_token, estimated_completion, created_at, updated_at)
       VALUES (@id, @numero, @shift_id, @operateur_nom, @client_nom, @client_tel,
         @type_appareil, @marque, @modele, @description_panne, @main_oeuvre, @acompte,
-        @total_estime, @total_final, @benefice, @statut, @created_at, @updated_at)
+        @total_estime, @total_final, @benefice, @statut, @repair_token, @estimated_completion, @created_at, @updated_at)
     `)
     const insertPiece = db.prepare(`
       INSERT INTO pieces_reparation (id, reparation_id, produit_id, designation, quantite, prix_unitaire, prix_achat, destock_stock, type)
