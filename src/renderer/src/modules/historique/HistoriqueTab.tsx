@@ -764,6 +764,39 @@ function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation;
 
 const STATUTS: StatutRep[] = ['EN_ATTENTE', 'DIAGNOSTIC', 'DEVIS', 'ATTENTE_PIECES', 'EN_COURS', 'TERMINE', 'NON_REPARABLE', 'RENDU']
 
+function RepairTimeBar({ repair }: { repair: Reparation }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  if (!repair.estimated_completion || ['TERMINE', 'RENDU', 'NON_REPARABLE', 'ANNULE'].includes(repair.statut)) return null
+  const start = new Date(repair.created_at).getTime()
+  const end = new Date(repair.estimated_completion).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
+  const remaining = end - now
+  const progress = Math.max(0, Math.min(100, ((now - start) / (end - start)) * 100))
+  const overdue = remaining < 0
+  const urgent = !overdue && remaining <= (end - start) * 0.2
+  const absMinutes = Math.ceil(Math.abs(remaining) / 60000)
+  const days = Math.floor(absMinutes / 1440)
+  const hours = Math.floor((absMinutes % 1440) / 60)
+  const minutes = absMinutes % 60
+  const timeLabel = [days ? `${days}j` : '', hours ? `${hours}h` : '', `${minutes}min`].filter(Boolean).join(' ')
+  const barColor = overdue ? 'bg-red-500' : urgent ? 'bg-orange-500' : 'bg-green-500'
+  return (
+    <div className="px-4 py-2 bg-white">
+      <div className="mb-1 flex items-center justify-between text-[10px] font-semibold">
+        <span className={overdue ? 'text-red-700' : urgent ? 'text-orange-700' : 'text-green-700'}>{overdue ? `En retard de ${timeLabel}` : `Temps restant : ${timeLabel}`}</span>
+        <span className="text-text-muted">Échéance {formatDate(repair.estimated_completion, 'dd/MM/yy HH:mm')}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+        <div className={`h-full rounded-full ${barColor} transition-all duration-1000 ease-linear ${urgent || overdue ? 'animate-pulse' : ''}`} style={{ width: `${overdue ? 100 : Math.max(2, progress)}%` }} />
+      </div>
+    </div>
+  )
+}
+
 function ReparationsTable({
   reparations,
   expandedRep,
@@ -888,6 +921,9 @@ function ReparationsTable({
                   {expandedRep === r.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </td>
               </tr>
+              {r.estimated_completion && (
+                <tr className="border-b border-slate-100"><td colSpan={8} className="p-0"><RepairTimeBar repair={r} /></td></tr>
+              )}
               {expandedRep === r.id && (
                 <tr className="bg-amber-50/70">
                   <td colSpan={8} className="px-6 py-3">

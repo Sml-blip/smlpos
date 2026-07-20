@@ -1,4 +1,4 @@
-import { Moon, Sun, Contrast } from 'lucide-react'
+import { Moon, Sun, Sparkles } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import {
   AGENT_THEME_OPTIONS,
@@ -13,7 +13,7 @@ import { cn } from '../lib/utils'
 const ICONS: Record<AgentThemeId, typeof Sun> = {
   light: Sun,
   dark: Moon,
-  'high-contrast': Contrast,
+  'material-expressive': Sparkles,
 }
 
 export default function ThemeToggle({ compact = false }: { compact?: boolean }) {

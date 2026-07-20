@@ -69,8 +69,8 @@ export function buildBarcodeLabelHtml(
       })
     : ''
 
-  const namePt = fontPtForBox(layout.name.h, 8)
-  const pricePt = fontPtForBox(layout.price.h, 10)
+  const namePt = fontPtForBox(layout.name.h, 7)
+  const pricePt = fontPtForBox(layout.price.h, 8)
 
   const nameBlock = layout.name.visible
     ? `<div class="el el-name" style="${elementStyle(layout.name)}"><span>${safeName}</span></div>`
@@ -138,18 +138,19 @@ export function buildBarcodeLabelHtml(
     }
     .el-name {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       font-size: ${namePt}pt;
       font-weight: 700;
-      line-height: 1.05;
+      line-height: 1.12;
       word-break: break-word;
     }
     .el-name span {
       display: -webkit-box;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
       width: 100%;
+      padding-top: 0.25mm;
     }
     .el-barcode {
       display: flex;

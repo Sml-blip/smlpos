@@ -215,34 +215,43 @@ input, textarea, select {
   color: var(--text-muted) !important;
 }
 
-/* High-contrast — black accent buttons need white label text */
-[data-agent-theme="high-contrast"] .bg-accent-500,
-[data-agent-theme="high-contrast"] .bg-accent-600,
-[data-agent-theme="high-contrast"] .hover\:bg-accent-600:hover {
-  color: #FFFFFF !important;
-}
+/* Material 3 Expressive: purposeful shape, color, motion, size and containment. */
+[data-agent-theme="material-expressive"] body { letter-spacing: 0.005em; }
 
-[data-agent-theme="high-contrast"] .bg-white,
-[data-agent-theme="high-contrast"] .bg-gray-50,
-[data-agent-theme="high-contrast"] .bg-muted {
-  background-color: var(--card-bg) !important;
-  color: var(--text-primary) !important;
-}
+[data-agent-theme="material-expressive"] .bg-white,
+[data-agent-theme="material-expressive"] .bg-gray-50 { background-color: var(--card-bg) !important; }
 
-[data-agent-theme="high-contrast"] .text-text-primary,
-[data-agent-theme="high-contrast"] .text-text-secondary,
-[data-agent-theme="high-contrast"] .text-text-muted {
-  color: var(--text-primary) !important;
-}
+[data-agent-theme="material-expressive"] .bg-muted,
+[data-agent-theme="material-expressive"] .bg-gray-100 { background-color: var(--bg-muted) !important; }
 
-[data-agent-theme="high-contrast"] input,
-[data-agent-theme="high-contrast"] select,
-[data-agent-theme="high-contrast"] textarea {
+[data-agent-theme="material-expressive"] .bg-accent-50 { background-color: var(--accent-soft) !important; }
+
+[data-agent-theme="material-expressive"] input,
+[data-agent-theme="material-expressive"] select,
+[data-agent-theme="material-expressive"] textarea {
   background-color: var(--input-bg);
-  color: var(--text-primary);
   border-color: var(--border);
+  border-radius: 14px;
 }
 
-[data-agent-theme="high-contrast"] .border-border {
-  border-color: var(--border) !important;
+[data-agent-theme="material-expressive"] button,
+[data-agent-theme="material-expressive"] [role="button"] {
+  transition-duration: 220ms !important;
+  transition-timing-function: cubic-bezier(.2, 0, 0, 1) !important;
 }
+
+[data-agent-theme="material-expressive"] button:not(.rounded-full) { border-radius: 18px; }
+[data-agent-theme="material-expressive"] .rounded-lg { border-radius: 16px !important; }
+[data-agent-theme="material-expressive"] .rounded-xl { border-radius: 22px !important; }
+[data-agent-theme="material-expressive"] .rounded-2xl { border-radius: 28px !important; }
+
+[data-agent-theme="material-expressive"] .shadow-card,
+[data-agent-theme="material-expressive"] .shadow-sm,
+[data-agent-theme="material-expressive"] .shadow-2xl {
+  box-shadow: 0 3px 10px rgba(73, 69, 79, 0.12), 0 1px 3px rgba(73, 69, 79, 0.1) !important;
+}
+
+[data-agent-theme="material-expressive"] .bg-accent-600,
+[data-agent-theme="material-expressive"] .hover\:bg-accent-600:hover { color: #FFFFFF !important; }
+
+[data-agent-theme="material-expressive"] button:active { transform: scale(0.97); }

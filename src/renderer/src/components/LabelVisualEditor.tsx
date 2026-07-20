@@ -164,13 +164,13 @@ export default function LabelVisualEditor({
     let content: React.ReactNode = null
     if (id === 'name') {
       content = (
-        <span style={{ fontSize: `${fontPtForBox(box.h, 8) * scale}pt`, fontWeight: 700, lineHeight: 1.05 }}>
+        <span style={{ fontSize: `${fontPtForBox(box.h, 7) * scale}pt`, fontWeight: 700, lineHeight: 1.12, paddingTop: `${0.25 * scale}mm` }}>
           {displayName}
         </span>
       )
     } else if (id === 'price') {
       content = (
-        <span style={{ fontSize: `${fontPtForBox(box.h, 10) * scale}pt`, fontWeight: 900 }}>
+        <span style={{ fontSize: `${fontPtForBox(box.h, 8) * scale}pt`, fontWeight: 900 }}>
           {priceStr}
         </span>
       )

@@ -1,9 +1,9 @@
-export type AgentThemeId = 'light' | 'dark' | 'high-contrast'
+export type AgentThemeId = 'light' | 'dark' | 'material-expressive'
 
 export const AGENT_THEME_OPTIONS: { id: AgentThemeId; label: string }[] = [
   { id: 'light', label: 'Clair' },
   { id: 'dark', label: 'Sombre' },
-  { id: 'high-contrast', label: 'Contraste élevé' },
+  { id: 'material-expressive', label: 'Material 3 Expressive' },
 ]
 
 const THEME_VARS: Record<AgentThemeId, Record<string, string>> = {
@@ -39,21 +39,21 @@ const THEME_VARS: Record<AgentThemeId, Record<string, string>> = {
     '--alert-bg': '#3D3200',
     '--alert-text': '#FFE082',
   },
-  'high-contrast': {
-    '--bg-primary': '#FFFFFF',
-    '--bg-surface': '#FFFFFF',
-    '--bg-muted': '#EEEEEE',
-    '--card-bg': '#FFFFFF',
-    '--input-bg': '#FFFFFF',
-    '--accent-soft': '#EEEEEE',
-    '--accent-500': '#000000',
-    '--accent-600': '#000000',
-    '--text-primary': '#000000',
-    '--text-secondary': '#1A1A1A',
-    '--text-muted': '#333333',
-    '--border': '#000000',
-    '--alert-bg': '#EEEEEE',
-    '--alert-text': '#000000',
+  'material-expressive': {
+    '--bg-primary': '#FFFBFE',
+    '--bg-surface': '#F7F2FA',
+    '--bg-muted': '#F0E9F4',
+    '--card-bg': '#FFFBFE',
+    '--input-bg': '#FFF7FF',
+    '--accent-soft': '#EADDFF',
+    '--accent-500': '#D0BCFF',
+    '--accent-600': '#6750A4',
+    '--text-primary': '#1D1B20',
+    '--text-secondary': '#49454F',
+    '--text-muted': '#79747E',
+    '--border': '#CAC4D0',
+    '--alert-bg': '#F3EDF7',
+    '--alert-text': '#4A4458',
   },
 }
 

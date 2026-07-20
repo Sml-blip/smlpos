@@ -29,9 +29,9 @@ const BOX_LIMITS: Record<LabelElementId, { minW: number; minH: number; maxH: num
 }
 
 const DEFAULT_H: Record<LabelElementId, number> = {
-  name: 3.1,
+  name: 4.8,
   barcode: 10.2,
-  price: 4.2,
+  price: 3.2,
 }
 
 function maxBoxWidth(contentW: number): number {
@@ -55,8 +55,8 @@ export function defaultVisualLayout(contentW: number, _contentH: number): LabelV
   const inset = LABEL_SAFE_INSET_MM
   return {
     price: { x: inset, y: 0.35, w, h: DEFAULT_H.price, visible: true },
-    name: { x: inset, y: 4.25, w, h: DEFAULT_H.name, visible: true },
-    barcode: { x: inset, y: 8.2, w, h: DEFAULT_H.barcode, visible: true },
+    name: { x: inset, y: 3.55, w, h: DEFAULT_H.name, visible: true },
+    barcode: { x: inset, y: 8.6, w, h: DEFAULT_H.barcode, visible: true },
     showBarcodeText: false,
   }
 }

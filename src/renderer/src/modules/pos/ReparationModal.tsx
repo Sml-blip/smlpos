@@ -13,30 +13,21 @@ const api = window.api
 function printFicheReparation(data: {
   numero: string; clientNom: string; clientTel: string
   typeAppareil: string; marque: string; modele: string
-  panne: string; pieces: { designation: string; quantite: number; prix_achat: number; destock: boolean }[]
-  piecesAchat: number; totalFinal: number; acompte: number; benefice: number
+  panne: string; totalFinal: number
 }) {
   const dateStr = new Date().toLocaleDateString('fr-TN')
-  const lignesPieces = data.pieces.map(p =>
-    `<tr><td>${p.designation}${p.destock ? ' <small>(dégât/déstock)</small>' : ''}</td><td style="text-align:center">${p.quantite}</td><td style="text-align:right">${p.prix_achat.toFixed(3)}</td><td style="text-align:right">${(p.quantite * p.prix_achat).toFixed(3)}</td></tr>`
-  ).join('')
-  const html = `<!DOCTYPE html><html><head><title>Fiche Réparation ${data.numero}</title>
-  <style>@page{size:A4;margin:15mm} body{font-family:Arial,sans-serif;font-size:12px}
-  table{width:100%;border-collapse:collapse;margin-top:10px} th,td{border:1px solid #ddd;padding:5px 8px}
-  th{background:#f5f5f5}.total{font-weight:bold;background:#fffde7}</style></head><body>
-  <h2>Fiche Réparation — ${data.numero}</h2>
-  <p>Date: ${dateStr} · Client: ${data.clientNom} · Tél: ${data.clientTel}</p>
-  <p>Appareil: ${data.typeAppareil} ${data.marque} ${data.modele}</p>
-  <p><b>Panne:</b> ${data.panne}</p>
-  <table><thead><tr><th>Pièce</th><th>Qté</th><th>Prix achat</th><th>Total achat</th></tr></thead><tbody>
-  ${lignesPieces}
-  <tr class="total"><td colspan="3">Pièces achat</td><td style="text-align:right">${data.piecesAchat.toFixed(3)} DT</td></tr>
-  <tr class="total"><td colspan="3">Total client</td><td style="text-align:right">${data.totalFinal.toFixed(3)} DT</td></tr>
-  ${data.acompte > 0 ? `<tr><td colspan="3">Acompte client (TND)</td><td style="text-align:right">${data.acompte.toFixed(3)} DT</td></tr>` : ''}
-  ${data.acompte > 0 ? `<tr class="total"><td colspan="3">Reste à payer</td><td style="text-align:right">${(data.totalFinal - data.acompte).toFixed(3)} DT</td></tr>` : ''}
-  <tr class="total"><td colspan="3">Bénéfice technicien</td><td style="text-align:right">${data.benefice.toFixed(3)} DT</td></tr>
-  </tbody></table></body></html>`
-  void printLabelHtml(html, 'A4')
+  const html = `<!DOCTYPE html><html><head><title>Ticket Réparation ${data.numero}</title>
+  <style>@page{size:80mm auto;margin:4mm}body{font-family:Arial,sans-serif;width:72mm;margin:0;font-size:12px;color:#111}.center{text-align:center}.line{border-top:1px dashed #777;margin:10px 0}.row{margin:6px 0}.label{font-size:10px;color:#666}.value{font-weight:700}.total{font-size:20px;font-weight:800;text-align:center;border:2px solid #111;padding:8px;margin-top:12px}</style></head><body>
+  <h2 class="center">SML POS</h2><div class="center">Ticket de réparation</div><div class="line"></div>
+  <div class="row"><div class="label">N° réparation</div><div class="value">${data.numero}</div></div>
+  <div class="row"><div class="label">Date</div><div class="value">${dateStr}</div></div>
+  <div class="row"><div class="label">Client</div><div class="value">${data.clientNom || '—'}</div></div>
+  <div class="row"><div class="label">Téléphone</div><div class="value">${data.clientTel || '—'}</div></div>
+  <div class="row"><div class="label">Appareil</div><div class="value">${[data.typeAppareil, data.marque, data.modele].filter(Boolean).join(' ')}</div></div>
+  <div class="row"><div class="label">Panne</div><div class="value">${data.panne}</div></div>
+  <div class="total">TOTAL<br>${data.totalFinal.toFixed(3)} DT</div>
+  <div class="line"></div><div class="center">Merci pour votre confiance</div></body></html>`
+  void printLabelHtml(html, '80mm')
 }
 
 const APPAREILS: { id: TypeAppareil; label: string; icon: React.ReactNode }[] = [
@@ -292,8 +283,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl">Fermer</button>
           <button type="button" onClick={() => printFicheReparation({
             numero: 'BROUILLON', clientNom: clientForm.nom, clientTel: clientForm.tel, typeAppareil, marque, modele, panne: panneFinale,
-            pieces: pieces.map(p => ({ designation: p.designation, quantite: p.quantite, prix_achat: p.prix_achat, destock: p.destock_stock })),
-            piecesAchat, totalFinal: totalFinalNum, acompte: acompteNum, benefice,
+            totalFinal: totalFinalNum,
           })} className="px-4 py-2.5 bg-muted border border-border rounded-xl text-sm font-semibold flex items-center gap-1">
             <PrinterIcon size={14} /> Aperçu
           </button>

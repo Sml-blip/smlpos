@@ -748,10 +748,16 @@ export function initDatabase() {
   `)
 
   const legacyImportDone = db.prepare(`SELECT value FROM app_settings WHERE key = 'smlfixv2_json_import_v1'`).get() as { value?: string } | undefined
-  const downloadsDir = join(process.env.USERPROFILE || '', 'Downloads')
-  const legacyRepairsPath = join(downloadsDir, 'repairs_export.json')
-  const legacyHistoryPath = join(downloadsDir, 'status_history_export.json')
-  if (!legacyImportDone && existsSync(legacyRepairsPath) && existsSync(legacyHistoryPath)) {
+  const downloadCandidates = [
+    join(process.env.USERPROFILE || '', 'Downloads'),
+    'C:\\Users\\SML\\Downloads',
+  ]
+  const legacyDownloadsDir = downloadCandidates.find(dir =>
+    existsSync(join(dir, 'repairs_export.json')) && existsSync(join(dir, 'status_history_export.json'))
+  )
+  const legacyRepairsPath = legacyDownloadsDir ? join(legacyDownloadsDir, 'repairs_export.json') : ''
+  const legacyHistoryPath = legacyDownloadsDir ? join(legacyDownloadsDir, 'status_history_export.json') : ''
+  if (!legacyImportDone && legacyDownloadsDir) {
     const legacyRepairs = JSON.parse(readFileSync(legacyRepairsPath, 'utf8')) as Array<Record<string, unknown>>
     const legacyStatusHistory = JSON.parse(readFileSync(legacyHistoryPath, 'utf8')) as Array<Record<string, unknown>>
     const repairStatus = (status: string) => ({
