@@ -1138,7 +1138,8 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
 }
 
 // ── Credit Client Paiement Modal ─────────────────────────────────────────────
-interface ClientMin { id: string; nom: string; telephone?: string; adresse?: string; solde_credit: number }
+interface ClientMin { id: string; nom: string; telephone?: string; adresse?: string; solde_credit: number; organisation_id?: string }
+interface OrganisationMin { id: string; nom: string }
 
 function CreditClientPaiementModal({
   currentShift, onClose, onSuccess,
@@ -1150,23 +1151,24 @@ function CreditClientPaiementModal({
   const [search, setSearch] = useState('')
   const [clients, setClients] = useState<ClientMin[]>([])
   const [selected, setSelected] = useState<ClientMin | null>(null)
+  const [organisations, setOrganisations] = useState<OrganisationMin[]>([])
+  const [organisationId, setOrganisationId] = useState('all')
+  const [showCreateClient, setShowCreateClient] = useState(false)
   const [montant, setMontant] = useState('')
   const [note, setNote] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  useEffect(() => { void loadData('Chargement organisations', () => api.organisationsList(), { silent: true }).then(r => r && setOrganisations(r as OrganisationMin[])) }, [])
   useEffect(() => {
-    const load = async () => {
-      if (search.length >= 2) {
-        const r = await loadData('Recherche clients', () => api.clientsList({ search }), { silent: true })
-        if (r) setClients((r as ClientMin[]).slice(0, 6))
-      } else if (!selected) {
-        const r = await loadData('Chargement clients', () => api.clientsList({}), { silent: true })
-        if (r) setClients((r as ClientMin[]).slice(0, 8))
-      }
-    }
-    load()
-  }, [search, selected])
+    const timer = setTimeout(() => {
+      const filters: Record<string, unknown> = {}
+      if (search.trim()) filters.search = search.trim()
+      if (organisationId !== 'all') filters.organisation_id = organisationId
+      void loadData('Chargement clients', () => api.clientsList(filters), { silent: true }).then(r => r && setClients(r as ClientMin[]))
+    }, search.length >= 2 ? 180 : 0)
+    return () => clearTimeout(timer)
+  }, [search, organisationId])
 
   const montantNum = parseFloat(montant.replace(',', '.')) || 0
 
@@ -1198,6 +1200,7 @@ function CreditClientPaiementModal({
   }
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-2xl w-[420px] animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
@@ -1221,9 +1224,15 @@ function CreditClientPaiementModal({
                   className="flex-1 bg-transparent text-sm outline-none"
                   placeholder="Nom ou téléphone..."
                 />
+                <button type="button" onClick={() => setShowCreateClient(true)} title="Nouveau client" className="p-1 text-accent-700 hover:bg-accent-50 rounded-lg"><Plus size={16}/></button>
               </div>
+              <select value={organisationId} onChange={e => setOrganisationId(e.target.value)} className="w-full mt-2 border border-border rounded-xl px-3 py-2 text-sm bg-white">
+                <option value="all">Toutes les organisations</option>
+                <option value="none">Clients particuliers</option>
+                {organisations.map(o => <option key={o.id} value={o.id}>{o.nom}</option>)}
+              </select>
               <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
-                {clients.filter(c => c.solde_credit > 0).map(c => (
+                {clients.map(c => (
                   <button key={c.id} onClick={() => setSelected(c)}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-accent-50 border border-transparent hover:border-accent-300 text-sm transition-colors">
                     <div className="flex items-center gap-2">
@@ -1236,13 +1245,13 @@ function CreditClientPaiementModal({
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-price font-bold text-red-600 text-xs">{formatPrice(c.solde_credit)}</div>
-                      <div className="text-[10px] text-text-muted">Doit</div>
+                      <div className={cn('font-price font-bold text-xs', c.solde_credit > 0 ? 'text-red-600' : 'text-green-600')}>{formatPrice(c.solde_credit)}</div>
+                      <div className="text-[10px] text-text-muted">{c.solde_credit > 0 ? 'Doit' : 'À jour'}</div>
                     </div>
                   </button>
                 ))}
-                {clients.filter(c => c.solde_credit > 0).length === 0 && (
-                  <p className="text-xs text-text-muted text-center py-3">Aucun client débiteur trouvé</p>
+                {clients.length === 0 && (
+                  <p className="text-xs text-text-muted text-center py-3">Aucun client trouvé</p>
                 )}
               </div>
             </div>
@@ -1319,6 +1328,8 @@ function CreditClientPaiementModal({
         </div>
       </div>
     </div>
+    {showCreateClient && <QuickClientCreateModal organisations={organisations} onClose={() => setShowCreateClient(false)} onCreated={c => { setClients(prev => [...prev, c].sort((a, b) => a.nom.localeCompare(b.nom))); setSelected(c); setShowCreateClient(false) }} />}
+    </>
   )
 }
 
@@ -1333,7 +1344,10 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess }: { currentShift
   const [note, setNote] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { void loadData('Recherche clients', () => api.clientsList(search.length >= 2 ? { search } : {}), { silent: true }).then(r => r && setClients((r as ClientMin[]).slice(0, 8))) }, [search])
+  const [showCreateClient, setShowCreateClient] = useState(false)
+  const [organisations, setOrganisations] = useState<OrganisationMin[]>([])
+  useEffect(() => { void loadData('Chargement organisations', () => api.organisationsList(), { silent: true }).then(r => r && setOrganisations(r as OrganisationMin[])) }, [])
+  useEffect(() => { const timer = setTimeout(() => { void loadData('Recherche clients', () => api.clientsList(search.trim() ? { search: search.trim() } : {}), { silent: true }).then(r => r && setClients(r as ClientMin[])) }, search.length >= 2 ? 180 : 0); return () => clearTimeout(timer) }, [search])
   const amount = parseFloat(montant.replace(',', '.')) || 0
   const save = async () => {
     if (!selected || !produit.trim() || amount <= 0) return
@@ -1350,11 +1364,31 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess }: { currentShift
   return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in">
     <div className="flex items-center justify-between px-6 py-4 border-b border-border"><h2 className="font-bold flex items-center gap-2"><DollarSign size={17} className="text-violet-600"/>Avance client</h2><button onClick={onClose}><XIcon size={18}/></button></div>
     <div className="p-5 space-y-3">{error && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
-      {!selected ? <><label className="text-xs font-semibold">Client *</label><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-40 overflow-y-auto space-y-1">{clients.map(c=><button key={c.id} onClick={()=>setSelected(c)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button>)}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><button onClick={()=>setSelected(null)}><XIcon size={15}/></button></div>}
+      {!selected ? <><div className="flex items-center justify-between"><label className="text-xs font-semibold">Client *</label><button type="button" onClick={()=>setShowCreateClient(true)} className="text-xs font-semibold text-accent-700 flex items-center gap-1"><Plus size={13}/>Nouveau client</button></div><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-48 overflow-y-auto space-y-1">{clients.map(c=><button key={c.id} onClick={()=>setSelected(c)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button>)}{clients.length===0&&<div className="text-xs text-text-muted text-center py-3">Aucun client trouvé</div>}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><button onClick={()=>setSelected(null)}><XIcon size={15}/></button></div>}
       {selected && <><label className="text-xs font-semibold">Produit / commande concerné(e) *</label><textarea value={produit} onChange={e=>setProduit(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Désignation, modèle, couleur, quantité..."/>
       <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-semibold">Montant (DT) *</label><input value={montant} onChange={e=>setMontant(e.target.value.replace(/[^0-9.,]/g,''))} inputMode="decimal" className="w-full border border-border rounded-xl px-3 py-2.5 font-price font-bold outline-none" placeholder="0.000"/></div><div><label className="text-xs font-semibold">Mode</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5"><option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="VIREMENT">Virement</option></select></div></div>
       <input value={reference} onChange={e=>setReference(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Référence de paiement (optionnel)"/><input value={note} onChange={e=>setNote(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Note (optionnel)"/></>}
     </div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || !produit.trim() || amount<=0} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
+    {showCreateClient && <QuickClientCreateModal organisations={organisations} onClose={()=>setShowCreateClient(false)} onCreated={c=>{setClients(prev=>[...prev,c].sort((a,b)=>a.nom.localeCompare(b.nom)));setSelected(c);setShowCreateClient(false)}}/>}
+  </div></div>
+}
+
+function QuickClientCreateModal({ organisations, onClose, onCreated }: { organisations: OrganisationMin[]; onClose: () => void; onCreated: (client: ClientMin) => void }) {
+  const [form, setForm] = useState({ nom: '', telephone: '', adresse: '', organisation_id: '' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const create = async () => {
+    if (!form.nom.trim()) { setError('Le nom est obligatoire'); return }
+    await runAction('Création client', async () => {
+      const client: ClientMin = { id: crypto.randomUUID(), nom: form.nom.trim(), telephone: form.telephone.trim() || undefined, adresse: form.adresse.trim() || undefined, organisation_id: form.organisation_id || undefined, solde_credit: 0 }
+      await api.clientsCreate({ ...client, telephone: client.telephone ?? null, adresse: client.adresse ?? null, organisation_id: client.organisation_id ?? null, credit_limite: 500, actif: 1, created_at: new Date().toISOString() })
+      onCreated(client)
+    }, { setLoading, silent: true, onError: setError })
+  }
+  return <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+    <div className="flex justify-between px-5 py-4 border-b border-border"><h3 className="font-bold">Nouveau client</h3><button onClick={onClose}><XIcon size={17}/></button></div>
+    <div className="p-5 space-y-3">{error&&<div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}<input autoFocus value={form.nom} onChange={e=>setForm(f=>({...f,nom:e.target.value}))} placeholder="Nom *" className="w-full border border-border rounded-xl px-3 py-2.5"/><input value={form.telephone} onChange={e=>setForm(f=>({...f,telephone:e.target.value}))} placeholder="Téléphone" className="w-full border border-border rounded-xl px-3 py-2.5"/><input value={form.adresse} onChange={e=>setForm(f=>({...f,adresse:e.target.value}))} placeholder="Adresse" className="w-full border border-border rounded-xl px-3 py-2.5"/><select value={form.organisation_id} onChange={e=>setForm(f=>({...f,organisation_id:e.target.value}))} className="w-full border border-border rounded-xl px-3 py-2.5 bg-white"><option value="">Client particulier</option>{organisations.map(o=><option key={o.id} value={o.id}>{o.nom}</option>)}</select></div>
+    <div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={create} disabled={loading||!form.nom.trim()} className="flex-1 bg-accent-500 disabled:bg-gray-200 rounded-xl py-2.5 font-bold">{loading?'Création...':'Créer et sélectionner'}</button></div>
   </div></div>
 }
 
