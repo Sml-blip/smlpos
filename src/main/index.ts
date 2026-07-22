@@ -522,7 +522,11 @@ function setupIpcHandlers() {
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
       FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'
     `).get(shiftId) as { total: number; count: number }
-    return { ventes, reparations, sorties, parMode, creditsPercus }
+    const avancesClients = db.prepare(`
+      SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
+      FROM avances_clients WHERE shift_id = ?
+    `).get(shiftId) as { total: number; count: number }
+    return { ventes, reparations, sorties, parMode, creditsPercus, avancesClients }
   })
 
   ipcMain.handle('shifts:countClosedToday', () => {
@@ -2324,18 +2328,47 @@ function setupIpcHandlers() {
       operateur: 'superadmin',
       created_at: new Date().toISOString(),
     }, credit)
-    db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (@id,@client_id,@client_nom,@shift_id,@type,@montant,@reference,@note,@operateur,@created_at)`).run(row)
-    const delta = row.type === 'CREDIT' ? row.montant as number : -(row.montant as number)
-    db.prepare(`UPDATE clients SET solde_credit = solde_credit + ? WHERE id = ?`).run(delta, row.client_id)
-    if (row.type === 'PAIEMENT' && row.shift_id) {
-      db.prepare(`UPDATE shifts SET total_credits_recus = total_credits_recus + ? WHERE id = ?`).run(row.montant as number, row.shift_id)
-    }
+    const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(row.client_id) as Record<string, unknown> | undefined
+    if (!client) throw new Error('Client introuvable')
+    const montant = Number(row.montant)
+    if (!Number.isFinite(montant) || montant <= 0) throw new Error('Le montant doit être supérieur à zéro')
+    const before = Math.max(0, Number(client.solde_credit) || 0)
+    if (row.type === 'PAIEMENT' && montant > before + 0.0001) throw new Error('Le paiement dépasse le crédit restant')
+    const after = row.type === 'CREDIT' ? before + montant : Math.max(0, before - montant)
+    const organisationId = String(client.organisation_id ?? '').trim()
+    db.transaction(() => {
+      db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (@id,@client_id,@client_nom,@shift_id,@type,@montant,@reference,@note,@operateur,@created_at)`).run(row)
+      db.prepare(`UPDATE clients SET solde_credit = ? WHERE id = ?`).run(after, row.client_id)
+      if (row.type === 'PAIEMENT' && row.shift_id) {
+        db.prepare(`UPDATE shifts SET total_credits_recus = total_credits_recus + ? WHERE id = ?`).run(montant, row.shift_id)
+      }
+      if (organisationId) {
+        db.prepare(`UPDATE organisations SET credit_total = COALESCE((SELECT SUM(CASE WHEN c.solde_credit > 0 THEN c.solde_credit ELSE 0 END) FROM clients c WHERE c.actif=1 AND (c.organisation_id=organisations.id OR lower(trim(c.organisation_id))=lower(trim(organisations.nom)))),0) WHERE id=? OR lower(trim(nom))=lower(trim(?))`).run(organisationId, organisationId)
+      }
+    })()
     addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: row.type === 'CREDIT' ? 'CLIENT_CREDIT_CREATED' : 'CLIENT_PAYMENT_RECEIVED', montant: row.montant as number, details: { client_nom: row.client_nom } })
     enqueueSync('credits_clients', 'INSERT', row)
     const clientSnapshot = db.prepare('SELECT * FROM clients WHERE id = ?').get(row.client_id) as Record<string, unknown> | undefined
     if (clientSnapshot) enqueueSync('clients', 'UPDATE', clientSnapshot)
-    return { success: true }
+    const organisation = organisationId ? db.prepare(`SELECT * FROM organisations WHERE id=? OR lower(trim(nom))=lower(trim(?)) LIMIT 1`).get(organisationId, organisationId) as Record<string, unknown> | undefined : undefined
+    if (organisation) enqueueSync('organisations', 'UPDATE', organisation)
+    return { success: true, before, amount: montant, after, organisation_nom: organisation?.nom ?? null }
   })
+
+  ipcMain.handle('avancesClients:create', (_e, advance: Record<string, unknown>) => {
+    const row = bindRow({ id: '', numero: '', client_id: '', client_nom: '', client_tel: null, client_adresse: null, produit_description: '', montant: 0, mode_paiement: 'ESPECES', reference: null, note: null, shift_id: null, operateur: 'superadmin', created_at: new Date().toISOString() }, advance)
+    const client = db.prepare(`SELECT * FROM clients WHERE id=? AND actif=1`).get(row.client_id) as Record<string, unknown> | undefined
+    if (!client) throw new Error('Veuillez sélectionner un client valide')
+    if (!String(row.produit_description).trim()) throw new Error('La description du produit est obligatoire')
+    if (!(Number(row.montant) > 0)) throw new Error('Le montant doit être supérieur à zéro')
+    db.prepare(`INSERT INTO avances_clients (id,numero,client_id,client_nom,client_tel,client_adresse,produit_description,montant,mode_paiement,reference,note,shift_id,operateur,created_at) VALUES (@id,@numero,@client_id,@client_nom,@client_tel,@client_adresse,@produit_description,@montant,@mode_paiement,@reference,@note,@shift_id,@operateur,@created_at)`).run(row)
+    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: 'CLIENT_ADVANCE_RECEIVED', montant: Number(row.montant), details: { numero: row.numero, client_nom: row.client_nom, produit: row.produit_description } })
+    return { success: true, advance: row }
+  })
+
+  ipcMain.handle('avancesClients:list', (_e, clientId?: string) => clientId
+    ? db.prepare(`SELECT * FROM avances_clients WHERE client_id=? ORDER BY created_at DESC`).all(clientId)
+    : db.prepare(`SELECT * FROM avances_clients ORDER BY created_at DESC LIMIT 200`).all())
 
   // ── Paramètres App ─────────────────────────────────────────────────────────
   ipcMain.handle('settings:getAll', () => {

@@ -13,6 +13,7 @@ interface ShiftSummary {
   sorties: { total: number; count: number }
   parMode: Array<{ mode_paiement: string; total: number }>
   creditsPercus: { total: number; count: number }
+  avancesClients: { total: number; count: number }
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -66,7 +67,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
 
   if (!currentShift) return null
 
-  const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) : 0
+  const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) : 0
   const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0)
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
   const ecart = soldeCaisse ? soldeReel - soldeTheorique : null
@@ -186,6 +187,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                     <div className="text-xs text-orange-600">{summary.creditsPercus.count} paiement{summary.creditsPercus.count > 1 ? 's' : ''}</div>
                   </div>
                 )}
+                {(summary.avancesClients?.total ?? 0) > 0 && <div className="bg-violet-50 border border-violet-200 rounded-xl p-3"><div className="text-xs text-violet-700 font-semibold mb-1">Avances clients</div><div className="font-price font-bold text-sm text-violet-800">{formatPrice(summary.avancesClients.total)}</div><div className="text-xs text-violet-600">{summary.avancesClients.count} avance(s)</div></div>}
                 <div className="bg-red-50 border border-red-200 rounded-xl p-3">
                   <div className="flex items-center gap-1 text-xs text-red-700 font-semibold mb-1">
                     <ArrowDownCircle size={11} /> Sorties
@@ -220,7 +222,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <span className="font-price font-bold text-lg text-text-primary">{formatPrice(soldeTheorique)}</span>
                 </div>
                 <div className="text-xs text-text-secondary mt-1">
-                  Fond + Ventes + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''} − Sorties
+                  Fond + Ventes + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties
                 </div>
               </div>
             </div>

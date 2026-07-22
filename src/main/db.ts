@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.9.8'
+export const SCHEMA_VERSION = '1.9.9'
 
 export function initDatabase() {
   const db = getDb()
@@ -744,6 +744,24 @@ export function initDatabase() {
       note TEXT,
       changed_by TEXT,
       created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Client deposits for products ordered/reserved at the POS
+    CREATE TABLE IF NOT EXISTS avances_clients (
+      id                  TEXT PRIMARY KEY,
+      numero              TEXT UNIQUE NOT NULL,
+      client_id           TEXT NOT NULL REFERENCES clients(id),
+      client_nom          TEXT NOT NULL,
+      client_tel          TEXT,
+      client_adresse      TEXT,
+      produit_description TEXT NOT NULL,
+      montant             REAL NOT NULL CHECK(montant > 0),
+      mode_paiement       TEXT NOT NULL DEFAULT 'ESPECES',
+      reference           TEXT,
+      note                TEXT,
+      shift_id            TEXT REFERENCES shifts(id),
+      operateur           TEXT,
+      created_at          TEXT DEFAULT (datetime('now'))
     );
   `)
 

@@ -6,6 +6,7 @@ import type { Produit, ServicePOS, Vente, CartItem } from '../../lib/types'
 import { cn, formatPrice } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
+import { printAdvanceReceipt, printCreditReceipt } from '../../lib/clientPaymentReceipt'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock } from 'lucide-react'
 import ReparationModal from './ReparationModal'
@@ -45,6 +46,7 @@ export default function POSTab() {
   const [showService, setShowService] = useState<ServicePOS | 'select' | null>(null)
   const [showFacture, setShowFacture] = useState(false)
   const [showCreditPaiement, setShowCreditPaiement] = useState(false)
+  const [showClientAdvance, setShowClientAdvance] = useState(false)
   const [showLastTicket, setShowLastTicket] = useState(false)
   const [showRetour, setShowRetour] = useState(false)
   const [showProductBrowse, setShowProductBrowse] = useState(false)
@@ -116,7 +118,7 @@ export default function POSTab() {
 
       // Global auto-scan: redirect printable chars to scanner when no modal open,
       // scan not focused, AND no other input/textarea/select is focused
-      const noModalOpen = !showCheckout && !showReparation && !showSortie && !showService && !showFacture && !showCreditPaiement && !showLastTicket && !unknownBarcode && !showRetour
+      const noModalOpen = !showCheckout && !showReparation && !showSortie && !showService && !showFacture && !showCreditPaiement && !showClientAdvance && !showLastTicket && !unknownBarcode && !showRetour
       const ae = document.activeElement
       const otherInputFocused = ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement || ae instanceof HTMLSelectElement
       const scanInputFocused = ae === scanRef.current
@@ -131,7 +133,7 @@ export default function POSTab() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [items, lastVente, showCheckout, showReparation, showSortie, showService, showFacture, showCreditPaiement, showLastTicket, unknownBarcode, showRetour, scanFocused, showShiftModal])
+  }, [items, lastVente, showCheckout, showReparation, showSortie, showService, showFacture, showCreditPaiement, showClientAdvance, showLastTicket, unknownBarcode, showRetour, scanFocused, showShiftModal])
 
   const showNotif = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotification({ msg, type })
@@ -689,6 +691,9 @@ export default function POSTab() {
           <button onClick={() => setShowCreditPaiement(true)} className="flex items-center justify-center gap-2 bg-green-50 hover:bg-green-100 border border-green-300 text-green-800 py-2.5 rounded-xl font-semibold transition-colors text-sm">
             <CreditCard size={15} />Crédit Client (F7)
           </button>
+          <button onClick={() => setShowClientAdvance(true)} className="flex items-center justify-center gap-2 bg-violet-50 hover:bg-violet-100 border border-violet-300 text-violet-800 py-2.5 rounded-xl font-semibold transition-colors text-sm">
+            <DollarSign size={15} />Avance client
+          </button>
           <button onClick={() => setShowRetour(true)} className="flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border border-red-300 text-red-800 py-2.5 rounded-xl font-semibold transition-colors text-sm">
             <RotateCcw size={15} />Retour (F9)
           </button>
@@ -911,6 +916,17 @@ export default function POSTab() {
           }}
         />
       )}
+      {showClientAdvance && (
+        <ClientAdvanceModal
+          currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
+          onClose={() => { setShowClientAdvance(false); refocusScanner() }}
+          onSuccess={(clientNom, montant) => {
+            showNotif(`Avance de ${formatPrice(montant)} enregistrée — ${clientNom}`)
+            setShowClientAdvance(false)
+            refocusScanner()
+          }}
+        />
+      )}
       {showProductBrowse && (
         <ProductBrowseModal
           onClose={() => { setShowProductBrowse(false); refocusScanner() }}
@@ -1122,7 +1138,7 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
 }
 
 // ── Credit Client Paiement Modal ─────────────────────────────────────────────
-interface ClientMin { id: string; nom: string; telephone?: string; solde_credit: number }
+interface ClientMin { id: string; nom: string; telephone?: string; adresse?: string; solde_credit: number }
 
 function CreditClientPaiementModal({
   currentShift, onClose, onSuccess,
@@ -1158,7 +1174,7 @@ function CreditClientPaiementModal({
     if (!selected || montantNum <= 0) return
     setError('')
     await runAction('Encaissement crédit', async () => {
-      await api.creditsCreate({
+      const created = await api.creditsCreate({
         id: crypto.randomUUID(),
         client_id: selected.id,
         client_nom: selected.nom,
@@ -1169,6 +1185,13 @@ function CreditClientPaiementModal({
         note: note.trim() || null,
         operateur: currentShift?.operateur_nom ?? 'superadmin',
         created_at: new Date().toISOString(),
+      }) as { before?: number; amount?: number; after?: number; organisation_nom?: string }
+      await printCreditReceipt({
+        numero: `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`,
+        clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse,
+        operateur: currentShift?.operateur_nom, date: new Date().toISOString(), note,
+        before: Number(created.before ?? selected.solde_credit), paid: Number(created.amount ?? montantNum),
+        after: Number(created.after ?? Math.max(0, selected.solde_credit - montantNum)), organisation: created.organisation_nom,
       })
       onSuccess(selected.nom, montantNum)
     }, { setLoading, silent: true, onError: setError, successMessage: 'Paiement enregistré' })
@@ -1287,7 +1310,7 @@ function CreditClientPaiementModal({
             <button
               type="button"
               onClick={handleSave}
-              disabled={loading || montantNum <= 0}
+              disabled={loading || montantNum <= 0 || montantNum > selected.solde_credit}
               className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold py-2.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
             >
               {loading ? 'Enregistrement...' : <><DollarSign size={14} /> Encaisser {formatPrice(montantNum)}</>}
@@ -1297,6 +1320,42 @@ function CreditClientPaiementModal({
       </div>
     </div>
   )
+}
+
+function ClientAdvanceModal({ currentShift, onClose, onSuccess }: { currentShift: { id?: string; operateur_nom?: string } | null; onClose: () => void; onSuccess: (clientNom: string, montant: number) => void }) {
+  const [clients, setClients] = useState<ClientMin[]>([])
+  const [selected, setSelected] = useState<ClientMin | null>(null)
+  const [search, setSearch] = useState('')
+  const [produit, setProduit] = useState('')
+  const [montant, setMontant] = useState('')
+  const [mode, setMode] = useState('ESPECES')
+  const [reference, setReference] = useState('')
+  const [note, setNote] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { void loadData('Recherche clients', () => api.clientsList(search.length >= 2 ? { search } : {}), { silent: true }).then(r => r && setClients((r as ClientMin[]).slice(0, 8))) }, [search])
+  const amount = parseFloat(montant.replace(',', '.')) || 0
+  const save = async () => {
+    if (!selected || !produit.trim() || amount <= 0) return
+    setError('')
+    await runAction('Avance client', async () => {
+      const now = new Date().toISOString()
+      const numero = `AVC-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`
+      const payload = { id: crypto.randomUUID(), numero, client_id: selected.id, client_nom: selected.nom, client_tel: selected.telephone || null, client_adresse: selected.adresse || null, produit_description: produit.trim(), montant: amount, mode_paiement: mode, reference: reference.trim() || null, note: note.trim() || null, shift_id: currentShift?.id ?? null, operateur: currentShift?.operateur_nom ?? 'superadmin', created_at: now }
+      await api.avancesClientsCreate(payload)
+      await printAdvanceReceipt({ numero, clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse, operateur: payload.operateur, date: now, note, produit: produit.trim(), montant: amount, modePaiement: mode, reference })
+      onSuccess(selected.nom, amount)
+    }, { setLoading, silent: true, onError: setError })
+  }
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in">
+    <div className="flex items-center justify-between px-6 py-4 border-b border-border"><h2 className="font-bold flex items-center gap-2"><DollarSign size={17} className="text-violet-600"/>Avance client</h2><button onClick={onClose}><XIcon size={18}/></button></div>
+    <div className="p-5 space-y-3">{error && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
+      {!selected ? <><label className="text-xs font-semibold">Client *</label><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-40 overflow-y-auto space-y-1">{clients.map(c=><button key={c.id} onClick={()=>setSelected(c)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button>)}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><button onClick={()=>setSelected(null)}><XIcon size={15}/></button></div>}
+      {selected && <><label className="text-xs font-semibold">Produit / commande concerné(e) *</label><textarea value={produit} onChange={e=>setProduit(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Désignation, modèle, couleur, quantité..."/>
+      <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-semibold">Montant (DT) *</label><input value={montant} onChange={e=>setMontant(e.target.value.replace(/[^0-9.,]/g,''))} inputMode="decimal" className="w-full border border-border rounded-xl px-3 py-2.5 font-price font-bold outline-none" placeholder="0.000"/></div><div><label className="text-xs font-semibold">Mode</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5"><option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="VIREMENT">Virement</option></select></div></div>
+      <input value={reference} onChange={e=>setReference(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Référence de paiement (optionnel)"/><input value={note} onChange={e=>setNote(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Note (optionnel)"/></>}
+    </div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || !produit.trim() || amount<=0} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
+  </div></div>
 }
 
 // ── Inline Service Selector ──────────────────────────────────────────────────

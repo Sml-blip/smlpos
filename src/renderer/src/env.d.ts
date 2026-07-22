@@ -137,6 +137,8 @@ interface Window {
     // Crédits Clients
     creditsList: (clientId?: string) => Promise<unknown[]>
     creditsCreate: (credit: unknown) => Promise<unknown>
+    avancesClientsCreate: (advance: unknown) => Promise<unknown>
+    avancesClientsList: (clientId?: string) => Promise<unknown[]>
 
     // Retours
     retoursCreate: (r: unknown) => Promise<unknown>

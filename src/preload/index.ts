@@ -150,6 +150,8 @@ const api = {
   // Crédits Clients
   creditsList: (clientId?: string) => ipcRenderer.invoke('credits:list', clientId),
   creditsCreate: (credit: unknown) => ipcRenderer.invoke('credits:create', credit),
+  avancesClientsCreate: (advance: unknown) => ipcRenderer.invoke('avancesClients:create', advance),
+  avancesClientsList: (clientId?: string) => ipcRenderer.invoke('avancesClients:list', clientId),
 
   // Retours
   retoursCreate: (r: unknown) => ipcRenderer.invoke('retours:create', r),
