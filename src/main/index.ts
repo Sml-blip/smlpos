@@ -1654,8 +1654,14 @@ function setupIpcHandlers() {
         if (l.produit_id) {
           const now = new Date().toISOString()
           updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
-          const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
-          if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
+          // prix_vente_suggere is informational only. Never let a purchase price or
+          // a margin suggestion silently replace the price used by the POS.
+          // prix_vente_applique is the explicit opt-in field reserved for a user
+          // action that intentionally changes the catalogue sale price.
+          const prixVenteApplique = l.prix_vente_applique
+          if (typeof prixVenteApplique === 'number' && Number.isFinite(prixVenteApplique) && prixVenteApplique >= 0) {
+            updatePrixVente.run(prixVenteApplique, now, l.produit_id)
+          }
           updateStock.run(l.quantite, l.produit_id)
           if (l.numeros_serie_json) {
             addSerialNumbersToStock(l.produit_id, l.numeros_serie_json, l.quantite)
@@ -1778,8 +1784,12 @@ function setupIpcHandlers() {
         for (const l of lignes) {
           if (l.produit_id) {
             updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
-            const prixVente = l.prix_vente_applique ?? l.prix_vente_suggere
-            if (prixVente) updatePrixVente.run(prixVente, now, l.produit_id)
+            // A suggested price stays on the supplier document as a snapshot.
+            // Only an explicitly applied sale price may update the POS catalogue.
+            const prixVenteApplique = l.prix_vente_applique
+            if (typeof prixVenteApplique === 'number' && Number.isFinite(prixVenteApplique) && prixVenteApplique >= 0) {
+              updatePrixVente.run(prixVenteApplique, now, l.produit_id)
+            }
             if (l.numeros_serie_json) {
               const serialResult = addSerialNumbersToStock(l.produit_id as string, l.numeros_serie_json, l.quantite as number, {
                 skipExistingInStockForSameProduct: true,
