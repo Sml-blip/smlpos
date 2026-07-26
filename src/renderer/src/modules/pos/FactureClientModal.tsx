@@ -85,7 +85,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
       setFactureNumero(numero)
       setGenerated(true)
       onSuccess?.()
-    }, { setLoading, successMessage: 'Facture générée' })
+    }, { setLoading, successMessage: 'Facture générée', feedback: 'invoice' })
   }
 
   const printPreview = (

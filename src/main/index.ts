@@ -550,22 +550,27 @@ function setupIpcHandlers() {
       `).get() as { id: string; numero: string; created_at: string } | undefined
 
       const lignesF = db.prepare(`
-        SELECT lv.produit_id, lv.designation, lv.quantite, lv.prix_unitaire, lv.remise_pct, lv.total_ligne
+        SELECT v.id AS vente_id, lv.produit_id, lv.designation, lv.quantite,
+               lv.prix_unitaire, lv.remise_pct, lv.total_ligne
         FROM lignes_vente lv
         INNER JOIN ventes v ON v.id = lv.vente_id
         WHERE lv.type_produit = 'F'
         AND v.type = 'VENTE'
         AND date(v.created_at, 'localtime') = date('now', 'localtime')
         AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
-        AND COALESCE(v.a_facture, 0) = 0
         AND NOT EXISTS (
           SELECT 1 FROM documents manual_doc
           WHERE manual_doc.vente_id = v.id
-          AND manual_doc.type_document IN ('FACTURE_VENTE', 'FACTURE_JOURNALIERE_F')
+          AND manual_doc.type_document = 'FACTURE_VENTE'
           AND manual_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM factures_clients legacy_invoice
+          WHERE legacy_invoice.vente_id = v.id
         )
         ORDER BY v.created_at ASC, lv.designation ASC
       `).all() as Array<{
+        vente_id: string
         produit_id: string | null
         designation: string
         quantite: number
@@ -574,12 +579,30 @@ function setupIpcHandlers() {
         total_ligne: number
       }>
 
+      const revokeExistingDailyInvoice = (reason: string) => {
+        if (!existing) return
+        const updatedAt = new Date().toISOString()
+        db.prepare(`
+          UPDATE documents
+          SET statut = 'REVOQUE', updated_at = ?
+          WHERE id = ?
+        `).run(updatedAt, existing.id)
+        const revoked = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(existing.id) as Record<string, unknown>
+        enqueueSync('documents', 'UPDATE', revoked)
+        addActivityLog({
+          action: 'DOCUMENT_REVOKED',
+          details: { type_document: 'FACTURE_JOURNALIERE_F', numero: existing.numero, reason },
+        })
+      }
+
       if (!lignesF.length) {
+        revokeExistingDailyInvoice('Toutes les ventes F ont déjà été facturées séparément')
         return { success: true, skipped: true, reason: 'no_f_lines', count: 0 }
       }
 
       const totalTTC = lignesF.reduce((s, l) => s + (Number(l.total_ligne) || 0), 0)
       if (totalTTC <= 0) {
+        revokeExistingDailyInvoice('Le total des ventes F éligibles est nul')
         return { success: true, skipped: true, reason: 'zero_total', count: 0 }
       }
 
@@ -595,6 +618,7 @@ function setupIpcHandlers() {
       }
       const now = new Date().toISOString()
       const docId = existing?.id ?? randomUUID()
+      const includedVenteIds = [...new Set(lignesF.map(l => l.vente_id))]
 
       const doc = {
         id: docId,
@@ -616,7 +640,11 @@ function setupIpcHandlers() {
         montant_paye: totalTTC,
         date_echeance: null,
         layout_snapshot: null,
-        contenu_json: null,
+        contenu_json: JSON.stringify({
+          kind: 'daily_f_invoice',
+          local_date: new Date().toLocaleDateString('en-CA'),
+          vente_ids: includedVenteIds,
+        }),
         created_at: existing?.created_at ?? now,
         updated_at: now,
       }
@@ -642,8 +670,8 @@ function setupIpcHandlers() {
       db.transaction(() => {
         if (existing) {
           db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(docId)
-          db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, montant_paye=?, updated_at=? WHERE id=?`)
-            .run(totalTTC, 0, totalTTC, totalTTC, now, docId)
+          db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, montant_paye=?, contenu_json=?, updated_at=? WHERE id=?`)
+            .run(totalTTC, 0, totalTTC, totalTTC, doc.contenu_json, now, docId)
         } else {
           db.prepare(`
             INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at)
@@ -662,7 +690,15 @@ function setupIpcHandlers() {
       for (const old of replacedLineIds) enqueueSync('lignes_document', 'DELETE', { id: old.id })
       for (const l of docLignes) enqueueSync('lignes_document', 'INSERT', l)
 
-      return { success: true, updated: !!existing, documentId: docId, numero, lineCount: docLignes.length, totalTTC }
+      return {
+        success: true,
+        updated: !!existing,
+        documentId: docId,
+        numero,
+        lineCount: docLignes.length,
+        saleCount: includedVenteIds.length,
+        totalTTC,
+      }
     } catch (e) {
       return { success: false, error: String(e) }
     }

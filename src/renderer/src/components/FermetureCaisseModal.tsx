@@ -3,6 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { formatPrice } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
 import { showToast } from '../lib/toast'
+import { playFeedback } from '../lib/feedback'
 import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText } from 'lucide-react'
 
 const api = window.api
@@ -105,6 +106,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
       onClose()
     }, { setLoading })
     if (succeeded) {
+      playFeedback(dailyInvoice?.documentId ? 'invoice' : 'success')
       showToast('success', dailyInvoice?.documentId
         ? `Caisse fermée — facture Client Passager ${dailyInvoice.numero ?? ''} créée`
         : 'Caisse fermée — aucune vente F non facturée à regrouper')

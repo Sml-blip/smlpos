@@ -13,13 +13,13 @@ export default function ToastProvider() {
         <div
           key={t.id}
           className={cn(
-            'pointer-events-auto flex items-start gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm animate-slide-in',
+            'pointer-events-auto flex items-start gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm animate-toast-in',
             t.type === 'success' && 'bg-green-50 border-green-200 text-green-900',
             t.type === 'error' && 'bg-red-50 border-red-200 text-red-900',
             t.type === 'info' && 'bg-white border-border text-text-primary'
           )}
         >
-          {t.type === 'success' && <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-green-600" />}
+          {t.type === 'success' && <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-green-600 animate-success-pop" />}
           {t.type === 'error' && <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-red-600" />}
           {t.type === 'info' && <Info size={16} className="flex-shrink-0 mt-0.5 text-accent-600" />}
           <span className="flex-1">{t.message}</span>

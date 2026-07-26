@@ -1,4 +1,5 @@
 import { showToast } from './toast'
+import { playFeedback, type FeedbackSound } from './feedback'
 
 function formatError(label: string, e: unknown): string {
   const detail = e instanceof Error ? e.message : String(e)
@@ -42,6 +43,7 @@ export async function runAction(
     setLoading?: (v: boolean) => void
     setSaving?: (v: boolean) => void
     onError?: (msg: string) => void
+    feedback?: FeedbackSound
   }
 ): Promise<boolean> {
   const setBusy = (v: boolean) => {
@@ -54,6 +56,7 @@ export async function runAction(
     if (options?.successMessage) {
       showToast('success', options.successMessage)
     }
+    if (options?.feedback) playFeedback(options.feedback)
     return true
   } catch (e) {
     const msg = formatError(label, e)

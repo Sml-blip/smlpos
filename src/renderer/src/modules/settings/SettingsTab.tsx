@@ -359,14 +359,14 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
       <Card>
         <Section title="End-of-day closing">
           <div className="space-y-3">
-            <Toggle checked={values['shift_close_reminder_enabled'] !== 'false'} onChange={() => toggle('shift_close_reminder_enabled')} label="Show close-shift reminder for daily F invoice" />
+            <Toggle checked={values['shift_close_reminder_enabled'] !== 'false'} onChange={() => toggle('shift_close_reminder_enabled')} label="Afficher le rappel de clôture pour la facture journalière F" />
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Reminder time" hint="Default is 21:00. After this time, the status bar shows a close-shift popup.">
+              <Field label="Heure d’alerte" hint="Le rappel reste épinglé en bas à gauche à partir de 30 minutes avant cette heure.">
                 <TextInput value={values['shift_close_reminder_time']} onChange={v => set('shift_close_reminder_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="21:00" />
               </Field>
             </div>
             <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
-              Each cash close creates or refreshes one Client Passager invoice from today&apos;s uninvoiced F-product sales. NF lines and manually invoiced sales are excluded automatically.
+              Chaque clôture crée ou actualise une seule facture Client Passager avec les ventes F du jour non encore facturées. Les lignes NF et les ventes déjà facturées manuellement sont exclues automatiquement.
             </div>
           </div>
         </Section>

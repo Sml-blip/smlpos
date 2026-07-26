@@ -31,6 +31,7 @@ import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
 import { generateId } from './lib/utils'
 import { applyAgentTheme, loadAgentTheme } from './lib/agentTheme'
+import { installGlobalInteractionFeedback, playFeedback } from './lib/feedback'
 import type { Operateur, Shift } from './lib/types'
 
 const api = window.api
@@ -91,6 +92,10 @@ export default function App() {
       }
     } catch { /* settings not ready */ }
   }, [currentOperateur])
+
+  useEffect(() => {
+    return installGlobalInteractionFeedback()
+  }, [])
 
   useEffect(() => {
     api.appVersion?.().then(v => { if (v) setAppVersion(v) }).catch(() => {})
@@ -158,7 +163,7 @@ export default function App() {
   return (
     <PrintManagerProvider>
     <div className="h-screen flex flex-col bg-surface overflow-hidden">
-      {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
+      {showSplash && <SplashScreen onDone={() => { setShowSplash(false); playFeedback('startup') }} />}
       {locked && currentPin && (
         <LockScreen
           operateurNom={currentOperateur?.nom ?? ''}
@@ -193,7 +198,7 @@ export default function App() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
+      <div key={activeTab} className="flex-1 overflow-hidden app-view-enter">
         {activeTab === 'pos'            && <POSTab />}
         {activeTab === 'historique'     && <HistoriqueTab />}
         {activeTab === 'inventaire'     && <InventaireTab />}

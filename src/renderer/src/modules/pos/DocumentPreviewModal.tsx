@@ -273,7 +273,11 @@ export default function DocumentPreviewModal({
       const numero = await ensureDocument()
       setDocNumero(numero)
       setDocCreated(true)
-    }, { setLoading, successMessage: 'Document créé' })
+    }, {
+      setLoading,
+      successMessage: 'Document créé',
+      feedback: typeVente === 'FACTURE' ? 'invoice' : 'success',
+    })
   }
 
   const handlePrintClick = async () => {

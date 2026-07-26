@@ -71,12 +71,83 @@ html, body, #root {
 
 /* Custom animations */
 @keyframes slide-in {
-  from { transform: translateY(-8px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from { transform: translateY(-10px) scale(0.985); opacity: 0; }
+  70% { transform: translateY(1px) scale(1.002); opacity: 1; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
 }
 
 .animate-slide-in {
-  animation: slide-in 0.15s ease-out;
+  animation: slide-in 240ms cubic-bezier(.2, .85, .25, 1);
+}
+
+@keyframes app-view-enter {
+  from { opacity: 0; transform: translateY(5px) scale(0.997); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(18px) scale(0.96); }
+  70% { opacity: 1; transform: translateX(-2px) scale(1.01); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes success-pop {
+  0% { transform: scale(0.35) rotate(-18deg); opacity: 0; }
+  65% { transform: scale(1.2) rotate(4deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.app-view-enter {
+  animation: app-view-enter 220ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.animate-toast-in {
+  animation: toast-in 320ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.animate-success-pop {
+  animation: success-pop 420ms cubic-bezier(.2, 1.35, .35, 1);
+}
+
+button,
+a[href],
+[role="button"] {
+  transition-property: transform, box-shadow, background-color, border-color, color, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+}
+
+button:not(:disabled):active,
+a[href]:active,
+[role="button"]:not([aria-disabled="true"]):active {
+  transform: scale(0.965);
+}
+
+button:not(:disabled):focus-visible,
+a[href]:focus-visible,
+[role="button"]:not([aria-disabled="true"]):focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+.fixed.inset-0 {
+  animation: overlay-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Input focus */

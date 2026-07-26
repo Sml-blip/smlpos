@@ -1196,7 +1196,7 @@ function CreditClientPaiementModal({
         after: Number(created.after ?? Math.max(0, selected.solde_credit - montantNum)), organisation: created.organisation_nom,
       })
       onSuccess(selected.nom, montantNum)
-    }, { setLoading, silent: true, onError: setError, successMessage: 'Paiement enregistré' })
+    }, { setLoading, silent: true, onError: setError, successMessage: 'Paiement enregistré', feedback: 'cash' })
   }
 
   return (

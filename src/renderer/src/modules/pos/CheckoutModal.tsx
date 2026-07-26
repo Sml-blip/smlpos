@@ -105,7 +105,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
       if (typeVente === 'FACTURE' || typeVente === 'BL_VENTE' || typeVente === 'DEVIS') {
         setShowFacture(true)
       }
-    }, { setLoading, silent: true, onError: setErrorMsg, successMessage: 'Vente enregistrée' })
+    }, { setLoading, silent: true, onError: setErrorMsg, successMessage: 'Vente enregistrée', feedback: 'cash' })
   }
 
   // After payment: offer ticket + optional facture

@@ -13,18 +13,16 @@ const api = window.api
 
 type SyncErrorRow = { id: string; table_name: string; operation: string; attempts: number; last_error: string | null; created_at: string }
 
-const todayKey = () => {
-  const d = new Date()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${mm}-${dd}`
-}
-
-const isPastReminderTime = (now: Date, timeValue: string) => {
+const reminderTiming = (now: Date, timeValue: string) => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(timeValue || '21:00')
   const hours = match ? Math.min(23, Math.max(0, Number(match[1]))) : 21
   const minutes = match ? Math.min(59, Math.max(0, Number(match[2]))) : 0
-  return now.getHours() * 60 + now.getMinutes() >= hours * 60 + minutes
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  const alertMinutes = hours * 60 + minutes
+  return {
+    pinned: nowMinutes >= Math.max(0, alertMinutes - 30),
+    overdue: nowMinutes >= alertMinutes,
+  }
 }
 
 export default function StatusBar() {
@@ -41,8 +39,6 @@ export default function StatusBar() {
   const [errorRows, setErrorRows] = useState<SyncErrorRow[]>([])
   const [dbHealth, setDbHealth] = useState<{ ok: boolean; error?: string } | null>(null)
   const [shiftReminderSettings, setShiftReminderSettings] = useState({ enabled: true, time: '21:00' })
-  const [showShiftReminder, setShowShiftReminder] = useState(false)
-  const [shiftReminderSnoozedUntil, setShiftReminderSnoozedUntil] = useState(0)
 
   useEffect(() => {
     api.appHealth?.().then((h: { ok?: boolean; error?: string }) => {
@@ -74,15 +70,11 @@ export default function StatusBar() {
     return () => { cancelled = true }
   }, [])
 
-  useEffect(() => {
-    if (!currentShift || showFermeture || showShiftReminder) return
-    if (!shiftReminderSettings.enabled) return
-    if (Date.now() < shiftReminderSnoozedUntil) return
-    if (!isPastReminderTime(time, shiftReminderSettings.time)) return
-    const dismissed = window.localStorage.getItem(`smlpos-shift-close-dismissed-${todayKey()}`)
-    if (dismissed === 'true') return
-    setShowShiftReminder(true)
-  }, [currentShift, showFermeture, showShiftReminder, shiftReminderSettings, shiftReminderSnoozedUntil, time])
+  const shiftReminderTiming = reminderTiming(time, shiftReminderSettings.time)
+  const showPinnedShiftReminder = !!currentShift
+    && !showFermeture
+    && shiftReminderSettings.enabled
+    && shiftReminderTiming.pinned
 
   const refreshCounts = useCallback(async () => {
     if (!isSupabaseEnabled || !window.api?.syncQueuePendingCount) return
@@ -281,51 +273,43 @@ export default function StatusBar() {
         <DocumentPrintModal doc={dailyInvoicePreview} onClose={() => setDailyInvoicePreview(null)} />
       )}
 
-      {showShiftReminder && currentShift && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[190] p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-slide-in">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <h3 className="font-bold text-sm flex items-center gap-2">
-                <FileText size={15} className="text-teal-600" /> Close shift reminder
-              </h3>
-              <button onClick={() => setShowShiftReminder(false)} className="text-text-muted hover:text-text-primary">
-                <X size={16} />
-              </button>
-            </div>
-            <div className="p-5 space-y-3">
-              <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
-                It is past <strong>{shiftReminderSettings.time}</strong>. Close the current shift to create the end-of-day Client Passager invoice for F-product sales.
-                Mixed sales are handled automatically: NF lines stay out of the invoice.
+      {showPinnedShiftReminder && currentShift && (
+        <div className="fixed left-4 bottom-10 z-[190] w-[min(390px,calc(100vw-2rem))] animate-slide-in">
+          <div className={`rounded-2xl border shadow-2xl overflow-hidden ${
+            shiftReminderTiming.overdue
+              ? 'bg-orange-50 border-orange-300'
+              : 'bg-teal-50 border-teal-300'
+          }`}>
+            <div className="px-4 py-3 flex items-start gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                shiftReminderTiming.overdue ? 'bg-orange-100 text-orange-700' : 'bg-teal-100 text-teal-700'
+              }`}>
+                <FileText size={17} />
               </div>
-              <p className="text-xs text-text-secondary">
-                Current shift: <strong>{currentShift.operateur_nom}</strong>
-              </p>
-            </div>
-            <div className="flex gap-2 px-5 py-4 border-t border-border">
-              <button
-                onClick={() => {
-                  window.localStorage.setItem(`smlpos-shift-close-dismissed-${todayKey()}`, 'true')
-                  setShowShiftReminder(false)
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-muted hover:bg-border text-sm font-semibold"
-              >
-                Dismiss today
-              </button>
-              <button
-                onClick={() => {
-                  setShiftReminderSnoozedUntil(Date.now() + 15 * 60 * 1000)
-                  setShowShiftReminder(false)
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-white border border-border hover:bg-muted text-sm font-semibold"
-              >
-                Remind later
-              </button>
-              <button
-                onClick={() => { setShowShiftReminder(false); setShowFermeture(true) }}
-                className="flex-1 py-2.5 rounded-xl bg-danger hover:bg-red-700 text-white text-sm font-bold"
-              >
-                Close shift
-              </button>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-sm text-text-primary">
+                  {shiftReminderTiming.overdue ? 'Clôture de journée à effectuer' : 'Clôture de journée dans moins de 30 min'}
+                </div>
+                <p className="text-[11px] text-text-secondary mt-1 leading-relaxed">
+                  Alerte prévue à <strong>{shiftReminderSettings.time}</strong>. La clôture créera la facture
+                  Client Passager avec uniquement les ventes F non déjà facturées.
+                </p>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-[10px] text-text-muted truncate">
+                    Shift : {currentShift.operateur_nom}
+                  </span>
+                  <button
+                    onClick={() => setShowFermeture(true)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-colors ${
+                      shiftReminderTiming.overdue
+                        ? 'bg-danger hover:bg-red-700'
+                        : 'bg-teal-600 hover:bg-teal-700'
+                    }`}
+                  >
+                    Clôturer
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

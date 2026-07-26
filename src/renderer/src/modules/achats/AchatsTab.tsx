@@ -1850,6 +1850,7 @@ function FactureFournisseurModal({
     }, {
       setLoading,
       successMessage: isBL ? 'Bon de livraison enregistré' : 'Facture fournisseur enregistrée',
+      feedback: isBL ? 'success' : 'invoice',
     })
     if (ok) {
       onSaved()
