@@ -94,6 +94,8 @@ export default function InventaireTab() {
   const [filterCategorie, setFilterCategorie] = useState<string>('all')
   const [sortKey, setSortKey] = useState<SortKey>('nom')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [showInventoryPriceSearch, setShowInventoryPriceSearch] = useState(false)
+  const [inventoryPriceQuery, setInventoryPriceQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [showPriceMatches, setShowPriceMatches] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Produit | null>(null)
@@ -258,6 +260,15 @@ export default function InventaireTab() {
   const lowStockCount = useMemo(() => produits.filter(p => p.stock_actuel <= p.stock_minimum).length, [produits])
   const totalValeur = useMemo(() => produits.reduce((s, p) => s + p.prix_vente * p.stock_actuel, 0), [produits])
   const categories = useMemo(() => Array.from(new Set(produits.map(p => p.categorie).filter(Boolean))), [produits])
+  const inventoryPriceMatches = useMemo(() => {
+    const target = parseFloat(inventoryPriceQuery.replace(',', '.'))
+    if (!Number.isFinite(target) || target < 0) return []
+    return produits
+      .filter(p => Number.isFinite(Number(p.prix_vente)))
+      .map(p => ({ product: p, difference: Math.abs(Number(p.prix_vente) - target) }))
+      .sort((a, b) => a.difference - b.difference || a.product.nom.localeCompare(b.product.nom, 'fr'))
+      .slice(0, 10)
+  }, [inventoryPriceQuery, produits])
   const nearbyPriceProducts = useMemo(() => {
     const target = parseFloat(formData.prix_vente.replace(',', '.'))
     if (!Number.isFinite(target) || target < 0) return []
@@ -672,10 +683,98 @@ export default function InventaireTab() {
               </th>
               <th className="text-left px-3 py-2.5 text-xs font-semibold text-text-secondary">Fournisseur</th>
               <th
-                className="text-right px-3 py-2.5 text-xs font-semibold text-text-secondary cursor-pointer hover:text-text-primary"
+                className="relative text-right px-3 py-2.5 text-xs font-semibold text-text-secondary cursor-pointer hover:text-text-primary"
                 onClick={() => handleSort('prix_vente')}
               >
-                <span className="flex items-center justify-end gap-1">Prix Vente <SortIcon col="prix_vente" /></span>
+                <span className="flex items-center justify-end gap-1">
+                  Prix Vente
+                  <button
+                    type="button"
+                    onClick={event => {
+                      event.stopPropagation()
+                      setShowInventoryPriceSearch(v => !v)
+                    }}
+                    className={cn(
+                      'w-6 h-6 inline-flex items-center justify-center rounded-full border transition-colors',
+                      showInventoryPriceSearch
+                        ? 'bg-accent-500 border-accent-600 text-text-primary shadow-sm'
+                        : 'bg-white border-border text-text-secondary hover:bg-accent-50 hover:border-accent-500',
+                    )}
+                    title="Rechercher par prix exact ou proche"
+                    aria-label="Rechercher par prix exact ou proche"
+                  >
+                    <Search size={13} strokeWidth={2.5} />
+                  </button>
+                  <SortIcon col="prix_vente" />
+                </span>
+                {showInventoryPriceSearch && (
+                  <div
+                    className="absolute z-[80] right-2 top-full mt-1 w-80 bg-white border border-border rounded-xl shadow-2xl overflow-hidden text-left cursor-default"
+                    onClick={event => event.stopPropagation()}
+                  >
+                    <div className="p-2.5 bg-muted border-b border-border">
+                      <div className="flex items-center gap-2 bg-white border border-accent-500 rounded-lg px-2.5 py-2">
+                        <Search size={14} className="text-accent-600 flex-shrink-0" />
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoFocus
+                          value={inventoryPriceQuery}
+                          onChange={event => setInventoryPriceQuery(event.target.value.replace(/[^0-9.,]/g, ''))}
+                          placeholder="Prix recherché, ex. 49.900"
+                          className="min-w-0 flex-1 bg-transparent outline-none font-price text-xs"
+                        />
+                        {inventoryPriceQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setInventoryPriceQuery('')}
+                            className="text-text-muted hover:text-text-primary"
+                            aria-label="Effacer le prix"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-text-muted mt-1.5">Résultats égaux en premier, puis prix les plus proches.</p>
+                    </div>
+                    {inventoryPriceQuery.trim() ? (
+                      inventoryPriceMatches.length > 0 ? (
+                        <div className="max-h-72 overflow-y-auto p-1">
+                          {inventoryPriceMatches.map(({ product, difference }) => {
+                            const exact = difference < 0.0005
+                            return (
+                              <button
+                                key={product.id}
+                                type="button"
+                                onClick={() => {
+                                  setShowInventoryPriceSearch(false)
+                                  openEdit(product)
+                                }}
+                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-accent-50 text-left"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-semibold truncate">{product.nom}</div>
+                                  <div className="text-[10px] text-text-muted truncate">{product.reference} · {product.categorie}</div>
+                                </div>
+                                <span className="font-price text-xs font-bold">{formatPrice(product.prix_vente)}</span>
+                                <span className={cn(
+                                  'text-[9px] font-bold px-1.5 py-0.5 rounded-full',
+                                  exact ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700',
+                                )}>
+                                  {exact ? '=' : `±${difference.toFixed(3)}`}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div className="px-3 py-4 text-xs text-center text-text-muted">Aucun produit trouvé</div>
+                      )
+                    ) : (
+                      <div className="px-3 py-4 text-xs text-center text-text-muted">Saisissez un prix pour comparer l’inventaire</div>
+                    )}
+                  </div>
+                )}
               </th>
               <th
                 className="text-center px-3 py-2.5 text-xs font-semibold text-text-secondary cursor-pointer hover:text-text-primary"
