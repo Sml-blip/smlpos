@@ -95,6 +95,7 @@ export default function InventaireTab() {
   const [sortKey, setSortKey] = useState<SortKey>('nom')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showModal, setShowModal] = useState(false)
+  const [showPriceMatches, setShowPriceMatches] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Produit | null>(null)
   const [formData, setFormData] = useState<ProductFormData>(emptyForm())
   const [formErrors, setFormErrors] = useState<Partial<ProductFormData>>({})
@@ -257,10 +258,20 @@ export default function InventaireTab() {
   const lowStockCount = useMemo(() => produits.filter(p => p.stock_actuel <= p.stock_minimum).length, [produits])
   const totalValeur = useMemo(() => produits.reduce((s, p) => s + p.prix_vente * p.stock_actuel, 0), [produits])
   const categories = useMemo(() => Array.from(new Set(produits.map(p => p.categorie).filter(Boolean))), [produits])
+  const nearbyPriceProducts = useMemo(() => {
+    const target = parseFloat(formData.prix_vente.replace(',', '.'))
+    if (!Number.isFinite(target) || target < 0) return []
+    return produits
+      .filter(p => p.id !== editingProduct?.id && Number.isFinite(Number(p.prix_vente)))
+      .map(p => ({ product: p, difference: Math.abs(Number(p.prix_vente) - target) }))
+      .sort((a, b) => a.difference - b.difference || a.product.nom.localeCompare(b.product.nom, 'fr'))
+      .slice(0, 7)
+  }, [editingProduct?.id, formData.prix_vente, produits])
 
   // Form handling
   const openCreate = () => {
     setEditingProduct(null)
+    setShowPriceMatches(false)
     setFormData(emptyForm())
     setFormErrors({})
     setSerialNums([])
@@ -270,6 +281,7 @@ export default function InventaireTab() {
 
   const openEdit = (p: Produit) => {
     setEditingProduct(p)
+    setShowPriceMatches(false)
     setFormData({
       code_barre: p.code_barre || '',
       reference: p.reference,
@@ -994,18 +1006,73 @@ export default function InventaireTab() {
                         <label className="block text-xs font-semibold text-text-secondary mb-1.5">
                           Prix Vente TTC (DT) <span className="text-danger">*</span>
                         </label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={formData.prix_vente}
-                          onChange={e => onPrixVenteChange(e.target.value.replace(/[^0-9.,]/g, ''))}
-                          className={cn('w-full border rounded-lg px-3 py-2 text-sm font-price font-bold',
-                            pricing.isBelowCost ? 'border-red-400 bg-red-50' : formErrors.prix_vente ? 'border-danger' : 'border-green-400 bg-green-50'
+                        <div className="relative">
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={formData.prix_vente}
+                              onChange={e => {
+                                onPrixVenteChange(e.target.value.replace(/[^0-9.,]/g, ''))
+                                if (showPriceMatches) setShowPriceMatches(true)
+                              }}
+                              className={cn('min-w-0 flex-1 border rounded-lg px-3 py-2 text-sm font-price font-bold',
+                                pricing.isBelowCost ? 'border-red-400 bg-red-50' : formErrors.prix_vente ? 'border-danger' : 'border-green-400 bg-green-50'
+                              )}
+                              placeholder="0.000"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPriceMatches(v => !v)}
+                              disabled={!formData.prix_vente.trim()}
+                              title="Chercher les produits au même prix ou à un prix proche"
+                              className="w-9 flex-shrink-0 inline-flex items-center justify-center rounded-lg border border-green-400 bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Search size={15} />
+                            </button>
+                          </div>
+                          {showPriceMatches && (
+                            <div className="absolute z-[170] left-0 right-0 top-full mt-1.5 bg-white border border-border rounded-xl shadow-2xl overflow-hidden">
+                              <div className="px-3 py-2 bg-muted border-b border-border text-[10px] font-semibold text-text-secondary">
+                                Produits au même prix ou les plus proches
+                              </div>
+                              {nearbyPriceProducts.length > 0 ? (
+                                <div className="max-h-56 overflow-y-auto p-1">
+                                  {nearbyPriceProducts.map(({ product, difference }) => {
+                                    const exact = difference < 0.0005
+                                    return (
+                                      <button
+                                        key={product.id}
+                                        type="button"
+                                        onClick={() => {
+                                          onPrixVenteChange(Number(product.prix_vente).toFixed(3))
+                                          setShowPriceMatches(false)
+                                        }}
+                                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-accent-50 text-left"
+                                      >
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-xs font-semibold truncate">{product.nom}</div>
+                                          <div className="text-[10px] text-text-muted truncate">{product.reference} · {product.categorie}</div>
+                                        </div>
+                                        <span className="font-price text-xs font-bold">{formatPrice(product.prix_vente)}</span>
+                                        <span className={cn(
+                                          'text-[9px] font-bold px-1.5 py-0.5 rounded-full',
+                                          exact ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700',
+                                        )}>
+                                          {exact ? '=' : `±${difference.toFixed(3)}`}
+                                        </span>
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="px-3 py-4 text-xs text-center text-text-muted">Aucun autre produit à comparer</div>
+                              )}
+                            </div>
                           )}
-                          placeholder="0.000"
-                        />
+                        </div>
                         {formErrors.prix_vente && <p className="text-xs text-danger mt-1">{formErrors.prix_vente}</p>}
-                        <p className="text-[10px] text-text-muted mt-0.5">Path B — saisie directe</p>
+                        <p className="text-[10px] text-text-muted mt-0.5">Saisie directe · loupe = prix identiques/proches</p>
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-text-secondary mb-1.5">TVA Vente (%) <span className="text-danger">*</span></label>

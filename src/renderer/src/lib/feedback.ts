@@ -2,14 +2,21 @@ export type FeedbackSound = 'click' | 'startup' | 'cash' | 'invoice' | 'success'
 
 let audioContext: AudioContext | null = null
 let lastClickAt = 0
+let pendingStartup = false
 
-function context(): AudioContext | null {
+async function context(): Promise<AudioContext | null> {
   if (typeof window === 'undefined') return null
   const AudioContextClass = window.AudioContext
   if (!AudioContextClass) return null
   if (!audioContext) audioContext = new AudioContextClass()
-  if (audioContext.state === 'suspended') void audioContext.resume()
-  return audioContext
+  if (audioContext.state === 'suspended') {
+    try {
+      await audioContext.resume()
+    } catch {
+      return null
+    }
+  }
+  return audioContext.state === 'running' ? audioContext : null
 }
 
 function tone(
@@ -36,35 +43,44 @@ function tone(
   oscillator.stop(start + duration + 0.02)
 }
 
-export function playFeedback(sound: FeedbackSound) {
+function scheduleFeedback(ctx: AudioContext, sound: FeedbackSound) {
+  if (sound === 'click') {
+    tone(ctx, 720, 0, 0.045, 0.04, 'sine', 540)
+    return
+  }
+  if (sound === 'startup') {
+    tone(ctx, 392, 0, 0.16, 0.075)
+    tone(ctx, 523.25, 0.09, 0.18, 0.08)
+    tone(ctx, 659.25, 0.18, 0.25, 0.09)
+    return
+  }
+  if (sound === 'cash') {
+    tone(ctx, 880, 0, 0.08, 0.1, 'triangle', 1046.5)
+    tone(ctx, 1318.5, 0.075, 0.13, 0.085, 'sine', 1568)
+    tone(ctx, 2093, 0.17, 0.16, 0.06, 'sine', 1760)
+    return
+  }
+  if (sound === 'invoice') {
+    tone(ctx, 523.25, 0, 0.14, 0.08, 'triangle')
+    tone(ctx, 659.25, 0.06, 0.17, 0.075, 'triangle')
+    tone(ctx, 783.99, 0.13, 0.24, 0.08, 'sine')
+    return
+  }
+  tone(ctx, 659.25, 0, 0.11, 0.065)
+  tone(ctx, 880, 0.08, 0.18, 0.07)
+}
+
+export async function playFeedback(sound: FeedbackSound): Promise<void> {
   try {
-    const ctx = context()
-    if (!ctx) return
-    if (sound === 'click') {
-      tone(ctx, 620, 0, 0.035, 0.012, 'sine', 500)
+    const ctx = await context()
+    if (!ctx) {
+      if (sound === 'startup') pendingStartup = true
       return
     }
-    if (sound === 'startup') {
-      tone(ctx, 392, 0, 0.16, 0.025)
-      tone(ctx, 523.25, 0.09, 0.18, 0.026)
-      tone(ctx, 659.25, 0.18, 0.25, 0.03)
-      return
-    }
-    if (sound === 'cash') {
-      tone(ctx, 880, 0, 0.08, 0.032, 'triangle', 1046.5)
-      tone(ctx, 1318.5, 0.075, 0.13, 0.026, 'sine', 1568)
-      tone(ctx, 2093, 0.17, 0.16, 0.018, 'sine', 1760)
-      return
-    }
-    if (sound === 'invoice') {
-      tone(ctx, 523.25, 0, 0.14, 0.025, 'triangle')
-      tone(ctx, 659.25, 0.06, 0.17, 0.024, 'triangle')
-      tone(ctx, 783.99, 0.13, 0.24, 0.027, 'sine')
-      return
-    }
-    tone(ctx, 659.25, 0, 0.11, 0.02)
-    tone(ctx, 880, 0.08, 0.18, 0.022)
+    pendingStartup = false
+    scheduleFeedback(ctx, sound)
   } catch {
+    if (sound === 'startup') pendingStartup = true
     // Feedback must never interrupt a business action.
   }
 }
@@ -78,7 +94,16 @@ export function installGlobalInteractionFeedback(): () => void {
     const now = performance.now()
     if (now - lastClickAt < 35) return
     lastClickAt = now
-    playFeedback('click')
+    void (async () => {
+      const ctx = await context()
+      if (!ctx) return
+      if (pendingStartup) {
+        pendingStartup = false
+        scheduleFeedback(ctx, 'startup')
+      } else {
+        scheduleFeedback(ctx, 'click')
+      }
+    })()
   }
   document.addEventListener('pointerdown', onPointerDown, true)
   return () => document.removeEventListener('pointerdown', onPointerDown, true)
