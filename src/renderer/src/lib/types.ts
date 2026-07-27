@@ -102,6 +102,8 @@ export interface Client {
   matricule_fiscal?: string
   organisation_id?: string
   solde_credit: number
+  fidelite_code?: string
+  solde_fidelite?: number
   credit_limite?: number
   notes?: string
   actif?: number
@@ -131,6 +133,8 @@ export interface Vente {
   annule_at?: string
   annule_motif?: string
   a_facture?: number
+  fidelite_utilisee?: number
+  fidelite_gagnee?: number
   created_at: string
 }
 

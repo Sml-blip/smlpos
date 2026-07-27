@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.9.9'
+export const SCHEMA_VERSION = '1.10.0'
 
 export function initDatabase() {
   const db = getDb()
@@ -575,6 +575,27 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE clients ADD COLUMN organisation_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE clients ADD COLUMN matricule_fiscal TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE clients ADD COLUMN agent TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE clients ADD COLUMN fidelite_code TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE clients ADD COLUMN solde_fidelite REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_fidelite_code ON clients(fidelite_code) WHERE fidelite_code IS NOT NULL`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN fidelite_utilisee REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN fidelite_gagnee REAL DEFAULT 0`) } catch { /* already exists */ }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mouvements_fidelite (
+      id            TEXT PRIMARY KEY,
+      client_id     TEXT NOT NULL REFERENCES clients(id),
+      vente_id      TEXT REFERENCES ventes(id),
+      type          TEXT NOT NULL CHECK(type IN ('GAIN','UTILISATION','ANNULATION_GAIN','REMBOURSEMENT')),
+      montant       REAL NOT NULL,
+      solde_avant   REAL NOT NULL,
+      solde_apres   REAL NOT NULL,
+      note          TEXT,
+      operateur     TEXT,
+      created_at    TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fidelite_vente_type
+      ON mouvements_fidelite(vente_id, type) WHERE vente_id IS NOT NULL;
+  `)
 
   // New tables for v1.5
   db.exec(`
@@ -858,6 +879,9 @@ export function initDatabase() {
     marge_defaut_pct:        '30',
     pos_show_calculator:     'true',
     pos_confirm_sortie:      'true',
+    fidelite_gain_pct:       '1',
+    fidelite_min_achat:      '0',
+    fidelite_max_utilisation_pct: '100',
     shift_close_reminder_enabled: 'true',
     shift_close_reminder_time:    '21:00',
     // Impression

@@ -4,7 +4,7 @@ export const SYNC_REMOTE_COLUMNS: Record<string, ReadonlySet<string>> = {
   categories: new Set(['id', 'nom', 'icone']),
   fournisseurs: new Set(['id', 'nom', 'contact_nom', 'telephone', 'email', 'adresse', 'matricule_fiscal', 'rib', 'solde_du', 'notes', 'actif', 'created_at']),
   organisations: new Set(['id', 'nom', 'telephone', 'email', 'adresse', 'matricule_fiscal', 'credit_total', 'notes', 'actif', 'created_at']),
-  clients: new Set(['id', 'nom', 'telephone', 'email', 'adresse', 'matricule_fiscal', 'credit_limite', 'solde_credit', 'organisation_id', 'agent', 'actif', 'notes', 'created_at']),
+  clients: new Set(['id', 'nom', 'telephone', 'email', 'adresse', 'matricule_fiscal', 'credit_limite', 'solde_credit', 'organisation_id', 'agent', 'fidelite_code', 'solde_fidelite', 'actif', 'notes', 'created_at']),
   personnels: new Set(['id', 'nom', 'prenom', 'poste', 'telephone', 'cin', 'date_embauche', 'salaire_base', 'avance_solde', 'credit_solde', 'actif', 'notes', 'created_at', 'updated_at']),
   services_pos: new Set(['id', 'nom', 'code_barre', 'logo_url', 'actif', 'created_at']),
   app_settings: new Set(['key', 'value', 'updated_at']),
@@ -18,7 +18,7 @@ export const SYNC_REMOTE_COLUMNS: Record<string, ReadonlySet<string>> = {
   ventes: new Set([
     'id', 'numero', 'shift_id', 'operateur_nom', 'client_nom', 'client_tel', 'client_adresse', 'client_matricule',
     'sous_total', 'total_remises', 'total_ttc', 'mode_paiement', 'montant_recu', 'monnaie_rendue', 'type',
-    'a_facture', 'statut', 'annule_par', 'annule_at', 'annule_motif', 'created_at',
+    'a_facture', 'fidelite_utilisee', 'fidelite_gagnee', 'statut', 'annule_par', 'annule_at', 'annule_motif', 'created_at',
   ]),
   lignes_vente: new Set(['id', 'vente_id', 'produit_id', 'designation', 'quantite', 'prix_unitaire', 'remise_pct', 'total_ligne', 'type_produit']),
   factures_clients: new Set(['id', 'numero', 'shift_id', 'vente_id', 'type_facture', 'client_nom', 'client_tel', 'client_adresse', 'client_matricule', 'total_ht', 'total_tva', 'total_ttc', 'imprimee', 'tva_taux_principal', 'exo', 'created_at']),

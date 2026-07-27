@@ -133,6 +133,9 @@ interface Window {
     clientsList: (filters?: unknown) => Promise<unknown[]>
     clientsCreate: (c: unknown) => Promise<unknown>
     clientsUpdate: (id: string, data: unknown) => Promise<unknown>
+    fideliteFindByCode: (code: string) => Promise<unknown>
+    fideliteAssignCard: (clientId: string, code: string) => Promise<unknown>
+    fideliteListMovements: (clientId: string) => Promise<unknown[]>
 
     // Crédits Clients
     creditsList: (clientId?: string) => Promise<unknown[]>

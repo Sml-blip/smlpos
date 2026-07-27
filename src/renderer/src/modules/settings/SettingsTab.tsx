@@ -53,6 +53,9 @@ const DEFAULTS: Record<string, string> = {
   frais_retour_colis:    '4',
   credit_max_client:     '500',
   marge_defaut_pct:      '30',
+  fidelite_gain_pct:     '1',
+  fidelite_min_achat:    '0',
+  fidelite_max_utilisation_pct: '100',
   pos_show_calculator:   'true',
   pos_confirm_sortie:    'true',
   shift_close_reminder_enabled: 'true',
@@ -344,6 +347,21 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
             </Field>
             <Field label="Marge bénéficiaire par défaut (%)" hint="Utilisée pour suggérer le prix de vente">
               <TextInput type="number" value={values['marge_defaut_pct']} onChange={v => set('marge_defaut_pct', v)} />
+            </Field>
+          </div>
+        </Section>
+      </Card>
+      <Card>
+        <Section title="Carte de fidélité">
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Cashback (%)" hint="Montant crédité après un achat payé">
+              <TextInput type="number" value={values['fidelite_gain_pct']} onChange={v => set('fidelite_gain_pct', v)} />
+            </Field>
+            <Field label="Achat minimum (DT)" hint="Minimum requis pour gagner du cashback">
+              <TextInput type="number" value={values['fidelite_min_achat']} onChange={v => set('fidelite_min_achat', v)} />
+            </Field>
+            <Field label="Utilisation maximum (%)" hint="Part maximale du ticket payable avec le solde">
+              <TextInput type="number" value={values['fidelite_max_utilisation_pct']} onChange={v => set('fidelite_max_utilisation_pct', v)} />
             </Field>
           </div>
         </Section>
@@ -761,7 +779,7 @@ CREATE TABLE IF NOT EXISTS serial_numbers (id TEXT PRIMARY KEY, produit_id TEXT 
 CREATE TABLE IF NOT EXISTS services_pos (id TEXT PRIMARY KEY, nom TEXT NOT NULL, code_barre TEXT UNIQUE NOT NULL, logo_url TEXT, actif INTEGER DEFAULT 1, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS transactions_services (id TEXT PRIMARY KEY, shift_id TEXT, service_id TEXT, service_nom TEXT NOT NULL, montant_frais FLOAT NOT NULL, note TEXT, operateur TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS shifts (id TEXT PRIMARY KEY, operateur_id TEXT, operateur_nom TEXT NOT NULL, fond_de_caisse FLOAT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, total_ventes_especes FLOAT DEFAULT 0, total_services FLOAT DEFAULT 0, total_reparations FLOAT DEFAULT 0, total_credits_recus FLOAT DEFAULT 0, total_sorties FLOAT DEFAULT 0, solde_theorique FLOAT, solde_declare FLOAT, ecart FLOAT, transfere_caisse_interne INTEGER DEFAULT 0, notes_cloture TEXT);
-CREATE TABLE IF NOT EXISTS ventes (id TEXT PRIMARY KEY, numero TEXT UNIQUE NOT NULL, shift_id TEXT, operateur_nom TEXT, client_nom TEXT, client_tel TEXT, client_adresse TEXT, client_matricule TEXT, sous_total FLOAT, total_remises FLOAT DEFAULT 0, total_ttc FLOAT NOT NULL, mode_paiement TEXT, montant_recu FLOAT, monnaie_rendue FLOAT DEFAULT 0, type TEXT DEFAULT 'VENTE', a_facture INTEGER DEFAULT 0, statut TEXT DEFAULT 'ACTIVE', annule_par TEXT, annule_at TEXT, annule_motif TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS ventes (id TEXT PRIMARY KEY, numero TEXT UNIQUE NOT NULL, shift_id TEXT, operateur_nom TEXT, client_id TEXT, client_nom TEXT, client_tel TEXT, client_adresse TEXT, client_matricule TEXT, sous_total FLOAT, total_remises FLOAT DEFAULT 0, total_ttc FLOAT NOT NULL, mode_paiement TEXT, montant_recu FLOAT, monnaie_rendue FLOAT DEFAULT 0, type TEXT DEFAULT 'VENTE', type_vente TEXT DEFAULT 'TICKET', a_facture INTEGER DEFAULT 0, fidelite_utilisee FLOAT DEFAULT 0, fidelite_gagnee FLOAT DEFAULT 0, statut TEXT DEFAULT 'ACTIVE', annule_par TEXT, annule_at TEXT, annule_motif TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS lignes_vente (id TEXT PRIMARY KEY, vente_id TEXT, produit_id TEXT, designation TEXT NOT NULL, quantite INTEGER NOT NULL, prix_unitaire FLOAT NOT NULL, remise_pct FLOAT DEFAULT 0, total_ligne FLOAT NOT NULL, type_produit TEXT DEFAULT 'F');
 CREATE TABLE IF NOT EXISTS factures_clients (id TEXT PRIMARY KEY, numero TEXT UNIQUE NOT NULL, shift_id TEXT, vente_id TEXT, type_facture TEXT DEFAULT 'VENTE_INDIVIDUELLE', client_nom TEXT, client_tel TEXT, client_adresse TEXT, client_matricule TEXT, total_ht FLOAT NOT NULL, total_tva FLOAT DEFAULT 0, total_ttc FLOAT NOT NULL, imprimee INTEGER DEFAULT 0, tva_taux_principal FLOAT, exo TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS reparations (id TEXT PRIMARY KEY, numero TEXT UNIQUE NOT NULL, shift_id TEXT, operateur_nom TEXT, client_nom TEXT, client_tel TEXT, type_appareil TEXT, marque TEXT, modele TEXT, description_panne TEXT, main_oeuvre FLOAT DEFAULT 0, acompte FLOAT DEFAULT 0, total_estime FLOAT DEFAULT 0, total_final FLOAT, statut TEXT DEFAULT 'EN_ATTENTE', technicien TEXT, notes_technicien TEXT, benefice FLOAT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
@@ -770,7 +788,13 @@ CREATE TABLE IF NOT EXISTS sorties_caisse (id TEXT PRIMARY KEY, shift_id TEXT, m
 CREATE TABLE IF NOT EXISTS factures_fournisseurs (id TEXT PRIMARY KEY, numero_facture TEXT NOT NULL, fournisseur_id TEXT, date_facture TEXT NOT NULL, date_echeance TEXT, statut_paiement TEXT DEFAULT 'EN_ATTENTE', montant_ht FLOAT NOT NULL, montant_tva FLOAT DEFAULT 0, montant_ttc FLOAT NOT NULL, montant_paye FLOAT DEFAULT 0, notes TEXT, type TEXT DEFAULT 'FACTURE_ACHAT', statut_reception TEXT DEFAULT 'ARRIVE', exo TEXT, timbre FLOAT DEFAULT 1, ht_7 FLOAT, tva_7 FLOAT, ht_19 FLOAT, tva_19 FLOAT, total_remise FLOAT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS lignes_facture_fournisseur (id TEXT PRIMARY KEY, facture_id TEXT, produit_id TEXT, designation TEXT NOT NULL, quantite INTEGER NOT NULL, ancien_prix_achat FLOAT, nouveau_prix_achat FLOAT NOT NULL, prix_vente_suggere FLOAT, prix_vente_applique FLOAT, tva_taux FLOAT DEFAULT 0);
 CREATE TABLE IF NOT EXISTS paiements_fournisseurs (id TEXT PRIMARY KEY, facture_id TEXT, fournisseur_id TEXT, montant FLOAT NOT NULL, mode_paiement TEXT DEFAULT 'ESPECES', reference_cheque TEXT, date_paiement TEXT, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
-CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, nom TEXT NOT NULL, telephone TEXT, email TEXT, adresse TEXT, matricule_fiscal TEXT, credit_limite FLOAT DEFAULT 500, solde_credit FLOAT DEFAULT 0, organisation_id TEXT, agent TEXT, actif INTEGER DEFAULT 1, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, nom TEXT NOT NULL, telephone TEXT, email TEXT, adresse TEXT, matricule_fiscal TEXT, credit_limite FLOAT DEFAULT 500, solde_credit FLOAT DEFAULT 0, fidelite_code TEXT, solde_fidelite FLOAT DEFAULT 0, organisation_id TEXT, agent TEXT, actif INTEGER DEFAULT 1, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS fidelite_code TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS solde_fidelite FLOAT DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_fidelite_code ON clients(fidelite_code) WHERE fidelite_code IS NOT NULL;
+ALTER TABLE ventes ADD COLUMN IF NOT EXISTS client_id TEXT;
+ALTER TABLE ventes ADD COLUMN IF NOT EXISTS fidelite_utilisee FLOAT DEFAULT 0;
+ALTER TABLE ventes ADD COLUMN IF NOT EXISTS fidelite_gagnee FLOAT DEFAULT 0;
 CREATE TABLE IF NOT EXISTS credits_clients (id TEXT PRIMARY KEY, client_id TEXT, client_nom TEXT NOT NULL, shift_id TEXT, type TEXT NOT NULL, montant FLOAT NOT NULL, reference TEXT, note TEXT, operateur TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS organisations (id TEXT PRIMARY KEY, nom TEXT NOT NULL, telephone TEXT, email TEXT, adresse TEXT, matricule_fiscal TEXT, credit_total FLOAT DEFAULT 0, notes TEXT, actif INTEGER DEFAULT 1, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS personnels (id TEXT PRIMARY KEY, nom TEXT NOT NULL, prenom TEXT, poste TEXT, telephone TEXT, cin TEXT UNIQUE, date_embauche TEXT, salaire_base FLOAT NOT NULL DEFAULT 0, avance_solde FLOAT DEFAULT 0, credit_solde FLOAT DEFAULT 0, actif INTEGER DEFAULT 1, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());

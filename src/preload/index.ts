@@ -146,6 +146,9 @@ const api = {
   clientsList: (filters?: unknown) => ipcRenderer.invoke('clients:list', filters),
   clientsCreate: (c: unknown) => ipcRenderer.invoke('clients:create', c),
   clientsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('clients:update', id, data),
+  fideliteFindByCode: (code: string) => ipcRenderer.invoke('fidelite:findByCode', code),
+  fideliteAssignCard: (clientId: string, code: string) => ipcRenderer.invoke('fidelite:assignCard', clientId, code),
+  fideliteListMovements: (clientId: string) => ipcRenderer.invoke('fidelite:listMovements', clientId),
 
   // Crédits Clients
   creditsList: (clientId?: string) => ipcRenderer.invoke('credits:list', clientId),

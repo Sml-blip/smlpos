@@ -19,6 +19,7 @@ interface Client {
   id: string; nom: string; telephone?: string; email?: string; adresse?: string
   organisation_id?: string; matricule_fiscal?: string
   solde_credit: number; credit_limite?: number; notes?: string; created_at: string
+  fidelite_code?: string; solde_fidelite?: number
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -201,6 +202,11 @@ export default function ClientsTab() {
                         <p className={cn('text-2xl font-price font-bold', (selectedClient.solde_credit ?? 0) > 0 ? 'text-red-600' : 'text-green-600')}>
                           {formatPrice(selectedClient.solde_credit ?? 0)}
                         </p>
+                        <p className="text-xs text-text-muted mt-2">Solde fidélité</p>
+                        <p className="text-lg font-price font-bold text-violet-700">{formatPrice(selectedClient.solde_fidelite ?? 0)}</p>
+                        {selectedClient.fidelite_code && (
+                          <p className="text-[10px] font-mono text-violet-600">{selectedClient.fidelite_code}</p>
+                        )}
                       </div>
                     </div>
                   </div>

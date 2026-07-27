@@ -1119,14 +1119,39 @@ function setupIpcHandlers() {
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
     const normalizedVente = normalizeMoneyFields({
       client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
+      fidelite_utilisee: 0, fidelite_gagnee: 0,
       ...vente,
-    }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue'])
+    }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue', 'fidelite_utilisee', 'fidelite_gagnee'])
     const normalizedLignes = (lignes as Record<string, unknown>[]).map(ligne => normalizeVenteLine({ numero_serie: null, ...ligne }))
+    const loyaltyUsed = Math.max(0, money3(normalizedVente.fidelite_utilisee))
+    const loyaltyClient = normalizedVente.client_id
+      ? db.prepare(`SELECT * FROM clients WHERE id = ? AND actif = 1`).get(normalizedVente.client_id) as Record<string, unknown> | undefined
+      : undefined
+    const hasLoyaltyCard = !!String(loyaltyClient?.fidelite_code ?? '').trim()
+    const balanceBefore = Math.max(0, money3(loyaltyClient?.solde_fidelite))
+    if (loyaltyUsed > 0 && (!loyaltyClient || !hasLoyaltyCard)) throw new Error('Carte de fidélité invalide')
+    if (loyaltyUsed > balanceBefore + 0.0001) throw new Error('Solde fidélité insuffisant')
+    const grossAfterOtherDiscounts = money3(Number(normalizedVente.total_ttc) + loyaltyUsed)
+    if (loyaltyUsed > grossAfterOtherDiscounts + 0.0001) throw new Error('La remise fidélité dépasse le total')
+    const gainPctRow = db.prepare(`SELECT value FROM app_settings WHERE key = 'fidelite_gain_pct'`).get() as { value?: string } | undefined
+    const minPurchaseRow = db.prepare(`SELECT value FROM app_settings WHERE key = 'fidelite_min_achat'`).get() as { value?: string } | undefined
+    const maxUsePctRow = db.prepare(`SELECT value FROM app_settings WHERE key = 'fidelite_max_utilisation_pct'`).get() as { value?: string } | undefined
+    const gainPct = Math.max(0, Number(gainPctRow?.value) || 0)
+    const minPurchase = Math.max(0, Number(minPurchaseRow?.value) || 0)
+    const maxUsePct = Math.min(100, Math.max(0, Number(maxUsePctRow?.value) || 0))
+    const maxAllowedUse = money3(grossAfterOtherDiscounts * maxUsePct / 100)
+    if (loyaltyUsed > maxAllowedUse + 0.0001) throw new Error(`Utilisation fidélité limitée à ${maxUsePct}% du total`)
+    const loyaltyEarned = hasLoyaltyCard && Number(normalizedVente.total_ttc) >= minPurchase
+      ? money3(Number(normalizedVente.total_ttc) * gainPct / 100)
+      : 0
+    normalizedVente.fidelite_gagnee = loyaltyEarned
     const insertVente = db.prepare(`
       INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_id, client_nom, client_tel, client_adresse, client_matricule,
-        sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture, created_at)
+        sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture,
+        fidelite_utilisee, fidelite_gagnee, created_at)
       VALUES (@id, @numero, @shift_id, @operateur_nom, @client_id, @client_nom, @client_tel, @client_adresse, @client_matricule,
-        @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture, @created_at)
+        @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture,
+        @fidelite_utilisee, @fidelite_gagnee, @created_at)
     `)
     const insertLigne = db.prepare(`
       INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit, numero_serie)
@@ -1160,13 +1185,47 @@ function setupIpcHandlers() {
           }
         }
       }
+      if (loyaltyClient && hasLoyaltyCard && (loyaltyUsed > 0 || loyaltyEarned > 0)) {
+        let runningBalance = balanceBefore
+        const insertMovement = db.prepare(`
+          INSERT INTO mouvements_fidelite
+            (id,client_id,vente_id,type,montant,solde_avant,solde_apres,note,operateur,created_at)
+          VALUES (@id,@client_id,@vente_id,@type,@montant,@solde_avant,@solde_apres,@note,@operateur,@created_at)
+        `)
+        if (loyaltyUsed > 0) {
+          const afterUse = money3(runningBalance - loyaltyUsed)
+          insertMovement.run({
+            id: randomUUID(), client_id: loyaltyClient.id, vente_id: normalizedVente.id,
+            type: 'UTILISATION', montant: loyaltyUsed, solde_avant: runningBalance, solde_apres: afterUse,
+            note: `Remise fidélité ${normalizedVente.numero}`, operateur: normalizedVente.operateur_nom, created_at: now,
+          })
+          runningBalance = afterUse
+        }
+        if (loyaltyEarned > 0) {
+          const afterEarn = money3(runningBalance + loyaltyEarned)
+          insertMovement.run({
+            id: randomUUID(), client_id: loyaltyClient.id, vente_id: normalizedVente.id,
+            type: 'GAIN', montant: loyaltyEarned, solde_avant: runningBalance, solde_apres: afterEarn,
+            note: `Cashback ${gainPct}% — ${normalizedVente.numero}`, operateur: normalizedVente.operateur_nom, created_at: now,
+          })
+          runningBalance = afterEarn
+        }
+        db.prepare(`UPDATE clients SET solde_fidelite = ? WHERE id = ?`).run(runningBalance, loyaltyClient.id)
+      }
     })
     transaction()
     addActivityLog({ shift_id: normalizedVente.shift_id as string, operateur: normalizedVente.operateur_nom as string, action: 'SALE_CREATED', montant: normalizedVente.total_ttc as number, details: { numero: normalizedVente.numero, mode: normalizedVente.mode_paiement, type_vente: normalizedVente.type_vente } })
     enqueueSync('ventes', 'INSERT', normalizedVente)
     for (const ligne of normalizedLignes) enqueueSync('lignes_vente', 'INSERT', ligne)
     for (const ligne of normalizedLignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
-    return { success: true }
+    const loyaltyAfter = loyaltyClient
+      ? db.prepare(`SELECT solde_fidelite FROM clients WHERE id = ?`).get(loyaltyClient.id) as { solde_fidelite?: number } | undefined
+      : undefined
+    if (loyaltyClient && hasLoyaltyCard) {
+      const clientSnapshot = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(loyaltyClient.id) as Record<string, unknown>
+      enqueueSync('clients', 'UPDATE', clientSnapshot)
+    }
+    return { success: true, fidelite_utilisee: loyaltyUsed, fidelite_gagnee: loyaltyEarned, solde_fidelite: loyaltyAfter?.solde_fidelite ?? 0 }
   })
 
   ipcMain.handle('ventes:list', (_e, filters: { shiftId?: string; dateFrom?: string; dateTo?: string; limit?: number; search?: string } = {}) => {
@@ -2390,6 +2449,38 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
+  ipcMain.handle('fidelite:findByCode', (_e, code: string) => {
+    const normalized = String(code ?? '').trim()
+    if (!normalized) return null
+    return db.prepare(`
+      SELECT * FROM clients
+      WHERE actif = 1 AND lower(trim(fidelite_code)) = lower(trim(?))
+      LIMIT 1
+    `).get(normalized)
+  })
+
+  ipcMain.handle('fidelite:assignCard', (_e, clientId: string, code: string) => {
+    const normalized = String(code ?? '').trim()
+    if (!normalized) throw new Error('Scannez ou générez un code de carte')
+    const client = db.prepare(`SELECT * FROM clients WHERE id = ? AND actif = 1`).get(clientId) as Record<string, unknown> | undefined
+    if (!client) throw new Error('Client introuvable')
+    const conflict = db.prepare(`
+      SELECT id, nom FROM clients
+      WHERE lower(trim(fidelite_code)) = lower(trim(?)) AND id != ?
+      LIMIT 1
+    `).get(normalized, clientId) as { id: string; nom: string } | undefined
+    if (conflict) throw new Error(`Cette carte appartient déjà à ${conflict.nom}`)
+    db.prepare(`UPDATE clients SET fidelite_code = ?, solde_fidelite = COALESCE(solde_fidelite, 0) WHERE id = ?`).run(normalized, clientId)
+    const snapshot = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(clientId) as Record<string, unknown>
+    enqueueSync('clients', 'UPDATE', snapshot)
+    addActivityLog({ action: 'LOYALTY_CARD_ASSIGNED', details: { clientId, code: normalized } })
+    return { success: true, client: snapshot }
+  })
+
+  ipcMain.handle('fidelite:listMovements', (_e, clientId: string) => {
+    return db.prepare(`SELECT * FROM mouvements_fidelite WHERE client_id = ? ORDER BY created_at DESC LIMIT 100`).all(clientId)
+  })
+
   // ── Crédits Clients ────────────────────────────────────────────────────────
   ipcMain.handle('credits:list', (_e, clientId?: string) => {
     if (clientId) return db.prepare(`SELECT cc.*, c.solde_credit FROM credits_clients cc LEFT JOIN clients c ON c.id = cc.client_id WHERE cc.client_id = ? ORDER BY cc.created_at DESC`).all(clientId)
@@ -2550,6 +2641,10 @@ function setupIpcHandlers() {
   // ── Ventes: Cancel ─────────────────────────────────────────────────────────
   ipcMain.handle('ventes:annuler', (_e, id: string, data: Record<string, unknown>) => {
     const now = new Date().toISOString()
+    const vente = db.prepare(`SELECT * FROM ventes WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    if (!vente) throw new Error('Vente introuvable')
+    if (vente.statut === 'ANNULEE') return { success: true }
+    let loyaltyClientId: string | null = null
     db.transaction(() => {
       db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par=@annule_par, annule_at=@annule_at, annule_motif=@annule_motif WHERE id=@id`)
         .run({ id, annule_par: data.annule_par, annule_at: now, annule_motif: data.annule_motif })
@@ -2557,11 +2652,42 @@ function setupIpcHandlers() {
       for (const l of lignes) {
         db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?`).run(l.quantite, l.produit_id)
       }
+      loyaltyClientId = String(vente.client_id ?? '') || null
+      if (loyaltyClientId) {
+        const client = db.prepare(`SELECT solde_fidelite FROM clients WHERE id = ?`).get(loyaltyClientId) as { solde_fidelite?: number } | undefined
+        if (client) {
+          const earned = Math.max(0, money3(vente.fidelite_gagnee))
+          const used = Math.max(0, money3(vente.fidelite_utilisee))
+          let running = money3(client.solde_fidelite)
+          const insertMovement = db.prepare(`
+            INSERT INTO mouvements_fidelite
+              (id,client_id,vente_id,type,montant,solde_avant,solde_apres,note,operateur,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+          `)
+          if (earned > 0) {
+            const after = money3(running - earned)
+            insertMovement.run(randomUUID(), loyaltyClientId, id, 'ANNULATION_GAIN', earned, running, after,
+              `Annulation cashback ${vente.numero}`, data.annule_par ?? null, now)
+            running = after
+          }
+          if (used > 0) {
+            const after = money3(running + used)
+            insertMovement.run(randomUUID(), loyaltyClientId, id, 'REMBOURSEMENT', used, running, after,
+              `Restitution remise ${vente.numero}`, data.annule_par ?? null, now)
+            running = after
+          }
+          db.prepare(`UPDATE clients SET solde_fidelite = ? WHERE id = ?`).run(running, loyaltyClientId)
+        }
+      }
     })()
     addActivityLog({ action: 'SALE_CANCELLED', details: { id, ...data } })
     enqueueSync('ventes', 'UPDATE', { id, statut: 'ANNULEE', annule_at: now, ...data })
     const lignes = db.prepare(`SELECT produit_id FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as { produit_id: string }[]
     for (const l of lignes) enqueueProductSnapshot(l.produit_id)
+    if (loyaltyClientId) {
+      const clientSnapshot = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(loyaltyClientId) as Record<string, unknown> | undefined
+      if (clientSnapshot) enqueueSync('clients', 'UPDATE', clientSnapshot)
+    }
     return { success: true }
   })
 
