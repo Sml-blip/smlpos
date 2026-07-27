@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Client, ModePaiement, Vente } from '../../lib/types'
 import { formatPrice, generateId, generateVenteNumber } from '../../lib/utils'
-import { X, CreditCard, Banknote, FileCheck, Layers, FileText, ChevronDown, ChevronUp, Printer, Package, Gift, ScanLine, WalletCards, Sparkles } from 'lucide-react'
+import { X, CreditCard, Banknote, FileCheck, Layers, FileText, ChevronDown, ChevronUp, Printer, Package, Gift, ScanLine, WalletCards } from 'lucide-react'
 import TicketModal from './TicketModal'
 import DocumentPreviewModal from './DocumentPreviewModal'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { runAction } from '../../lib/apiCall'
 import { round3 } from '../../lib/invoiceLineCalc'
-import { generateInternalEan13 } from '../../lib/ean13'
 
 const api = window.api
 
@@ -328,14 +327,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                     className="px-3 rounded-lg bg-violet-600 text-white font-bold text-xs disabled:opacity-40">
                     Lire
                   </button>
-                  <button type="button" onClick={() => {
-                    if (loyaltyClient && clientForm.clientId === loyaltyClient.id) setClientForm(emptyClientForm())
-                    setLoyaltyCode(generateInternalEan13()); setLoyaltyLookupDone(true); setLoyaltyClient(null); setLoyaltyRedeemInput('')
-                  }}
-                    title="Générer une nouvelle carte" className="w-10 rounded-lg border border-violet-300 text-violet-700 hover:bg-violet-50">
-                    <Sparkles size={15} className="mx-auto" />
-                  </button>
                 </div>
+                <p className="text-[10px] text-violet-600">
+                  Scannez le code imprimé sur la carte physique. Le système conserve exactement ce code et n’en génère aucun.
+                </p>
 
                 {loyaltyClient ? (
                   <div className="rounded-xl bg-violet-50 border border-violet-200 p-3">
@@ -369,7 +364,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                   </div>
                 ) : loyaltyLookupDone && loyaltyCode.trim() ? (
                   <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs font-semibold text-amber-900">Nouvelle carte — choisissez ou créez son client</p>
+                    <p className="text-xs font-semibold text-amber-900">Carte non attribuée — choisissez ou créez son client</p>
                     <ClientPicker value={clientForm} onChange={setClientForm} allowPassager={false} compact />
                     <button type="button" onClick={() => void assignLoyaltyCard()} disabled={!clientForm.clientId || loyaltyBusy}
                       className="w-full py-2 rounded-lg bg-violet-600 text-white text-xs font-bold disabled:opacity-40">

@@ -2461,9 +2461,13 @@ function setupIpcHandlers() {
 
   ipcMain.handle('fidelite:assignCard', (_e, clientId: string, code: string) => {
     const normalized = String(code ?? '').trim()
-    if (!normalized) throw new Error('Scannez ou générez un code de carte')
+    if (!normalized) throw new Error('Scannez le code imprimé sur la carte')
     const client = db.prepare(`SELECT * FROM clients WHERE id = ? AND actif = 1`).get(clientId) as Record<string, unknown> | undefined
     if (!client) throw new Error('Client introuvable')
+    const currentCode = String(client.fidelite_code ?? '').trim()
+    if (currentCode && currentCode.toLowerCase() !== normalized.toLowerCase()) {
+      throw new Error('Ce client possède déjà une autre carte de fidélité')
+    }
     const conflict = db.prepare(`
       SELECT id, nom FROM clients
       WHERE lower(trim(fidelite_code)) = lower(trim(?)) AND id != ?
