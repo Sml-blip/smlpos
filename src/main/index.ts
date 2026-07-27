@@ -551,9 +551,11 @@ function setupIpcHandlers() {
 
       const lignesF = db.prepare(`
         SELECT v.id AS vente_id, lv.produit_id, lv.designation, lv.quantite,
-               lv.prix_unitaire, lv.remise_pct, lv.total_ligne
+               lv.prix_unitaire, lv.remise_pct, lv.total_ligne,
+               COALESCE(p.tva_taux, 0) AS tva_taux
         FROM lignes_vente lv
         INNER JOIN ventes v ON v.id = lv.vente_id
+        LEFT JOIN produits p ON p.id = lv.produit_id
         WHERE lv.type_produit = 'F'
         AND v.type = 'VENTE'
         AND date(v.created_at, 'localtime') = date('now', 'localtime')
@@ -577,6 +579,7 @@ function setupIpcHandlers() {
         prix_unitaire: number
         remise_pct: number
         total_ligne: number
+        tva_taux: number
       }>
 
       const revokeExistingDailyInvoice = (reason: string) => {
@@ -600,7 +603,7 @@ function setupIpcHandlers() {
         return { success: true, skipped: true, reason: 'no_f_lines', count: 0 }
       }
 
-      const totalTTC = lignesF.reduce((s, l) => s + (Number(l.total_ligne) || 0), 0)
+      const totalTTC = money3(lignesF.reduce((s, l) => s + (Number(l.total_ligne) || 0), 0))
       if (totalTTC <= 0) {
         revokeExistingDailyInvoice('Le total des ventes F éligibles est nul')
         return { success: true, skipped: true, reason: 'zero_total', count: 0 }
@@ -619,6 +622,42 @@ function setupIpcHandlers() {
       const now = new Date().toISOString()
       const docId = existing?.id ?? randomUUID()
       const includedVenteIds = [...new Set(lignesF.map(l => l.vente_id))]
+      const docLignes = lignesF.map(l => {
+        const totalTtc = money3(l.total_ligne)
+        const tvaTaux = Math.max(0, Number(l.tva_taux) || 0)
+        const totalHt = tvaTaux > 0 ? money3(totalTtc / (1 + tvaTaux / 100)) : totalTtc
+        const totalTva = money3(totalTtc - totalHt)
+        const prixUnitaireHt = tvaTaux > 0
+          ? money3(Number(l.prix_unitaire) / (1 + tvaTaux / 100))
+          : money3(l.prix_unitaire)
+        return {
+          id: randomUUID(),
+          document_id: docId,
+          produit_id: l.produit_id ?? null,
+          designation: l.designation,
+          quantite: l.quantite,
+          prix_unitaire: prixUnitaireHt,
+          remise_pct: l.remise_pct ?? 0,
+          tva_taux: tvaTaux,
+          total_ht: totalHt,
+          total_tva: totalTva,
+          total_ttc: totalTtc,
+          type_produit: 'F',
+        }
+      })
+      const totalHT = money3(docLignes.reduce((sum, line) => sum + line.total_ht, 0))
+      const totalTVA = money3(docLignes.reduce((sum, line) => sum + line.total_tva, 0))
+      const taxBuckets = docLignes.reduce((totals, line) => {
+        const roundedRate = Math.round(line.tva_taux)
+        if (roundedRate === 7) {
+          totals.ht_7 += line.total_ht
+          totals.tva_7 += line.total_tva
+        } else if (roundedRate === 19) {
+          totals.ht_19 += line.total_ht
+          totals.tva_19 += line.total_tva
+        }
+        return totals
+      }, { ht_7: 0, tva_7: 0, ht_19: 0, tva_19: 0 })
 
       const doc = {
         id: docId,
@@ -633,8 +672,8 @@ function setupIpcHandlers() {
         client_tel: null,
         client_adresse: null,
         client_matricule: null,
-        total_ht: totalTTC,
-        total_tva: 0,
+        total_ht: totalHT,
+        total_tva: totalTVA,
         total_ttc: totalTTC,
         statut_paiement: 'PAYE',
         montant_paye: totalTTC,
@@ -645,24 +684,13 @@ function setupIpcHandlers() {
           local_date: new Date().toLocaleDateString('en-CA'),
           vente_ids: includedVenteIds,
         }),
+        ht_7: money3(taxBuckets.ht_7),
+        tva_7: money3(taxBuckets.tva_7),
+        ht_19: money3(taxBuckets.ht_19),
+        tva_19: money3(taxBuckets.tva_19),
         created_at: existing?.created_at ?? now,
         updated_at: now,
       }
-
-      const docLignes = lignesF.map(l => ({
-        id: randomUUID(),
-        document_id: docId,
-        produit_id: l.produit_id ?? null,
-        designation: l.designation,
-        quantite: l.quantite,
-        prix_unitaire: l.prix_unitaire,
-        remise_pct: l.remise_pct ?? 0,
-        tva_taux: 0,
-        total_ht: l.total_ligne,
-        total_tva: 0,
-        total_ttc: l.total_ligne,
-        type_produit: 'F',
-      }))
       const replacedLineIds = existing
         ? db.prepare(`SELECT id FROM lignes_document WHERE document_id = ?`).all(docId) as Array<{ id: string }>
         : []
@@ -670,12 +698,19 @@ function setupIpcHandlers() {
       db.transaction(() => {
         if (existing) {
           db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(docId)
-          db.prepare(`UPDATE documents SET total_ht=?, total_tva=?, total_ttc=?, montant_paye=?, contenu_json=?, updated_at=? WHERE id=?`)
-            .run(totalTTC, 0, totalTTC, totalTTC, doc.contenu_json, now, docId)
+          db.prepare(`
+            UPDATE documents
+            SET total_ht=?, total_tva=?, total_ttc=?, montant_paye=?, contenu_json=?,
+                ht_7=?, tva_7=?, ht_19=?, tva_19=?, updated_at=?
+            WHERE id=?
+          `).run(
+            totalHT, totalTVA, totalTTC, totalTTC, doc.contenu_json,
+            doc.ht_7, doc.tva_7, doc.ht_19, doc.tva_19, now, docId,
+          )
         } else {
           db.prepare(`
-            INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,created_at,updated_at)
-            VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@created_at,@updated_at)
+            INSERT INTO documents (id,numero,type_document,statut,shift_id,vente_id,fournisseur_id,client_id,client_nom,client_tel,client_adresse,client_matricule,total_ht,total_tva,total_ttc,statut_paiement,montant_paye,date_echeance,layout_snapshot,contenu_json,ht_7,tva_7,ht_19,tva_19,created_at,updated_at)
+            VALUES (@id,@numero,@type_document,@statut,@shift_id,@vente_id,@fournisseur_id,@client_id,@client_nom,@client_tel,@client_adresse,@client_matricule,@total_ht,@total_tva,@total_ttc,@statut_paiement,@montant_paye,@date_echeance,@layout_snapshot,@contenu_json,@ht_7,@tva_7,@ht_19,@tva_19,@created_at,@updated_at)
           `).run(doc)
         }
         const insertLigne = db.prepare(`
@@ -2781,7 +2816,8 @@ function setupIpcHandlers() {
     const docRow = db.prepare(`SELECT vente_id FROM documents WHERE id = ?`).get(documentId) as { vente_id?: string } | undefined
     const venteId = docRow?.vente_id
     const rows = db.prepare(`
-      SELECT ld.*, p.reference AS produit_reference, p.numero_serie AS produit_numero_serie, p.has_serial_number
+      SELECT ld.*, p.reference AS produit_reference, p.numero_serie AS produit_numero_serie,
+             p.has_serial_number, p.tva_taux AS produit_tva_taux
       FROM lignes_document ld
       LEFT JOIN produits p ON p.id = ld.produit_id
       WHERE ld.document_id = ?

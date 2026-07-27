@@ -101,12 +101,24 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
           setTimbre(doc.timbre ?? 1)
           setRemise(doc.total_remise ?? 0)
           setExo(doc.exo ?? '')
-          const lignes = await api.documentsGetLignes(documentId) as (InvoiceLineData & { produit_id?: string | null })[]
-          setVenteLines(lignes.map(l => normalizeInvoiceLine({
-            ...l,
-            id: l.id || generateId(),
-            produit_id: l.produit_id ?? null,
-          })))
+          const lignes = await api.documentsGetLignes(documentId) as (InvoiceLineData & {
+            produit_id?: string | null
+            produit_tva_taux?: number | null
+            type_produit?: string | null
+          })[]
+          const configuredDefaultTva = parseFloat(String(s?.tva_defaut_pct ?? '19').replace(',', '.')) || 19
+          const isLegacyDailyInvoice = doc.type_document === 'FACTURE_JOURNALIERE_F' && Number(doc.total_tva ?? 0) <= 0
+          setVenteLines(lignes.map(l => {
+            const recoveredTva = isLegacyDailyInvoice && l.type_produit !== 'NF'
+              ? (l.produit_tva_taux ?? (l.produit_id ? 0 : configuredDefaultTva))
+              : l.tva_taux
+            return normalizeInvoiceLine({
+              ...l,
+              id: l.id || generateId(),
+              produit_id: l.produit_id ?? null,
+              tva_taux: Number(recoveredTva) || 0,
+            })
+          }))
         } else {
           const [facture, lignes, fourns] = await Promise.all([
             api.facturesFournisseursGet?.(documentId) as Promise<Record<string, unknown>>,
