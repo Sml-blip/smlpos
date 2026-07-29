@@ -35,6 +35,15 @@ const api = {
   shiftsGetSummary: (shiftId: string) => ipcRenderer.invoke('shifts:getSummary', shiftId),
   shiftsCountClosedToday: () => ipcRenderer.invoke('shifts:countClosedToday'),
 
+  // Saved POS carts (SQLite-backed, survives updates)
+  savedPaniersList: () => ipcRenderer.invoke('savedPaniers:list'),
+  savedPaniersSave: (panier: unknown) => ipcRenderer.invoke('savedPaniers:save', panier),
+  savedPaniersImportLegacy: (paniers: unknown[]) => ipcRenderer.invoke('savedPaniers:importLegacy', paniers),
+  savedPaniersDelete: (id: string) => ipcRenderer.invoke('savedPaniers:delete', id),
+  posCartDraftGet: () => ipcRenderer.invoke('posCartDraft:get'),
+  posCartDraftSave: (panier: unknown) => ipcRenderer.invoke('posCartDraft:save', panier),
+  posCartDraftClear: () => ipcRenderer.invoke('posCartDraft:clear'),
+
   // Services POS
   servicesPosList: () => ipcRenderer.invoke('servicesPOS:list'),
   servicesPosFind: (code: string) => ipcRenderer.invoke('servicesPOS:find', code),

@@ -345,6 +345,144 @@ app.on('window-all-closed', () => {
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
 
 function setupIpcHandlers() {
+  type SavedPanierPayload = {
+    id?: unknown
+    label?: unknown
+    savedAt?: unknown
+    shiftId?: unknown
+    items?: unknown
+    remiseTotale?: unknown
+    clientForm?: unknown
+  }
+
+  const normalizeSavedPanier = (input: SavedPanierPayload) => {
+    const id = String(input?.id ?? '').trim()
+    const label = String(input?.label ?? '').trim()
+    const savedAt = String(input?.savedAt ?? '').trim()
+    const items = Array.isArray(input?.items) ? input.items : []
+    if (!id || !label || !savedAt || !items.length) throw new Error('Panier sauvegardé invalide')
+    const parsedDate = Date.parse(savedAt)
+    if (!Number.isFinite(parsedDate)) throw new Error('Date du panier invalide')
+    return {
+      id,
+      label,
+      savedAt: new Date(parsedDate).toISOString(),
+      shiftId: input.shiftId == null ? null : String(input.shiftId),
+      items,
+      remiseTotale: Math.max(0, Number(input.remiseTotale) || 0),
+      clientForm: input.clientForm && typeof input.clientForm === 'object' ? input.clientForm : undefined,
+    }
+  }
+
+  const persistSavedPanier = (input: SavedPanierPayload, preserveExisting = false) => {
+    const panier = normalizeSavedPanier(input)
+    const now = new Date().toISOString()
+    const payload = JSON.stringify(panier)
+    if (preserveExisting) {
+      db.prepare(`
+        INSERT OR IGNORE INTO saved_paniers (id, label, saved_at, shift_id, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(panier.id, panier.label, panier.savedAt, panier.shiftId, payload, now)
+    } else {
+      db.prepare(`
+        INSERT INTO saved_paniers (id, label, saved_at, shift_id, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          label = excluded.label,
+          saved_at = excluded.saved_at,
+          shift_id = excluded.shift_id,
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at
+      `).run(panier.id, panier.label, panier.savedAt, panier.shiftId, payload, now)
+    }
+    return panier
+  }
+
+  // Saved carts are stored in SQLite and included in the normal protected backups.
+  ipcMain.handle('savedPaniers:list', () => {
+    const rows = db.prepare(`
+      SELECT payload_json FROM saved_paniers
+      WHERE id != '__active_pos_cart__'
+      ORDER BY saved_at DESC LIMIT 100
+    `).all() as Array<{ payload_json: string }>
+    return rows.flatMap(row => {
+      try {
+        return [normalizeSavedPanier(JSON.parse(row.payload_json) as SavedPanierPayload)]
+      } catch {
+        return []
+      }
+    })
+  })
+
+  ipcMain.handle('savedPaniers:save', (_e, input: SavedPanierPayload) => {
+    try {
+      return { success: true, panier: persistSavedPanier(input) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('savedPaniers:importLegacy', (_e, inputs: SavedPanierPayload[] = []) => {
+    let imported = 0
+    db.transaction(() => {
+      for (const input of inputs.slice(0, 100)) {
+        try {
+          const id = String(input?.id ?? '')
+          const existed = !!db.prepare(`SELECT 1 FROM saved_paniers WHERE id = ?`).get(id)
+          persistSavedPanier(input, true)
+          if (!existed) imported++
+        } catch {
+          // A corrupt localStorage entry must not block recovery of valid carts.
+        }
+      }
+    })()
+    return { success: true, imported }
+  })
+
+  ipcMain.handle('savedPaniers:delete', (_e, id: string) => {
+    if (!id?.trim()) return { success: false, error: 'Identifiant manquant' }
+    db.prepare(`DELETE FROM saved_paniers WHERE id = ?`).run(id)
+    return { success: true }
+  })
+
+  // The live POS cart is also checkpointed so a restart/update cannot erase it
+  // before the operator explicitly places it on hold.
+  ipcMain.handle('posCartDraft:get', () => {
+    const row = db.prepare(`
+      SELECT payload_json FROM saved_paniers WHERE id = '__active_pos_cart__'
+    `).get() as { payload_json?: string } | undefined
+    if (!row?.payload_json) return null
+    try {
+      return normalizeSavedPanier(JSON.parse(row.payload_json) as SavedPanierPayload)
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('posCartDraft:save', (_e, input: SavedPanierPayload) => {
+    try {
+      const items = Array.isArray(input?.items) ? input.items : []
+      if (!items.length) {
+        db.prepare(`DELETE FROM saved_paniers WHERE id = '__active_pos_cart__'`).run()
+        return { success: true, cleared: true }
+      }
+      const panier = persistSavedPanier({
+        ...input,
+        id: '__active_pos_cart__',
+        label: 'Panier POS actif',
+        savedAt: new Date().toISOString(),
+      })
+      return { success: true, panier }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('posCartDraft:clear', () => {
+    db.prepare(`DELETE FROM saved_paniers WHERE id = '__active_pos_cart__'`).run()
+    return { success: true }
+  })
+
   // App version (used in Settings / About)
   ipcMain.handle('app:version', () => app.getVersion())
 
@@ -560,6 +698,12 @@ function setupIpcHandlers() {
       const lignesF = db.prepare(`
         SELECT v.id AS vente_id, lv.produit_id, lv.designation, lv.quantite,
                lv.prix_unitaire, lv.remise_pct, lv.total_ligne,
+               COALESCE(v.total_ttc, 0) AS vente_total_ttc,
+               COALESCE((
+                 SELECT SUM(COALESCE(all_lv.total_ligne, 0))
+                 FROM lignes_vente all_lv
+                 WHERE all_lv.vente_id = v.id
+               ), 0) AS vente_lignes_total,
                COALESCE(p.tva_taux, 0) AS tva_taux
         FROM lignes_vente lv
         INNER JOIN ventes v ON v.id = lv.vente_id
@@ -587,6 +731,8 @@ function setupIpcHandlers() {
         prix_unitaire: number
         remise_pct: number
         total_ligne: number
+        vente_total_ttc: number
+        vente_lignes_total: number
         tva_taux: number
       }>
 
@@ -611,7 +757,15 @@ function setupIpcHandlers() {
         return { success: true, skipped: true, reason: 'no_f_lines', count: 0 }
       }
 
-      const totalTTC = money3(lignesF.reduce((s, l) => s + (Number(l.total_ligne) || 0), 0))
+      // Allocate checkout-level discounts (including loyalty redemption) across
+      // the sale lines so the F invoice reconciles with ventes.total_ttc.
+      const allocatedLineTtc = (line: typeof lignesF[number]) => {
+        const rawSaleLinesTotal = Number(line.vente_lignes_total) || 0
+        const finalSaleTotal = Math.max(0, Number(line.vente_total_ttc) || 0)
+        const saleFactor = rawSaleLinesTotal > 0 ? finalSaleTotal / rawSaleLinesTotal : 1
+        return money3((Number(line.total_ligne) || 0) * saleFactor)
+      }
+      const totalTTC = money3(lignesF.reduce((s, l) => s + allocatedLineTtc(l), 0))
       if (totalTTC <= 0) {
         revokeExistingDailyInvoice('Le total des ventes F éligibles est nul')
         return { success: true, skipped: true, reason: 'zero_total', count: 0 }
@@ -632,13 +786,17 @@ function setupIpcHandlers() {
       const docId = existing?.id ?? randomUUID()
       const includedVenteIds = [...new Set(lignesF.map(l => l.vente_id))]
       const docLignes = lignesF.map(l => {
-        const totalTtc = money3(l.total_ligne)
+        const rawSaleLinesTotal = Number(l.vente_lignes_total) || 0
+        const finalSaleTotal = Math.max(0, Number(l.vente_total_ttc) || 0)
+        const saleFactor = rawSaleLinesTotal > 0 ? finalSaleTotal / rawSaleLinesTotal : 1
+        const totalTtc = allocatedLineTtc(l)
         const tvaTaux = Math.max(0, Number(l.tva_taux) || 0)
         const totalHt = tvaTaux > 0 ? money3(totalTtc / (1 + tvaTaux / 100)) : totalTtc
         const totalTva = money3(totalTtc - totalHt)
+        const adjustedUnitPriceTtc = (Number(l.prix_unitaire) || 0) * saleFactor
         const prixUnitaireHt = tvaTaux > 0
-          ? money3(Number(l.prix_unitaire) / (1 + tvaTaux / 100))
-          : money3(l.prix_unitaire)
+          ? money3(adjustedUnitPriceTtc / (1 + tvaTaux / 100))
+          : money3(adjustedUnitPriceTtc)
         return {
           id: randomUUID(),
           document_id: docId,
@@ -754,41 +912,71 @@ function setupIpcHandlers() {
     const safeFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? '') ? from! : '2000-01-01'
     const safeTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? '') ? to! : todayLocal
     return db.prepare(`
-      SELECT date(v.created_at, 'localtime') AS local_date,
-             COUNT(DISTINCT v.id) AS sale_count,
-             ROUND(SUM(COALESCE(lv.total_ligne, 0)), 3) AS total_ttc
-      FROM ventes v
-      INNER JOIN lignes_vente lv ON lv.vente_id = v.id AND lv.type_produit = 'F'
-      WHERE v.type = 'VENTE'
-        AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
-        AND date(v.created_at, 'localtime') BETWEEN date(?) AND date(?)
-        AND date(v.created_at, 'localtime') < date('now', 'localtime')
-        AND NOT EXISTS (
-          SELECT 1 FROM documents manual_doc
-          WHERE manual_doc.vente_id = v.id
-            AND manual_doc.type_document = 'FACTURE_VENTE'
-            AND manual_doc.statut NOT IN ('ANNULE', 'REVOQUE')
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM factures_clients legacy_invoice
-          WHERE legacy_invoice.vente_id = v.id
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM documents daily_doc
-          WHERE daily_doc.type_document = 'FACTURE_JOURNALIERE_F'
-            AND daily_doc.statut NOT IN ('ANNULE', 'REVOQUE')
-            AND (
-              date(daily_doc.created_at, 'localtime') = date(v.created_at, 'localtime')
-              OR CASE WHEN json_valid(daily_doc.contenu_json)
-                THEN json_extract(daily_doc.contenu_json, '$.local_date') = date(v.created_at, 'localtime')
-                ELSE 0
-              END
-            )
-        )
-      GROUP BY date(v.created_at, 'localtime')
-      HAVING SUM(COALESCE(lv.total_ligne, 0)) > 0
-      ORDER BY local_date DESC
-    `).all(safeFrom, safeTo)
+      WITH sale_line_totals AS (
+        SELECT vente_id, SUM(COALESCE(total_ligne, 0)) AS line_total
+        FROM lignes_vente
+        GROUP BY vente_id
+      ),
+      daily_sales AS (
+        SELECT date(created_at, 'localtime') AS local_date,
+               COUNT(*) AS day_sale_count,
+               ROUND(SUM(COALESCE(total_ttc, 0)), 3) AS day_total_ttc
+        FROM ventes
+        WHERE type = 'VENTE'
+          AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
+          AND date(created_at, 'localtime') BETWEEN date(?) AND date(?)
+        GROUP BY date(created_at, 'localtime')
+      ),
+      eligible AS (
+        SELECT date(v.created_at, 'localtime') AS local_date,
+               v.id AS vente_id,
+               ROUND(COALESCE(lv.total_ligne, 0) *
+                 CASE
+                   WHEN COALESCE(slt.line_total, 0) > 0
+                   THEN MAX(0, COALESCE(v.total_ttc, 0)) / slt.line_total
+                   ELSE 1
+                 END, 3) AS allocated_ttc
+        FROM ventes v
+        INNER JOIN lignes_vente lv ON lv.vente_id = v.id AND lv.type_produit = 'F'
+        LEFT JOIN sale_line_totals slt ON slt.vente_id = v.id
+        WHERE v.type = 'VENTE'
+          AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
+          AND date(v.created_at, 'localtime') BETWEEN date(?) AND date(?)
+          AND date(v.created_at, 'localtime') < date('now', 'localtime')
+          AND NOT EXISTS (
+            SELECT 1 FROM documents manual_doc
+            WHERE manual_doc.vente_id = v.id
+              AND manual_doc.type_document = 'FACTURE_VENTE'
+              AND manual_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM factures_clients legacy_invoice
+            WHERE legacy_invoice.vente_id = v.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM documents daily_doc
+            WHERE daily_doc.type_document = 'FACTURE_JOURNALIERE_F'
+              AND daily_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+              AND (
+                date(daily_doc.created_at, 'localtime') = date(v.created_at, 'localtime')
+                OR CASE WHEN json_valid(daily_doc.contenu_json)
+                  THEN json_extract(daily_doc.contenu_json, '$.local_date') = date(v.created_at, 'localtime')
+                  ELSE 0
+                END
+              )
+          )
+      )
+      SELECT eligible.local_date,
+             COUNT(DISTINCT eligible.vente_id) AS sale_count,
+             ROUND(SUM(eligible.allocated_ttc), 3) AS total_ttc,
+             COALESCE(daily_sales.day_sale_count, 0) AS day_sale_count,
+             COALESCE(daily_sales.day_total_ttc, 0) AS day_total_ttc
+      FROM eligible
+      LEFT JOIN daily_sales ON daily_sales.local_date = eligible.local_date
+      GROUP BY eligible.local_date
+      HAVING SUM(eligible.allocated_ttc) > 0
+      ORDER BY eligible.local_date DESC
+    `).all(safeFrom, safeTo, safeFrom, safeTo)
   })
 
   // ─── Produits ────────────────────────────────────────────────────────────────

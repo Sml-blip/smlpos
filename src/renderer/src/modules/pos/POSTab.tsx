@@ -19,8 +19,11 @@ import FactureClientModal from './FactureClientModal'
 import TicketModal from './TicketModal'
 import {
   deleteSavedPanier,
+  loadActiveCartDraft,
   listSavedPaniers,
+  saveActiveCartDraft,
   savePanierHold,
+  syncSavedPaniers,
   type SavedPanier,
 } from '../../lib/panierHold'
 
@@ -52,6 +55,7 @@ export default function POSTab() {
   const [showProductBrowse, setShowProductBrowse] = useState(false)
   const [showSavedPaniers, setShowSavedPaniers] = useState(false)
   const [savedPanierCount, setSavedPanierCount] = useState(() => listSavedPaniers().length)
+  const [cartDraftReady, setCartDraftReady] = useState(false)
   const [availableSerials, setAvailableSerials] = useState<string[]>([])
   const [selectedSerials, setSelectedSerials] = useState<string[]>([])
   const [sessionClientForm, setSessionClientForm] = useState<ClientFormValue>(
@@ -139,6 +143,52 @@ export default function POSTab() {
     setNotification({ msg, type })
     setTimeout(() => setNotification(null), 2500)
   }
+
+  useEffect(() => {
+    void syncSavedPaniers()
+      .then(paniers => setSavedPanierCount(paniers.length))
+      .catch(error => {
+        console.error('[POS] Saved cart recovery failed:', error)
+        showNotif('Protection des paniers indisponible — panier actuel conservé', 'error')
+      })
+  }, [])
+
+  useEffect(() => {
+    void loadActiveCartDraft()
+      .then(draft => {
+        if (!draft?.items?.length || useCartStore.getState().items.length) return
+        loadCart(draft.items, draft.remiseTotale)
+        setRemiseTotaleInput(draft.remiseTotale > 0 ? String(draft.remiseTotale) : '')
+        if (draft.clientForm) {
+          setSessionClientForm(draft.clientForm)
+          setSessionClient(draft.clientForm.clientId ? {
+            id: draft.clientForm.clientId,
+            nom: draft.clientForm.nom,
+            telephone: draft.clientForm.tel,
+            adresse: draft.clientForm.adresse,
+            matricule_fiscal: draft.clientForm.matricule,
+            solde_credit: 0,
+            created_at: new Date().toISOString(),
+          } : null)
+        }
+        showNotif('Panier actif récupéré après le redémarrage')
+      })
+      .catch(error => console.error('[POS] Active cart recovery failed:', error))
+      .finally(() => setCartDraftReady(true))
+  }, [])
+
+  useEffect(() => {
+    if (!cartDraftReady) return
+    const timer = window.setTimeout(() => {
+      void saveActiveCartDraft({
+        items,
+        remiseTotale,
+        clientForm: sessionClientForm,
+        shiftId: currentShift?.id,
+      }).catch(error => console.error('[POS] Active cart checkpoint failed:', error))
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [cartDraftReady, items, remiseTotale, sessionClientForm, currentShift?.id])
 
   useEffect(() => {
     if (!scannedProduct || !productTracksSerial(scannedProduct)) {
@@ -351,10 +401,15 @@ export default function POSTab() {
     refocusScanner()
   }
 
-  const handleCheckoutSuccess = (vente?: Vente, cartItems?: CartItem[]) => {
+  const handleCheckoutSuccess = async (vente?: Vente, cartItems?: CartItem[]) => {
     showNotif('Vente enregistrée avec succès !')
     if (vente && cartItems) setLastVente({ vente, items: cartItems })
     setShowCheckout(false)
+    try {
+      await window.api.posCartDraftClear()
+    } catch (error) {
+      console.error('[POS] Could not clear completed cart checkpoint:', error)
+    }
     clearCart()
     refocusScanner()
   }
@@ -378,23 +433,29 @@ export default function POSTab() {
 
   const refreshSavedPanierCount = () => setSavedPanierCount(listSavedPaniers().length)
 
-  const handleSavePanier = () => {
+  const handleSavePanier = async () => {
     if (!items.length) return
-    const saved = savePanierHold({
-      items,
-      remiseTotale,
-      clientForm: sessionClientForm,
-      shiftId: currentShift?.id,
-    })
-    clearCart()
-    setRemiseTotaleInput('')
-    setRemiseTotale(0)
-    refreshSavedPanierCount()
-    showNotif(`Panier en attente — ${saved.label}`)
-    refocusScanner()
+    try {
+      const saved = await savePanierHold({
+        items,
+        remiseTotale,
+        clientForm: sessionClientForm,
+        shiftId: currentShift?.id,
+      })
+      await window.api.posCartDraftClear()
+      clearCart()
+      setRemiseTotaleInput('')
+      setRemiseTotale(0)
+      refreshSavedPanierCount()
+      showNotif(`Panier protégé — ${saved.label}`)
+      refocusScanner()
+    } catch (error) {
+      console.error('[POS] Durable cart save failed:', error)
+      showNotif('Sauvegarde impossible — le panier actuel n’a pas été vidé', 'error')
+    }
   }
 
-  const handleRestorePanier = (panier: SavedPanier) => {
+  const handleRestorePanier = async (panier: SavedPanier) => {
     if (items.length > 0 && !window.confirm('Remplacer le panier actuel par le panier en attente ?')) return
     loadCart(panier.items, panier.remiseTotale)
     if (panier.clientForm) {
@@ -410,10 +471,15 @@ export default function POSTab() {
       } : null)
     }
     setRemiseTotaleInput(panier.remiseTotale > 0 ? String(panier.remiseTotale) : '')
-    deleteSavedPanier(panier.id)
-    refreshSavedPanierCount()
+    try {
+      await deleteSavedPanier(panier.id)
+      refreshSavedPanierCount()
+    } catch (error) {
+      console.error('[POS] Saved cart delete failed after restore:', error)
+      showNotif('Panier repris, mais sa copie protégée reste disponible', 'error')
+    }
     setShowSavedPaniers(false)
-    showNotif(`Panier repris — ${panier.label}`)
+    if (listSavedPaniers().every(p => p.id !== panier.id)) showNotif(`Panier repris — ${panier.label}`)
     refocusScanner()
   }
 
@@ -941,8 +1007,16 @@ export default function POSTab() {
       {showSavedPaniers && (
         <SavedPaniersModal
           onClose={() => { setShowSavedPaniers(false); refocusScanner() }}
-          onRestore={handleRestorePanier}
-          onDelete={(id) => { deleteSavedPanier(id); refreshSavedPanierCount() }}
+          onRestore={panier => void handleRestorePanier(panier)}
+          onDelete={async id => {
+            try {
+              await deleteSavedPanier(id)
+              refreshSavedPanierCount()
+            } catch (error) {
+              console.error('[POS] Saved cart delete failed:', error)
+              showNotif('Suppression impossible — panier conservé', 'error')
+            }
+          }}
         />
       )}
     </div>
@@ -956,11 +1030,17 @@ function SavedPaniersModal({
 }: {
   onClose: () => void
   onRestore: (p: SavedPanier) => void
-  onDelete: (id: string) => void
+  onDelete: (id: string) => void | Promise<void>
 }) {
   const [paniers, setPaniers] = useState(() => listSavedPaniers())
 
   const refresh = () => setPaniers(listSavedPaniers())
+
+  useEffect(() => {
+    void syncSavedPaniers().then(setPaniers).catch(error => {
+      console.error('[POS] Failed to load protected carts:', error)
+    })
+  }, [])
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -998,7 +1078,7 @@ function SavedPaniersModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { onDelete(p.id); refresh() }}
+                    onClick={() => { void Promise.resolve(onDelete(p.id)).then(refresh) }}
                     className="px-3 py-1.5 bg-muted hover:bg-red-50 text-danger text-xs font-semibold rounded-lg"
                   >
                     Suppr.

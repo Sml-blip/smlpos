@@ -28,6 +28,15 @@ interface Window {
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
     shiftsCountClosedToday?: () => Promise<number>
 
+    // Saved POS carts
+    savedPaniersList: () => Promise<unknown[]>
+    savedPaniersSave: (panier: unknown) => Promise<{ success?: boolean; error?: string; panier?: unknown }>
+    savedPaniersImportLegacy: (paniers: unknown[]) => Promise<{ success?: boolean; imported?: number }>
+    savedPaniersDelete: (id: string) => Promise<{ success?: boolean; error?: string }>
+    posCartDraftGet: () => Promise<unknown | null>
+    posCartDraftSave: (panier: unknown) => Promise<{ success?: boolean; error?: string; cleared?: boolean }>
+    posCartDraftClear: () => Promise<{ success?: boolean; error?: string }>
+
     // Services POS
     servicesPosList: () => Promise<unknown[]>
     servicesPosFind: (code: string) => Promise<unknown>

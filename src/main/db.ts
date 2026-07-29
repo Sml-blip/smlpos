@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.0'
+export const SCHEMA_VERSION = '1.10.1'
 
 export function initDatabase() {
   const db = getDb()
@@ -593,6 +593,19 @@ export function initDatabase() {
       operateur     TEXT,
       created_at    TEXT DEFAULT (datetime('now'))
     );
+
+    -- Saved POS carts are business data. Keep them in SQLite so application
+    -- updates, renderer cache cleanup, and Chromium storage changes cannot erase them.
+    CREATE TABLE IF NOT EXISTS saved_paniers (
+      id           TEXT PRIMARY KEY,
+      label        TEXT NOT NULL,
+      saved_at     TEXT NOT NULL,
+      shift_id     TEXT,
+      payload_json TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_paniers_saved_at
+      ON saved_paniers(saved_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fidelite_vente_type
       ON mouvements_fidelite(vente_id, type) WHERE vente_id IS NOT NULL;
   `)

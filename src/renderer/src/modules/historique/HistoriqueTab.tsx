@@ -24,7 +24,13 @@ const HISTORIQUE_TO_KEY = 'smlpos_historique_to'
 
 type SubTab = 'ventes' | 'reparations' | 'documents' | 'journal'
 type StatutRep = 'EN_ATTENTE' | 'DIAGNOSTIC' | 'DEVIS' | 'ATTENTE_PIECES' | 'EN_COURS' | 'TERMINE' | 'NON_REPARABLE' | 'RENDU' | 'ANNULE'
-type MissingDailyInvoiceDay = { local_date: string; sale_count: number; total_ttc: number }
+type MissingDailyInvoiceDay = {
+  local_date: string
+  sale_count: number
+  total_ttc: number
+  day_sale_count: number
+  day_total_ttc: number
+}
 
 const STATUT_CONFIG: Record<StatutRep, { label: string; color: string; icon: ReactNode }> = {
   EN_ATTENTE: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800 border border-yellow-200', icon: <Clock size={11} /> },
@@ -54,12 +60,20 @@ const MODE_LABELS: Record<string, string> = {
 
 function getDateRange(preset: string): { from: string; to: string } {
   const now = new Date()
-  const today = now.toISOString().slice(0, 10)
+  const localDate = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  const today = localDate(now)
   if (preset === 'today') return { from: today, to: today + 'T23:59:59' }
+  if (preset === 'yesterday') {
+    const yesterday = new Date(now)
+    yesterday.setDate(now.getDate() - 1)
+    const date = localDate(yesterday)
+    return { from: date, to: date + 'T23:59:59' }
+  }
   if (preset === 'week') {
     const start = new Date(now)
     start.setDate(now.getDate() - now.getDay())
-    return { from: start.toISOString().slice(0, 10), to: today + 'T23:59:59' }
+    return { from: localDate(start), to: today + 'T23:59:59' }
   }
   if (preset === 'month') {
     return { from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, to: today + 'T23:59:59' }
@@ -67,7 +81,7 @@ function getDateRange(preset: string): { from: string; to: string } {
   if (preset === '90days') {
     const start = new Date(now)
     start.setDate(now.getDate() - 90)
-    return { from: start.toISOString().slice(0, 10), to: today + 'T23:59:59' }
+    return { from: localDate(start), to: today + 'T23:59:59' }
   }
   return { from: '', to: '' }
 }
@@ -274,6 +288,7 @@ export default function HistoriqueTab() {
 
   const PRESETS = [
     { id: 'today', label: "Aujourd'hui" },
+    { id: 'yesterday', label: 'Hier' },
     { id: 'week', label: 'Cette semaine' },
     { id: 'month', label: 'Ce mois' },
     { id: '90days', label: '90 jours' },
@@ -653,8 +668,14 @@ function MissingDailyInvoicesPanel({
                     weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
                   })}
                 </div>
-                <div className="mt-1 font-price font-bold text-text-primary">{formatPrice(day.total_ttc)}</div>
-                <div className="text-[11px] text-text-muted">{day.sale_count} vente{day.sale_count > 1 ? 's' : ''} éligible{day.sale_count > 1 ? 's' : ''}</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-[11px] font-semibold text-amber-800">Facture F</span>
+                  <span className="font-price font-bold text-text-primary">{formatPrice(day.total_ttc)}</span>
+                </div>
+                <div className="text-[11px] text-text-muted">
+                  CA du jour : <span className="font-price font-semibold">{formatPrice(day.day_total_ttc)}</span>
+                  {' · '}{day.sale_count}/{day.day_sale_count} vente{day.day_sale_count > 1 ? 's' : ''} incluse{day.sale_count > 1 ? 's' : ''}
+                </div>
               </div>
               <button
                 type="button"
