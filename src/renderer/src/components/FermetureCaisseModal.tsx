@@ -114,8 +114,8 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden animate-slide-in">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -129,8 +129,8 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
           )}
         </div>
 
-        <div className="p-6 space-y-5">
-          <div className="flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
+        <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-5 items-start">
+          <div className="lg:col-span-2 flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
             <FileText size={14} className="flex-shrink-0 mt-0.5" />
             <span>
               <strong>Facture de fin de journée</strong> — les ventes <strong>F</strong> non encore facturées seront regroupées
@@ -276,7 +276,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
 
           {/* Confirmation warning */}
           {confirmed && (
-            <div className="flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-800">
+            <div className="lg:col-span-2 flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-800">
               <AlertCircle size={14} />
               Confirmez la fermeture de caisse. Cette action ne peut pas être annulée.
             </div>
@@ -284,7 +284,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
         </div>
 
         {/* Footer */}
-        <div className="flex gap-3 px-6 py-4 border-t border-border">
+        <div className="flex-shrink-0 flex gap-3 px-4 sm:px-6 py-3.5 border-t border-border bg-white shadow-[0_-8px_24px_rgba(0,0,0,0.04)]">
           {!confirmed ? (
             <>
               <button

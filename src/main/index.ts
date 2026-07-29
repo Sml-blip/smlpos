@@ -25,6 +25,7 @@ import { importDefaultProductCatalog } from './seedProducts'
 import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
 import { setupSessionCsp } from './sessionCsp'
+import { startBossApiServer, stopBossApiServer } from './bossApiServer'
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
 bootstrapCanonicalUserDataPath()
@@ -320,6 +321,7 @@ app.whenReady().then(() => {
   startAutoBackup()
   startR2BackupScheduler()
   startSupabaseKeepAlive()
+  startBossApiServer()
   setupIpcHandlers()
   createWindow()
   setupAutoUpdater(() => mainWindow)
@@ -330,6 +332,7 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  stopBossApiServer()
   createProtectedBackup('quit')
 })
 
@@ -538,16 +541,21 @@ function setupIpcHandlers() {
     return row?.cnt ?? 0
   })
 
-  /** End-of-day: merge all F sales from today's shifts into one FACTURE_JOURNALIERE_F document. */
-  ipcMain.handle('documents:createDailyFactureF', () => {
+  /** End-of-day: merge all eligible F sales for a local calendar day into one daily invoice. */
+  ipcMain.handle('documents:createDailyFactureF', (_e, requestedDate?: string) => {
     try {
+      const todayLocal = new Date().toLocaleDateString('en-CA')
+      const targetDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate ?? '') ? requestedDate! : todayLocal
       const existing = db.prepare(`
         SELECT id, numero, created_at FROM documents
         WHERE type_document = 'FACTURE_JOURNALIERE_F'
-        AND date(created_at, 'localtime') = date('now', 'localtime')
+        AND (
+          date(created_at, 'localtime') = date(?)
+          OR CASE WHEN json_valid(contenu_json) THEN json_extract(contenu_json, '$.local_date') = ? ELSE 0 END
+        )
         AND statut NOT IN ('ANNULE', 'REVOQUE')
         ORDER BY created_at DESC LIMIT 1
-      `).get() as { id: string; numero: string; created_at: string } | undefined
+      `).get(targetDate, targetDate) as { id: string; numero: string; created_at: string } | undefined
 
       const lignesF = db.prepare(`
         SELECT v.id AS vente_id, lv.produit_id, lv.designation, lv.quantite,
@@ -558,7 +566,7 @@ function setupIpcHandlers() {
         LEFT JOIN produits p ON p.id = lv.produit_id
         WHERE lv.type_produit = 'F'
         AND v.type = 'VENTE'
-        AND date(v.created_at, 'localtime') = date('now', 'localtime')
+        AND date(v.created_at, 'localtime') = date(?)
         AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
         AND NOT EXISTS (
           SELECT 1 FROM documents manual_doc
@@ -571,7 +579,7 @@ function setupIpcHandlers() {
           WHERE legacy_invoice.vente_id = v.id
         )
         ORDER BY v.created_at ASC, lv.designation ASC
-      `).all() as Array<{
+      `).all(targetDate) as Array<{
         vente_id: string
         produit_id: string | null
         designation: string
@@ -611,7 +619,7 @@ function setupIpcHandlers() {
 
       let numero = existing?.numero
       if (!numero) {
-        const year = new Date().getFullYear()
+        const year = Number(targetDate.slice(0, 4))
         const yy = String(year).slice(-2)
         const seqKey = `facture_vente_sequence_${year}`
         const prevRow = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(seqKey) as { value?: string } | undefined
@@ -620,6 +628,7 @@ function setupIpcHandlers() {
         numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
       }
       const now = new Date().toISOString()
+      const targetCreatedAt = new Date(`${targetDate}T12:00:00`).toISOString()
       const docId = existing?.id ?? randomUUID()
       const includedVenteIds = [...new Set(lignesF.map(l => l.vente_id))]
       const docLignes = lignesF.map(l => {
@@ -681,14 +690,14 @@ function setupIpcHandlers() {
         layout_snapshot: null,
         contenu_json: JSON.stringify({
           kind: 'daily_f_invoice',
-          local_date: new Date().toLocaleDateString('en-CA'),
+          local_date: targetDate,
           vente_ids: includedVenteIds,
         }),
         ht_7: money3(taxBuckets.ht_7),
         tva_7: money3(taxBuckets.tva_7),
         ht_19: money3(taxBuckets.ht_19),
         tva_19: money3(taxBuckets.tva_19),
-        created_at: existing?.created_at ?? now,
+        created_at: existing?.created_at ?? targetCreatedAt,
         updated_at: now,
       }
       const replacedLineIds = existing
@@ -733,10 +742,53 @@ function setupIpcHandlers() {
         lineCount: docLignes.length,
         saleCount: includedVenteIds.length,
         totalTTC,
+        localDate: targetDate,
       }
     } catch (e) {
       return { success: false, error: String(e) }
     }
+  })
+
+  ipcMain.handle('documents:listMissingDailyFactureFDays', (_e, from?: string, to?: string) => {
+    const todayLocal = new Date().toLocaleDateString('en-CA')
+    const safeFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? '') ? from! : '2000-01-01'
+    const safeTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? '') ? to! : todayLocal
+    return db.prepare(`
+      SELECT date(v.created_at, 'localtime') AS local_date,
+             COUNT(DISTINCT v.id) AS sale_count,
+             ROUND(SUM(COALESCE(lv.total_ligne, 0)), 3) AS total_ttc
+      FROM ventes v
+      INNER JOIN lignes_vente lv ON lv.vente_id = v.id AND lv.type_produit = 'F'
+      WHERE v.type = 'VENTE'
+        AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
+        AND date(v.created_at, 'localtime') BETWEEN date(?) AND date(?)
+        AND date(v.created_at, 'localtime') < date('now', 'localtime')
+        AND NOT EXISTS (
+          SELECT 1 FROM documents manual_doc
+          WHERE manual_doc.vente_id = v.id
+            AND manual_doc.type_document = 'FACTURE_VENTE'
+            AND manual_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM factures_clients legacy_invoice
+          WHERE legacy_invoice.vente_id = v.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM documents daily_doc
+          WHERE daily_doc.type_document = 'FACTURE_JOURNALIERE_F'
+            AND daily_doc.statut NOT IN ('ANNULE', 'REVOQUE')
+            AND (
+              date(daily_doc.created_at, 'localtime') = date(v.created_at, 'localtime')
+              OR CASE WHEN json_valid(daily_doc.contenu_json)
+                THEN json_extract(daily_doc.contenu_json, '$.local_date') = date(v.created_at, 'localtime')
+                ELSE 0
+              END
+            )
+        )
+      GROUP BY date(v.created_at, 'localtime')
+      HAVING SUM(COALESCE(lv.total_ligne, 0)) > 0
+      ORDER BY local_date DESC
+    `).all(safeFrom, safeTo)
   })
 
   // ─── Produits ────────────────────────────────────────────────────────────────

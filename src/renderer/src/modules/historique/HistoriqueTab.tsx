@@ -24,6 +24,7 @@ const HISTORIQUE_TO_KEY = 'smlpos_historique_to'
 
 type SubTab = 'ventes' | 'reparations' | 'documents' | 'journal'
 type StatutRep = 'EN_ATTENTE' | 'DIAGNOSTIC' | 'DEVIS' | 'ATTENTE_PIECES' | 'EN_COURS' | 'TERMINE' | 'NON_REPARABLE' | 'RENDU' | 'ANNULE'
+type MissingDailyInvoiceDay = { local_date: string; sale_count: number; total_ttc: number }
 
 const STATUT_CONFIG: Record<StatutRep, { label: string; color: string; icon: ReactNode }> = {
   EN_ATTENTE: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800 border border-yellow-200', icon: <Clock size={11} /> },
@@ -108,6 +109,8 @@ export default function HistoriqueTab() {
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
   const [convertVente, setConvertVente] = useState<Vente | null>(null)
+  const [missingDailyInvoiceDays, setMissingDailyInvoiceDays] = useState<MissingDailyInvoiceDay[]>([])
+  const [creatingDailyInvoiceDate, setCreatingDailyInvoiceDate] = useState<string | null>(null)
   const [activityLogs, setActivityLogs] = useState<Array<{
     id: string; shift_id?: string; operateur?: string; action: string; details?: unknown; montant?: number; created_at: string
   }>>([])
@@ -144,14 +147,15 @@ export default function HistoriqueTab() {
     const from = dateFrom
     const to = dateTo + 'T23:59:59'
     const data = await loadData('Chargement historique', async () => {
-      const [v, r, docs, bStats, logs] = await Promise.all([
+      const [v, r, docs, bStats, logs, missingDays] = await Promise.all([
         api.ventesList({ dateFrom: from, dateTo: to }) as Promise<Vente[]>,
         api.reparationsList({}) as Promise<Reparation[]>,
         api.documentsList({ dateFrom, dateTo }) as Promise<DocType[]>,
         api.reparationsGetBeneficeStats() as Promise<typeof beneficeStats>,
         api.logsList({ dateFrom: from, dateTo: to, limit: 500 }) as Promise<typeof activityLogs>,
+        (api.documentsListMissingDailyFactureFDays?.(dateFrom, dateTo) ?? Promise.resolve([])) as Promise<MissingDailyInvoiceDay[]>,
       ])
-      return { v, r, docs, bStats, logs }
+      return { v, r, docs, bStats, logs, missingDays }
     }, { setLoading })
     if (!data) return
     setVentes(data.v || [])
@@ -163,6 +167,7 @@ export default function HistoriqueTab() {
     setDocuments(data.docs || [])
     setBeneficeStats(data.bStats)
     setActivityLogs(data.logs || [])
+    setMissingDailyInvoiceDays(data.missingDays || [])
   }, [dateFrom, dateTo])
 
   useEffect(() => { load() }, [load])
@@ -191,6 +196,26 @@ export default function HistoriqueTab() {
       return
     }
     setConvertVente(vente)
+  }
+
+  const createPastDailyInvoice = async (localDate: string) => {
+    let createdDocumentId = ''
+    const succeeded = await runAction('Facture journalière', async () => {
+      const result = await api.documentsCreateDailyFactureF?.(localDate)
+      if (!result?.success) throw new Error(result?.error || 'Création impossible')
+      if (result.skipped || !result.documentId) throw new Error('Aucune vente F non facturée pour cette journée')
+      createdDocumentId = result.documentId
+    }, {
+      setLoading: value => setCreatingDailyInvoiceDate(value ? localDate : null),
+      successMessage: `Facture Client Passager du ${new Date(`${localDate}T12:00:00`).toLocaleDateString('fr-FR')} créée`,
+      feedback: 'invoice',
+    })
+    if (!succeeded) return
+    await load()
+    if (createdDocumentId && api.documentsGet) {
+      const created = await api.documentsGet(createdDocumentId)
+      if (created) setPrintDoc(created as unknown as DocType)
+    }
   }
 
   const updateStatut = async (repId: string, statut: StatutRep) => {
@@ -390,16 +415,23 @@ export default function HistoriqueTab() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {subTab === 'ventes' && (
+          <>
+            <MissingDailyInvoicesPanel
+              days={missingDailyInvoiceDays}
+              creatingDate={creatingDailyInvoiceDate}
+              onCreate={localDate => void createPastDailyInvoice(localDate)}
+            />
             <VentesTable
-            ventes={ventes}
-            expandedVente={expandedVente}
-            venteLignes={venteLignes}
-            onToggle={toggleVente}
-            onCancel={setCancelTarget}
-            onPrintTicket={(v) => void printVenteTicketQuick(v)}
-            onConvert={(v) => void handleConvertVente(v)}
+              ventes={ventes}
+              expandedVente={expandedVente}
+              venteLignes={venteLignes}
+              onToggle={toggleVente}
+              onCancel={setCancelTarget}
+              onPrintTicket={(v) => void printVenteTicketQuick(v)}
+              onConvert={(v) => void handleConvertVente(v)}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
             />
+          </>
         )}
         {subTab === 'reparations' && (
           <>
@@ -580,6 +612,65 @@ export default function HistoriqueTab() {
 }
 
 // ─── Ventes Table ─────────────────────────────────────────────────────────────
+
+function MissingDailyInvoicesPanel({
+  days,
+  creatingDate,
+  onCreate,
+}: {
+  days: MissingDailyInvoiceDay[]
+  creatingDate: string | null
+  onCreate: (localDate: string) => void
+}) {
+  if (!days.length) return null
+  return (
+    <div className="m-4 mb-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-yellow-50 overflow-hidden shadow-sm">
+      <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-amber-200/80">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+            <FileText size={17} />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-amber-950">Factures journalières oubliées</h3>
+            <p className="text-xs text-amber-800">
+              {days.length} journée{days.length > 1 ? 's' : ''} avec des ventes F non encore regroupées.
+            </p>
+          </div>
+        </div>
+        <span className="text-[11px] font-bold text-amber-800 bg-white/70 border border-amber-200 rounded-full px-2.5 py-1">
+          NF et ventes déjà facturées exclues
+        </span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 p-3">
+        {days.map(day => {
+          const busy = creatingDate === day.local_date
+          return (
+            <div key={day.local_date} className="bg-white border border-amber-100 rounded-xl px-3 py-3 flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
+                  <Calendar size={12} />
+                  {new Date(`${day.local_date}T12:00:00`).toLocaleDateString('fr-FR', {
+                    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+                  })}
+                </div>
+                <div className="mt-1 font-price font-bold text-text-primary">{formatPrice(day.total_ttc)}</div>
+                <div className="text-[11px] text-text-muted">{day.sale_count} vente{day.sale_count > 1 ? 's' : ''} éligible{day.sale_count > 1 ? 's' : ''}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onCreate(day.local_date)}
+                disabled={!!creatingDate}
+                className="flex-shrink-0 px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-gray-200 disabled:text-gray-400 text-white text-xs font-bold transition-colors"
+              >
+                {busy ? 'Création…' : 'Créer facture'}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 function VentesTable({
   ventes, expandedVente, venteLignes, onToggle, onCancel, onPrintTicket, onConvert, emptyHint,
