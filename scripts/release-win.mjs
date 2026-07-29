@@ -35,15 +35,15 @@ function run(cmd, args) {
   if (r.status !== 0) process.exit(r.status ?? 1)
 }
 
-const packageManager = String(process.env.npm_execpath || '').toLowerCase().includes('pnpm')
-  ? 'pnpm'
-  : 'npm'
-
-run(packageManager, ['run', 'prepackage'])
-run(packageManager, ['run', 'build'])
-run(
-  packageManager === 'pnpm' ? 'pnpm' : 'npx',
-  packageManager === 'pnpm'
-    ? ['exec', 'electron-builder', '--win', 'nsis', '--publish', 'always']
-    : ['electron-builder', '--win', 'nsis', '--publish', 'always'],
-)
+// Invoke the pinned local tools directly. This avoids package-manager wrappers
+// attempting an install during a release and changing/invalidating dependencies.
+run(process.execPath, [join(root, 'scripts', 'check-env.mjs')])
+run(process.execPath, [join(root, 'scripts', 'generate-icon.mjs')])
+run(process.execPath, [join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'])
+run(process.execPath, [
+  join(root, 'node_modules', 'electron-builder', 'cli.js'),
+  '--win',
+  'nsis',
+  '--publish',
+  'always',
+])
