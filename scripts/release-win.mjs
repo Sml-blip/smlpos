@@ -35,6 +35,15 @@ function run(cmd, args) {
   if (r.status !== 0) process.exit(r.status ?? 1)
 }
 
-run('npm', ['run', 'prepackage'])
-run('npm', ['run', 'build'])
-run('npx', ['electron-builder', '--win', 'nsis', '--publish', 'always'])
+const packageManager = String(process.env.npm_execpath || '').toLowerCase().includes('pnpm')
+  ? 'pnpm'
+  : 'npm'
+
+run(packageManager, ['run', 'prepackage'])
+run(packageManager, ['run', 'build'])
+run(
+  packageManager === 'pnpm' ? 'pnpm' : 'npx',
+  packageManager === 'pnpm'
+    ? ['exec', 'electron-builder', '--win', 'nsis', '--publish', 'always']
+    : ['electron-builder', '--win', 'nsis', '--publish', 'always'],
+)
