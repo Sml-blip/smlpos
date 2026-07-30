@@ -49,6 +49,7 @@ const api = {
   servicesPosFind: (code: string) => ipcRenderer.invoke('servicesPOS:find', code),
   transactionsServicesCreate: (t: unknown) => ipcRenderer.invoke('transactionsServices:create', t),
   transactionsServicesList: (shiftId?: string) => ipcRenderer.invoke('transactionsServices:list', shiftId),
+  transactionsServicesNoteSuggestions: (serviceId?: string) => ipcRenderer.invoke('transactionsServices:noteSuggestions', serviceId),
 
   // Produits
   produitsList: (filters?: unknown) => ipcRenderer.invoke('produits:list', filters),

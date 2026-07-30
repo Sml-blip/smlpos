@@ -31,6 +31,7 @@ const SERVICES_POS = [
   { id: 'svc1', nom: 'Enda Taw', code_barre: '0000000000001', frais_defaut: 2.500, actif: 1, created_at: '2026-01-01T00:00:00' },
   { id: 'svc2', nom: 'Ooredoo', code_barre: '0000000000002', frais_defaut: 2.500, actif: 1, created_at: '2026-01-01T00:00:00' },
   { id: 'svc3', nom: 'Orange', code_barre: '0000000000003', frais_defaut: 2.500, actif: 1, created_at: '2026-01-01T00:00:00' },
+  { id: 'svc-autre', nom: 'Autre service', code_barre: '0000000000004', frais_defaut: 0, actif: 1, created_at: '2026-01-01T00:00:00' },
 ]
 
 const FOURNISSEURS = [
@@ -213,6 +214,22 @@ const mockApi = {
     let list = [...TRANSACTIONS_SERVICES]
     if (filters?.shift_id) list = list.filter(t => t.shift_id === filters.shift_id)
     return list
+  },
+  transactionsServicesNoteSuggestions: async (serviceId?: string) => {
+    const counts = new Map<string, { note: string; usage_count: number; last_used: string }>()
+    for (const transaction of TRANSACTIONS_SERVICES) {
+      if (serviceId && transaction.service_id !== serviceId) continue
+      const note = String(transaction.note ?? '').trim()
+      if (!note) continue
+      const key = note.toLocaleLowerCase('fr')
+      const current = counts.get(key)
+      counts.set(key, {
+        note,
+        usage_count: (current?.usage_count ?? 0) + 1,
+        last_used: current && current.last_used > transaction.created_at ? current.last_used : transaction.created_at,
+      })
+    }
+    return [...counts.values()].sort((a, b) => b.usage_count - a.usage_count || b.last_used.localeCompare(a.last_used)).slice(0, 12)
   },
 
   // Products

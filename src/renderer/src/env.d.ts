@@ -42,6 +42,7 @@ interface Window {
     servicesPosFind: (code: string) => Promise<unknown>
     transactionsServicesCreate: (t: unknown) => Promise<unknown>
     transactionsServicesList: (shiftId?: string) => Promise<unknown[]>
+    transactionsServicesNoteSuggestions: (serviceId?: string) => Promise<Array<{ note: string; usage_count: number; last_used: string }>>
 
     // Catégories
     categoriesList: () => Promise<unknown[]>

@@ -387,7 +387,7 @@ export default function POSTab() {
 
   const handleServiceConfirm = (service: ServicePOS, montantFrais: number, note: string) => {
     addItem({
-      designation: `${service.nom} — ${note}`,
+      designation: note.trim() ? `${service.nom} — ${note.trim()}` : service.nom,
       quantite: 1,
       prix_unitaire: montantFrais,
       remise_pct: 0,
@@ -1486,11 +1486,12 @@ function ServiceSelectorModal({ onSelect, onClose }: { onSelect: (s: ServicePOS)
     'bg-green-50 border-green-300 hover:bg-green-100',
     'bg-red-50 border-red-300 hover:bg-red-100',
     'bg-orange-50 border-orange-300 hover:bg-orange-100',
+    'bg-violet-50 border-violet-300 hover:bg-violet-100',
   ]
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[380px] animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[420px] animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="font-bold text-base flex items-center gap-2">
             <Zap size={16} className="text-accent-500" />
@@ -1505,10 +1506,12 @@ function ServiceSelectorModal({ onSelect, onClose }: { onSelect: (s: ServicePOS)
               onClick={() => onSelect(svc)}
               className={`flex items-center gap-4 p-4 rounded-xl border-2 font-semibold text-left transition-all ${colors[i % colors.length]}`}
             >
-              <span className="text-2xl">🏦</span>
+              <span className="text-2xl">{svc.id === 'svc-autre' ? '🧰' : '🏦'}</span>
               <div>
                 <div className="font-bold text-text-primary">{svc.nom}</div>
-                <div className="text-xs text-text-muted">Code: {svc.code_barre}</div>
+                <div className="text-xs text-text-muted">
+                  {svc.id === 'svc-autre' ? 'Prix libre + note avec suggestions' : `Code: ${svc.code_barre}`}
+                </div>
               </div>
             </button>
           ))}

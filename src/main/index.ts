@@ -1816,7 +1816,17 @@ function setupIpcHandlers() {
 
   // ─── Services POS ────────────────────────────────────────────────────────────
   ipcMain.handle('servicesPOS:list', () => {
-    return db.prepare('SELECT * FROM services_pos WHERE actif = 1 ORDER BY nom').all()
+    return db.prepare(`
+      SELECT * FROM services_pos
+      WHERE actif = 1
+      ORDER BY CASE id
+        WHEN 'svc-enda' THEN 1
+        WHEN 'svc-ooredoo' THEN 2
+        WHEN 'svc-orange' THEN 3
+        WHEN 'svc-autre' THEN 4
+        ELSE 5
+      END, nom
+    `).all()
   })
 
   ipcMain.handle('servicesPOS:find', (_e, code: string) => {
@@ -1838,6 +1848,25 @@ function setupIpcHandlers() {
       return db.prepare('SELECT * FROM transactions_services WHERE shift_id = ? ORDER BY created_at DESC').all(shiftId)
     }
     return db.prepare('SELECT * FROM transactions_services ORDER BY created_at DESC LIMIT 100').all()
+  })
+
+  ipcMain.handle('transactionsServices:noteSuggestions', (_e, serviceId?: string) => {
+    const params: string[] = []
+    let serviceFilter = ''
+    if (serviceId?.trim()) {
+      serviceFilter = 'AND service_id = ?'
+      params.push(serviceId.trim())
+    }
+    return db.prepare(`
+      SELECT TRIM(note) AS note, COUNT(*) AS usage_count, MAX(created_at) AS last_used
+      FROM transactions_services
+      WHERE note IS NOT NULL
+        AND TRIM(note) != ''
+        ${serviceFilter}
+      GROUP BY LOWER(TRIM(note))
+      ORDER BY usage_count DESC, last_used DESC
+      LIMIT 12
+    `).all(...params)
   })
 
   // ─── Catégories ──────────────────────────────────────────────────────────────

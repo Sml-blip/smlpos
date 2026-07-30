@@ -385,7 +385,8 @@ export function initDatabase() {
     INSERT OR IGNORE INTO services_pos (id, nom, code_barre) VALUES
       ('svc-enda',    'Enda Taw', '0000000000001'),
       ('svc-ooredoo', 'Ooredoo',  '0000000000002'),
-      ('svc-orange',  'Orange',   '0000000000003');
+      ('svc-orange',  'Orange',   '0000000000003'),
+      ('svc-autre',   'Autre service', '0000000000004');
   `)
 
   // Migrate existing shifts table to add new columns if not present
