@@ -659,24 +659,57 @@ function setupIpcHandlers() {
     }
   })
 
+  let invoiceScanWiaBusy = false
   ipcMain.handle('invoiceScan:acquireWia', async () => {
     if (process.platform !== 'win32') {
       return { success: false, error: 'Le scanner WIA est disponible uniquement sous Windows.' }
     }
+    if (invoiceScanWiaBusy) {
+      return { success: false, error: 'Un scan est déjà en cours. Terminez ou annulez la fenêtre du scanner.' }
+    }
+    invoiceScanWiaBusy = true
+    const powershell = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
     const outputPath = join(app.getPath('temp'), `smlpos-facture-${randomUUID()}.jpg`)
-    const script = [
+    const encodeScript = (value: string) => Buffer.from(value, 'utf16le').toString('base64')
+    const probeScript = [
+      "$ErrorActionPreference = 'Stop'",
+      '$manager = New-Object -ComObject WIA.DeviceManager',
+      '$scanners = @($manager.DeviceInfos | Where-Object { $_.Type -eq 1 })',
+      'Write-Output $scanners.Count',
+    ].join('\r\n')
+    const scanScript = [
       "$ErrorActionPreference = 'Stop'",
       '$dialog = New-Object -ComObject WIA.CommonDialog',
-      "$image = $dialog.ShowAcquireImage(0, 4, 0, '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}', $true, $true, $false)",
+      '$device = $dialog.ShowSelectDevice(1, $false, $false)',
+      'if ($null -eq $device) { exit 2 }',
+      '$item = $device.Items.Item(1)',
+      "$image = $dialog.ShowTransfer($item, '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}', $true)",
       'if ($null -eq $image) { exit 2 }',
       `$image.SaveFile('${outputPath.replace(/'/g, "''")}')`,
     ].join('\r\n')
-    const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    let minimizedForScan = false
     try {
+      const probe = await execFileAsync(
+        powershell,
+        ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encodeScript(probeScript)],
+        { timeout: 15 * 1000, windowsHide: true },
+      )
+      const scannerCount = Number(String(probe.stdout).trim())
+      if (!Number.isFinite(scannerCount) || scannerCount < 1) {
+        return {
+          success: false,
+          error: 'Aucun scanner WIA détecté par Windows. Installez le pilote scanner HP complet, puis redémarrez SMLPOS. Vous pouvez importer un PDF ou une image en attendant.',
+        }
+      }
+
+      if (mainWindow && !mainWindow.isMinimized()) {
+        mainWindow.minimize()
+        minimizedForScan = true
+      }
       await execFileAsync(
-        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded],
-        { timeout: 3 * 60 * 1000, windowsHide: true },
+        powershell,
+        ['-NoProfile', '-STA', '-EncodedCommand', encodeScript(scanScript)],
+        { timeout: 2 * 60 * 1000, windowsHide: true },
       )
       if (!existsSync(outputPath)) return { success: false, error: 'Le scanner n’a retourné aucune image.' }
       return { success: true, ...registerInvoiceScanSource(outputPath, true) }
@@ -687,9 +720,18 @@ function setupIpcHandlers() {
       const message = String((error as { stderr?: unknown })?.stderr || (error as Error)?.message || error)
       return {
         success: false,
-        error: message.includes('ActiveX') || message.includes('COM')
+        error: message.includes('timed out')
+          ? 'Le scanner ne répond pas. Le scan a été arrêté après 2 minutes. Vérifiez le pilote HP et réessayez.'
+          : message.includes('ActiveX') || message.includes('COM')
           ? 'Scanner WIA indisponible. Vérifiez que le pilote HP complet est installé.'
           : `Échec du scan WIA : ${message}`,
+      }
+    } finally {
+      invoiceScanWiaBusy = false
+      if (minimizedForScan && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.restore()
+        mainWindow.show()
+        mainWindow.focus()
       }
     }
   })
