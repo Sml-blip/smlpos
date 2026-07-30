@@ -10,6 +10,7 @@ import { saveBalanceReport } from '../../lib/reportPdf'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import FactureAchatPrintModal from './FactureAchatPrintModal'
 import FactureSerialModal from './FactureSerialModal'
+import InvoiceScanModal from './InvoiceScanModal'
 import { buildAchatInvoiceDoc, mapFactureAchatLignes } from '../../lib/invoiceAchatMapper'
 import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
@@ -30,7 +31,7 @@ import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, DollarSign, Package,
   RefreshCw, Edit2, PackageCheck, Inbox, InboxIcon, Printer,
-  Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle
+  Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle, ScanLine
 } from 'lucide-react'
 
 const api = window.api
@@ -1403,6 +1404,7 @@ function FactureFournisseurModal({
   const [barcodePrint, setBarcodePrint] = useState<{ code: string; nom: string; prix: number; ref: string } | null>(null)
   const [printPreview, setPrintPreview] = useState<{ doc: InvoiceDocData; lignes: InvoiceLineData[] } | null>(null)
   const [serialModalLineId, setSerialModalLineId] = useState<string | null>(null)
+  const [showInvoiceScan, setShowInvoiceScan] = useState(false)
 
   const hasDraftContent = useMemo(
     () => lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || !!fournisseurId || !!numeroFacture,
@@ -1871,6 +1873,14 @@ function FactureFournisseurModal({
             )}
           </h2>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowInvoiceScan(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm"
+              title="Scanner ou importer une facture fournisseur"
+            >
+              <ScanLine size={14} /> Scanner facture
+            </button>
             {/* BL Toggle */}
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <div
@@ -2275,6 +2285,32 @@ function FactureFournisseurModal({
             ))
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
+        />
+      )}
+
+      {showInvoiceScan && (
+        <InvoiceScanModal
+          produits={produits}
+          onClose={() => setShowInvoiceScan(false)}
+          onImport={(importedLines, scannedMetadata) => {
+            const hadOnlyBlankLine = lignes.length === 1
+              && !lignes[0].designation.trim()
+              && !lignes[0].produit_id
+              && !lignes[0].pendingProduct
+            setLignes(current => {
+              const onlyBlank = current.length === 1
+                && !current[0].designation.trim()
+                && !current[0].produit_id
+                && !current[0].pendingProduct
+              return onlyBlank ? importedLines : [...current, ...importedLines]
+            })
+            if (hadOnlyBlankLine && !numeroFacture.trim()) {
+              if (scannedMetadata.numeroFacture) setNumeroFacture(scannedMetadata.numeroFacture)
+              if (scannedMetadata.dateFacture) setDateFacture(scannedMetadata.dateFacture)
+            }
+            setShowInvoiceScan(false)
+            showToast(`${importedLines.length} ligne(s) ajoutée(s) au brouillon. Vérifiez avant d’enregistrer.`, 'success')
+          }}
         />
       )}
 

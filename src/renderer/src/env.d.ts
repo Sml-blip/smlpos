@@ -12,6 +12,33 @@ interface Window {
     factoryReset?: () => Promise<{ success?: boolean; error?: string; deferred?: boolean }>
     resetDiagnostics?: () => Promise<Record<string, unknown>>
     importDefaultCatalog?: () => Promise<{ success?: boolean; count?: number; error?: string }>
+    invoiceScanChooseImage?: () => Promise<{
+      success?: boolean
+      canceled?: boolean
+      scanId?: string
+      name?: string
+      previewDataUrl?: string
+      kind?: 'image' | 'pdf'
+      pageCount?: number
+      error?: string
+    }>
+    invoiceScanAcquireWia?: () => Promise<{
+      success?: boolean
+      canceled?: boolean
+      scanId?: string
+      name?: string
+      previewDataUrl?: string
+      kind?: 'image' | 'pdf'
+      pageCount?: number
+      error?: string
+    }>
+    invoiceScanRecognize?: (scanId: string) => Promise<{
+      success?: boolean
+      text?: string
+      confidence?: number
+      name?: string
+      error?: string
+    }>
     updateCheck?: (manual?: boolean) => Promise<{ ok?: boolean; reason?: string }>
     updateInstall?: () => Promise<void>
     onUpdateStatus?: (callback: (status: unknown) => void) => () => void
@@ -43,6 +70,12 @@ interface Window {
     transactionsServicesCreate: (t: unknown) => Promise<unknown>
     transactionsServicesList: (shiftId?: string) => Promise<unknown[]>
     transactionsServicesNoteSuggestions: (serviceId?: string) => Promise<Array<{ note: string; usage_count: number; last_used: string }>>
+
+    // Demandes clients / rappels
+    demandesClientsList: (filters?: unknown) => Promise<unknown[]>
+    demandesClientsCountPending: () => Promise<number>
+    demandesClientsCreate: (demande: unknown) => Promise<unknown>
+    demandesClientsUpdateStatus: (id: string, statut: string, operateur?: string) => Promise<unknown>
 
     // Catégories
     categoriesList: () => Promise<unknown[]>

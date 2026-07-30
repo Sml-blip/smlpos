@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.1'
+export const SCHEMA_VERSION = '1.10.2'
 
 export function initDatabase() {
   const db = getDb()
@@ -607,6 +607,30 @@ export function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_saved_paniers_saved_at
       ON saved_paniers(saved_at DESC);
+
+    -- Client product/part requests and general reminders.
+    CREATE TABLE IF NOT EXISTS demandes_clients (
+      id               TEXT PRIMARY KEY,
+      type_demande     TEXT NOT NULL CHECK(type_demande IN ('PRODUIT','PIECE','RAPPEL')),
+      titre            TEXT NOT NULL,
+      details          TEXT,
+      client_nom       TEXT,
+      client_tel       TEXT,
+      avance           REAL NOT NULL DEFAULT 0,
+      responsable_id   TEXT REFERENCES operateurs(id),
+      responsable_nom  TEXT NOT NULL,
+      echeance         TEXT,
+      priorite         TEXT NOT NULL DEFAULT 'NORMALE' CHECK(priorite IN ('NORMALE','URGENTE')),
+      statut           TEXT NOT NULL DEFAULT 'A_FAIRE' CHECK(statut IN ('A_FAIRE','TERMINE','ANNULE')),
+      created_by       TEXT,
+      completed_at     TEXT,
+      created_at       TEXT NOT NULL,
+      updated_at       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_demandes_clients_statut_echeance
+      ON demandes_clients(statut, echeance);
+    CREATE INDEX IF NOT EXISTS idx_demandes_clients_responsable
+      ON demandes_clients(responsable_id, statut);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fidelite_vente_type
       ON mouvements_fidelite(vente_id, type) WHERE vente_id IS NOT NULL;
   `)

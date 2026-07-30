@@ -1,6 +1,7 @@
 // Mock window.api for browser preview (no Electron IPC)
 // Provides realistic dummy data so all tabs render correctly.
 import PRODUITS_SEED from './productsSeed.json'
+import type { DemandeClient } from './lib/types'
 
 const OPERATEURS = [
   { id: 'op1', nom: 'Amira', identifiant: 'amira', role: 'superadmin' as const, actif: 1 },
@@ -107,6 +108,26 @@ const TRANSACTIONS_SERVICES = [
   { id: 'ts2', service_id: 'svc2', service_nom: 'Ooredoo', shift_id: 'shift1', operateur_nom: 'Hamdi', montant_frais: 2.500, note: '20 DT rechargement', created_at: new Date(Date.now() - 3600000).toISOString() },
 ]
 
+const DEMANDES_CLIENTS: DemandeClient[] = [
+  {
+    id: 'demande-1',
+    type_demande: 'PRODUIT',
+    titre: 'Commander chargeur Lenovo 65W',
+    details: 'Prise USB-C',
+    client_nom: 'Client exemple',
+    client_tel: '20 000 000',
+    avance: 20,
+    responsable_id: 'op2',
+    responsable_nom: 'Hamdi',
+    echeance: new Date(Date.now() + 86400000).toISOString(),
+    priorite: 'NORMALE',
+    statut: 'A_FAIRE',
+    created_by: 'Amira',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+]
+
 const FACTURES_CLIENTS = [
   { id: 'fc1', numero: 'FAC-20260501-001', vente_id: 'v1', shift_id: 'shift1', client_nom: 'Entreprise Alpha', client_tel: '71 234 567', client_adresse: '15 Rue de l\'Indépendance, Tunis', client_matricule: '1234567A/P/C/000', montant_ttc: 195, created_at: new Date().toISOString() },
 ]
@@ -176,6 +197,10 @@ const mockApi = {
   shiftsOpen: async (shift: unknown) => ({ ...SHIFT_ACTIVE, ...(shift as object) }),
   shiftsClose: async () => ({ success: true }),
   appVersion: async () => '1.9.5',
+  invoiceScanChooseImage: async () => ({ success: false, error: 'Import disponible dans l’application Windows.' }),
+  invoiceScanAcquireWia: async () => ({ success: false, error: 'Scanner WIA disponible dans l’application Windows.' }),
+  invoiceScanRecognize: async () => ({ success: false, error: 'OCR disponible dans l’application Windows.' }),
+  facturesCountBLPending: async () => 0,
   factoryReset: async () => ({ success: true }),
   updateCheck: async () => ({ ok: false, reason: 'browser' }),
   updateInstall: async () => {},
@@ -230,6 +255,33 @@ const mockApi = {
       })
     }
     return [...counts.values()].sort((a, b) => b.usage_count - a.usage_count || b.last_used.localeCompare(a.last_used)).slice(0, 12)
+  },
+
+  demandesClientsList: async (filters: { statut?: string; type_demande?: string; responsable_id?: string; search?: string } = {}) => {
+    const query = String(filters.search ?? '').toLocaleLowerCase('fr')
+    return DEMANDES_CLIENTS.filter(d =>
+      (!filters.statut || d.statut === filters.statut)
+      && (!filters.type_demande || d.type_demande === filters.type_demande)
+      && (!filters.responsable_id || d.responsable_id === filters.responsable_id)
+      && (!query || [d.titre, d.details, d.client_nom, d.client_tel, d.responsable_nom].some(value =>
+        String(value ?? '').toLocaleLowerCase('fr').includes(query)
+      ))
+    )
+  },
+  demandesClientsCountPending: async () => DEMANDES_CLIENTS.filter(d => d.statut === 'A_FAIRE').length,
+  demandesClientsCreate: async (input: Omit<DemandeClient, 'statut' | 'created_at' | 'updated_at'>) => {
+    const now = new Date().toISOString()
+    const demande = { ...input, statut: 'A_FAIRE' as const, created_at: now, updated_at: now }
+    DEMANDES_CLIENTS.unshift(demande)
+    return demande
+  },
+  demandesClientsUpdateStatus: async (id: string, statut: DemandeClient['statut']) => {
+    const demande = DEMANDES_CLIENTS.find(d => d.id === id)
+    if (!demande) throw new Error('Demande introuvable')
+    demande.statut = statut
+    demande.completed_at = statut === 'TERMINE' ? new Date().toISOString() : null
+    demande.updated_at = new Date().toISOString()
+    return demande
   },
 
   // Products
