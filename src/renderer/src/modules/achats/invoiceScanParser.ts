@@ -1,5 +1,6 @@
 export type ParsedInvoiceLine = {
   id: string
+  referenceArticle: string
   designation: string
   quantite: number
   prixUnitaire: number
@@ -47,6 +48,32 @@ function cleanDesignation(line: string, tokens: Array<{ raw: string; index: numb
 
 function isPlausibleDesignation(value: string): boolean {
   return value.length >= 3 && /[A-Za-zÀ-ÿ\u0600-\u06ff]/.test(value)
+}
+
+function splitArticleReference(value: string): { referenceArticle: string; designation: string } {
+  const explicit = value.match(
+    /^(?:r[ée]f(?:[ée]rence)?|code(?:\s+article)?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,31})\s+(.+)$/i,
+  )
+  if (explicit) {
+    return {
+      referenceArticle: explicit[1].trim(),
+      designation: explicit[2].trim(),
+    }
+  }
+
+  const leadingToken = value.match(/^([A-Z0-9][A-Z0-9._/-]{2,31})\s+(.+)$/i)
+  if (!leadingToken) return { referenceArticle: '', designation: value }
+
+  const candidate = leadingToken[1].trim()
+  const remainder = leadingToken[2].trim()
+  const looksLikeArticleCode = /\d/.test(candidate)
+    && candidate.length >= 3
+    && !/^\d{1,3}$/.test(candidate)
+    && isPlausibleDesignation(remainder)
+
+  return looksLikeArticleCode
+    ? { referenceArticle: candidate, designation: remainder }
+    : { referenceArticle: '', designation: value }
 }
 
 export function parseInvoiceLines(text: string): ParsedInvoiceLine[] {
@@ -188,12 +215,14 @@ export function parseInvoiceLines(text: string): ParsedInvoiceLine[] {
         && token.value <= 200
       ),
     )
-    const designation = cleanDesignation(sourceLine, designationTokens)
+    const cleanedIdentity = cleanDesignation(sourceLine, designationTokens)
+    const { referenceArticle, designation } = splitArticleReference(cleanedIdentity)
     if (!isPlausibleDesignation(designation)) return
 
     const hasExplicitQty = !!explicitlyMarkedQty
     parsed.push({
       id: `ocr-${lineIndex}-${Math.random().toString(36).slice(2, 8)}`,
+      referenceArticle,
       designation,
       quantite: Math.max(1, Math.round(qtyValue)),
       prixUnitaire: Math.max(0, priceValue),

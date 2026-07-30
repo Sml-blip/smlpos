@@ -61,6 +61,25 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
     includeScore: true,
   }), [produits])
 
+  const findProductMatches = (line: Pick<ParsedInvoiceLine, 'referenceArticle' | 'designation'>) => {
+    const normalizedReference = line.referenceArticle.trim().toLocaleLowerCase()
+    const exact = normalizedReference
+      ? produits.find(product =>
+        product.reference?.trim().toLocaleLowerCase() === normalizedReference
+        || product.code_barre?.trim().toLocaleLowerCase() === normalizedReference
+      )
+      : undefined
+    const fuzzy = fuse.search(
+      [line.referenceArticle, line.designation].filter(Boolean).join(' '),
+      { limit: exact ? 3 : 4 },
+    )
+    const suggestions = [
+      ...(exact ? [exact] : []),
+      ...fuzzy.map(match => match.item).filter(product => product.id !== exact?.id),
+    ].slice(0, 4)
+    return { exact, suggestions, bestFuzzy: fuzzy[0] }
+  }
+
   const acquire = async (kind: 'scanner' | 'import') => {
     const action = kind === 'scanner' ? api.invoiceScanAcquireWia : api.invoiceScanChooseImage
     if (!action) {
@@ -104,14 +123,13 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
       const text = result.text || ''
       const parsed = parseInvoiceLines(text)
       const prepared = parsed.map<ReviewLine>((line) => {
-        const matches = fuse.search(line.designation, { limit: 4 })
-        const suggestions = matches.map(match => match.item)
-        const best = matches[0]
-        const confidentlyMatched = !!best && (best.score ?? 1) <= 0.32
+        const { exact, suggestions, bestFuzzy } = findProductMatches(line)
+        const confidentlyMatched = !!exact || (!!bestFuzzy && (bestFuzzy.score ?? 1) <= 0.32)
+        const selectedProduct = exact ?? bestFuzzy?.item
         return {
           ...line,
           suggestions,
-          productId: confidentlyMatched ? best.item.id : '',
+          productId: confidentlyMatched && selectedProduct ? selectedProduct.id : '',
           mode: confidentlyMatched ? 'link' : line.confidence === 'low' ? 'skip' : 'free',
         }
       })
@@ -149,7 +167,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
       }
       return {
         ...emptyFactureLigne(),
-        designation: line.designation.trim(),
+        designation: [line.referenceArticle.trim(), line.designation.trim()].filter(Boolean).join(' — '),
         quantite: line.quantite,
         nouveau_prix_achat: line.prixUnitaire,
       }
@@ -289,7 +307,16 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-[1fr_4.5rem_7rem] gap-2">
+                  <div className="grid grid-cols-[8rem_1fr_4.5rem_7rem] gap-2">
+                    <div>
+                      <label className="block text-[9px] font-semibold text-text-muted mb-0.5">Réf. / code article</label>
+                      <input
+                        value={line.referenceArticle}
+                        onChange={event => updateLine(line.id, { referenceArticle: event.target.value })}
+                        className="w-full border border-border rounded-lg px-2 py-1.5 text-xs font-mono bg-white"
+                        placeholder="ART-1024"
+                      />
+                    </div>
                     <div>
                       <label className="block text-[9px] font-semibold text-text-muted mb-0.5">Désignation</label>
                       <input
