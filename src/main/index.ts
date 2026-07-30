@@ -1,8 +1,10 @@
 import { app, shell, BrowserWindow, ipcMain, Menu, dialog, nativeImage } from 'electron'
 import type { NativeImage } from 'electron'
-import { join } from 'path'
+import { join, extname, basename } from 'path'
 import { randomUUID } from 'crypto'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
 import { bindRow } from './bindRow'
@@ -31,6 +33,157 @@ import { startBossApiServer, stopBossApiServer } from './bossApiServer'
 bootstrapCanonicalUserDataPath()
 
 let mainWindow: BrowserWindow | null = null
+const execFileAsync = promisify(execFile)
+
+type InvoiceScanSource = {
+  paths: string[]
+  name: string
+  temporaryPaths: string[]
+  directText?: string
+}
+
+const invoiceScanSources = new Map<string, InvoiceScanSource>()
+const INVOICE_SCAN_MAX_BYTES = 25 * 1024 * 1024
+const INVOICE_SCAN_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'])
+
+function registerInvoiceScanSource(path: string, temporary = false): {
+  scanId: string
+  name: string
+  previewDataUrl: string
+} {
+  const ext = extname(path).toLowerCase()
+  if (!INVOICE_SCAN_EXTENSIONS.has(ext)) {
+    throw new Error('Format non pris en charge. Utilisez PNG, JPG, BMP ou TIFF.')
+  }
+  const size = statSync(path).size
+  if (size <= 0 || size > INVOICE_SCAN_MAX_BYTES) {
+    throw new Error('Image vide ou trop volumineuse (maximum 25 Mo).')
+  }
+  const mime = ext === '.png'
+    ? 'image/png'
+    : ext === '.bmp'
+      ? 'image/bmp'
+      : ext === '.tif' || ext === '.tiff'
+        ? 'image/tiff'
+        : 'image/jpeg'
+  const scanId = randomUUID()
+  invoiceScanSources.set(scanId, {
+    paths: [path],
+    name: basename(path),
+    temporaryPaths: temporary ? [path] : [],
+  })
+  setTimeout(() => {
+    const source = invoiceScanSources.get(scanId)
+    invoiceScanSources.delete(scanId)
+    for (const tempPath of source?.temporaryPaths ?? []) {
+      if (!existsSync(tempPath)) continue
+      try { unlinkSync(tempPath) } catch { /* best-effort temporary scan cleanup */ }
+    }
+  }, 30 * 60 * 1000).unref()
+  return {
+    scanId,
+    name: basename(path),
+    previewDataUrl: `data:${mime};base64,${readFileSync(path).toString('base64')}`,
+  }
+}
+
+function extractJpegImagesFromPdf(buffer: Buffer, outputPrefix: string): string[] {
+  const ascii = buffer.toString('latin1')
+  const paths: string[] = []
+  let cursor = 0
+  while (paths.length < 20) {
+    const imageIndex = ascii.indexOf('/Subtype /Image', cursor)
+    if (imageIndex < 0) break
+    const dictStart = Math.max(0, ascii.lastIndexOf('<<', imageIndex))
+    const streamIndex = ascii.indexOf('stream', imageIndex)
+    if (streamIndex < 0) break
+    const dictionary = ascii.slice(dictStart, streamIndex)
+    cursor = streamIndex + 6
+    if (!/\/Filter\s*(?:\/DCTDecode|\[\s*\/DCTDecode)/.test(dictionary)) continue
+    const dataStart = streamIndex + 6 + (ascii.slice(streamIndex + 6, streamIndex + 8) === '\r\n' ? 2 : 1)
+    const lengthMatch = dictionary.match(/\/Length\s+(\d+)\b/)
+    const endStream = ascii.indexOf('endstream', dataStart)
+    if (endStream < 0) break
+    const dataEnd = lengthMatch
+      ? Math.min(dataStart + Number(lengthMatch[1]), endStream)
+      : endStream - (ascii[endStream - 2] === '\r' ? 2 : 1)
+    const jpeg = buffer.subarray(dataStart, dataEnd)
+    if (jpeg.length < 100 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) continue
+    const imagePath = `${outputPrefix}-${paths.length + 1}.jpg`
+    writeFileSync(imagePath, jpeg)
+    paths.push(imagePath)
+    cursor = endStream + 9
+  }
+  return paths
+}
+
+async function registerInvoicePdfSource(path: string): Promise<{
+  scanId: string
+  name: string
+  previewDataUrl: string
+  pageCount: number
+  kind: 'pdf'
+}> {
+  const size = statSync(path).size
+  if (size <= 0 || size > 40 * 1024 * 1024) {
+    throw new Error('PDF vide ou trop volumineux (maximum 40 Mo).')
+  }
+  const buffer = readFileSync(path)
+  let directText = ''
+  let pageCount = 0
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const document = await pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      disableWorker: true,
+      useSystemFonts: true,
+    }).promise
+    pageCount = document.numPages
+    const pages: string[] = []
+    for (let pageNumber = 1; pageNumber <= Math.min(document.numPages, 20); pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      const content = await page.getTextContent()
+      pages.push(content.items
+        .map(item => 'str' in item ? item.str : '')
+        .join(' '))
+    }
+    directText = pages.join('\n').trim()
+    await document.destroy()
+  } catch (error) {
+    console.warn('[invoiceScan] PDF text extraction unavailable:', error)
+  }
+
+  const tempPrefix = join(app.getPath('temp'), `smlpos-facture-pdf-${randomUUID()}`)
+  const imagePaths = directText.length >= 40 ? [] : extractJpegImagesFromPdf(buffer, tempPrefix)
+  if (!directText && !imagePaths.length) {
+    throw new Error('Ce PDF ne contient ni texte lisible ni image JPEG exploitable. Exportez sa page en JPG/PNG puis réessayez.')
+  }
+  const scanId = randomUUID()
+  invoiceScanSources.set(scanId, {
+    paths: imagePaths,
+    name: basename(path),
+    temporaryPaths: imagePaths,
+    directText: directText || undefined,
+  })
+  setTimeout(() => {
+    const source = invoiceScanSources.get(scanId)
+    invoiceScanSources.delete(scanId)
+    for (const tempPath of source?.temporaryPaths ?? []) {
+      if (!existsSync(tempPath)) continue
+      try { unlinkSync(tempPath) } catch { /* best effort */ }
+    }
+  }, 30 * 60 * 1000).unref()
+  const previewDataUrl = imagePaths.length
+    ? `data:image/jpeg;base64,${readFileSync(imagePaths[0]).toString('base64')}`
+    : `data:application/pdf;base64,${buffer.toString('base64')}`
+  return {
+    scanId,
+    name: basename(path),
+    previewDataUrl,
+    pageCount: pageCount || imagePaths.length,
+    kind: 'pdf',
+  }
+}
 
 let _backupInterval: ReturnType<typeof setInterval> | null = null
 
@@ -485,6 +638,115 @@ function setupIpcHandlers() {
 
   // App version (used in Settings / About)
   ipcMain.handle('app:version', () => app.getVersion())
+
+  ipcMain.handle('invoiceScan:chooseImage', async () => {
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      title: 'Importer une facture fournisseur',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Factures PDF ou image', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff'] },
+      ],
+    })
+    if (result.canceled || !result.filePaths.length) return { canceled: true }
+    try {
+      const filePath = result.filePaths[0]
+      if (extname(filePath).toLowerCase() === '.pdf') {
+        return { success: true, ...await registerInvoicePdfSource(filePath) }
+      }
+      return { success: true, ...registerInvoiceScanSource(filePath), kind: 'image', pageCount: 1 }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('invoiceScan:acquireWia', async () => {
+    if (process.platform !== 'win32') {
+      return { success: false, error: 'Le scanner WIA est disponible uniquement sous Windows.' }
+    }
+    const outputPath = join(app.getPath('temp'), `smlpos-facture-${randomUUID()}.jpg`)
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      '$dialog = New-Object -ComObject WIA.CommonDialog',
+      "$image = $dialog.ShowAcquireImage(0, 4, 0, '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}', $true, $true, $false)",
+      'if ($null -eq $image) { exit 2 }',
+      `$image.SaveFile('${outputPath.replace(/'/g, "''")}')`,
+    ].join('\r\n')
+    const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    try {
+      await execFileAsync(
+        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded],
+        { timeout: 3 * 60 * 1000, windowsHide: true },
+      )
+      if (!existsSync(outputPath)) return { success: false, error: 'Le scanner n’a retourné aucune image.' }
+      return { success: true, ...registerInvoiceScanSource(outputPath, true) }
+    } catch (error) {
+      const code = Number((error as { code?: unknown })?.code)
+      if (code === 2) return { canceled: true }
+      try { if (existsSync(outputPath)) unlinkSync(outputPath) } catch { /* best effort */ }
+      const message = String((error as { stderr?: unknown })?.stderr || (error as Error)?.message || error)
+      return {
+        success: false,
+        error: message.includes('ActiveX') || message.includes('COM')
+          ? 'Scanner WIA indisponible. Vérifiez que le pilote HP complet est installé.'
+          : `Échec du scan WIA : ${message}`,
+      }
+    }
+  })
+
+  ipcMain.handle('invoiceScan:recognize', async (_event, scanId: string) => {
+    const source = invoiceScanSources.get(String(scanId))
+    if (!source || (!source.directText && !source.paths.some(path => existsSync(path)))) {
+      return { success: false, error: 'Image expirée. Veuillez scanner ou importer la facture à nouveau.' }
+    }
+    if (source.directText) {
+      return {
+        success: true,
+        text: source.directText,
+        confidence: 100,
+        name: source.name,
+      }
+    }
+    const packageRoot = is.dev
+      ? app.getAppPath()
+      : join(process.resourcesPath, 'app.asar.unpacked')
+    const langPath = join(packageRoot, 'node_modules', '@tesseract.js-data', 'fra', '4.0.0_best_int')
+    const workerPath = join(packageRoot, 'node_modules', 'tesseract.js', 'src', 'worker-script', 'node', 'index.js')
+    const cachePath = join(app.getPath('userData'), 'ocr-cache')
+    mkdirSync(cachePath, { recursive: true })
+    let worker: Awaited<ReturnType<(typeof import('tesseract.js'))['createWorker']>> | null = null
+    try {
+      const { createWorker } = await import('tesseract.js')
+      worker = await createWorker('fra', 1, {
+        langPath,
+        workerPath,
+        cachePath,
+        cacheMethod: 'readOnly',
+        gzip: true,
+      })
+      const recognizedPages: string[] = []
+      const confidences: number[] = []
+      for (const imagePath of source.paths) {
+        if (!existsSync(imagePath)) continue
+        const result = await worker.recognize(imagePath, { rotateAuto: true })
+        recognizedPages.push(result.data.text)
+        confidences.push(result.data.confidence)
+      }
+      return {
+        success: true,
+        text: recognizedPages.join('\n'),
+        confidence: confidences.length
+          ? confidences.reduce((sum, confidence) => sum + confidence, 0) / confidences.length
+          : 0,
+        name: source.name,
+      }
+    } catch (error) {
+      console.error('[invoiceScan] OCR failed:', error)
+      return { success: false, error: `Analyse OCR impossible : ${error instanceof Error ? error.message : String(error)}` }
+    } finally {
+      if (worker) await worker.terminate().catch(() => undefined)
+    }
+  })
 
   ipcMain.handle('reports:savePdf', async (_e, html: string, suggestedName = 'rapport.pdf') => {
     if (!html?.trim()) return { success: false, error: 'Rapport vide' }
@@ -1867,6 +2129,112 @@ function setupIpcHandlers() {
       ORDER BY usage_count DESC, last_used DESC
       LIMIT 12
     `).all(...params)
+  })
+
+  // ─── Demandes clients / rappels ─────────────────────────────────────────────
+  ipcMain.handle('demandesClients:list', (_e, filters: {
+    statut?: string
+    type_demande?: string
+    responsable_id?: string
+    search?: string
+  } = {}) => {
+    let sql = 'SELECT * FROM demandes_clients WHERE 1=1'
+    const params: unknown[] = []
+    if (filters.statut) {
+      sql += ' AND statut = ?'
+      params.push(filters.statut)
+    }
+    if (filters.type_demande) {
+      sql += ' AND type_demande = ?'
+      params.push(filters.type_demande)
+    }
+    if (filters.responsable_id) {
+      sql += ' AND responsable_id = ?'
+      params.push(filters.responsable_id)
+    }
+    if (filters.search?.trim()) {
+      const search = `%${filters.search.trim()}%`
+      sql += ' AND (titre LIKE ? OR details LIKE ? OR client_nom LIKE ? OR client_tel LIKE ? OR responsable_nom LIKE ?)'
+      params.push(search, search, search, search, search)
+    }
+    sql += `
+      ORDER BY
+        CASE statut WHEN 'A_FAIRE' THEN 1 WHEN 'TERMINE' THEN 2 ELSE 3 END,
+        CASE priorite WHEN 'URGENTE' THEN 1 ELSE 2 END,
+        CASE WHEN echeance IS NULL OR echeance = '' THEN 1 ELSE 0 END,
+        echeance ASC,
+        created_at DESC
+    `
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('demandesClients:countPending', () => {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS count FROM demandes_clients WHERE statut = 'A_FAIRE'
+    `).get() as { count: number }
+    return row.count
+  })
+
+  ipcMain.handle('demandesClients:create', (_e, input: Record<string, unknown>) => {
+    const titre = String(input.titre ?? '').trim()
+    const responsableNom = String(input.responsable_nom ?? '').trim()
+    const typeDemande = String(input.type_demande ?? '')
+    if (!titre) throw new Error('La demande est obligatoire')
+    if (!responsableNom) throw new Error('Agent responsable obligatoire')
+    if (!['PRODUIT', 'PIECE', 'RAPPEL'].includes(typeDemande)) throw new Error('Type de demande invalide')
+    const now = new Date().toISOString()
+    const demande = {
+      id: String(input.id ?? randomUUID()),
+      type_demande: typeDemande,
+      titre,
+      details: String(input.details ?? '').trim() || null,
+      client_nom: String(input.client_nom ?? '').trim() || null,
+      client_tel: String(input.client_tel ?? '').trim() || null,
+      avance: money3(Math.max(0, Number(input.avance) || 0)),
+      responsable_id: String(input.responsable_id ?? '').trim() || null,
+      responsable_nom: responsableNom,
+      echeance: String(input.echeance ?? '').trim() || null,
+      priorite: input.priorite === 'URGENTE' ? 'URGENTE' : 'NORMALE',
+      statut: 'A_FAIRE',
+      created_by: String(input.created_by ?? '').trim() || null,
+      completed_at: null,
+      created_at: String(input.created_at ?? '').trim() || now,
+      updated_at: now,
+    }
+    db.prepare(`
+      INSERT INTO demandes_clients
+        (id,type_demande,titre,details,client_nom,client_tel,avance,responsable_id,responsable_nom,
+         echeance,priorite,statut,created_by,completed_at,created_at,updated_at)
+      VALUES
+        (@id,@type_demande,@titre,@details,@client_nom,@client_tel,@avance,@responsable_id,@responsable_nom,
+         @echeance,@priorite,@statut,@created_by,@completed_at,@created_at,@updated_at)
+    `).run(demande)
+    addActivityLog({
+      operateur: demande.created_by,
+      action: 'CLIENT_REQUEST_CREATED',
+      montant: demande.avance,
+      details: { titre: demande.titre, type: demande.type_demande, responsable: demande.responsable_nom },
+    })
+    return demande
+  })
+
+  ipcMain.handle('demandesClients:updateStatus', (_e, id: string, statut: string, operateur?: string) => {
+    if (!['A_FAIRE', 'TERMINE', 'ANNULE'].includes(statut)) throw new Error('Statut invalide')
+    const now = new Date().toISOString()
+    const completedAt = statut === 'TERMINE' ? now : null
+    const result = db.prepare(`
+      UPDATE demandes_clients
+      SET statut = ?, completed_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(statut, completedAt, now, id)
+    if (!result.changes) throw new Error('Demande introuvable')
+    const updated = db.prepare('SELECT * FROM demandes_clients WHERE id = ?').get(id) as Record<string, unknown>
+    addActivityLog({
+      operateur: operateur || null,
+      action: statut === 'TERMINE' ? 'CLIENT_REQUEST_COMPLETED' : 'CLIENT_REQUEST_STATUS_CHANGED',
+      details: { id, titre: updated.titre, statut },
+    })
+    return updated
   })
 
   // ─── Catégories ──────────────────────────────────────────────────────────────

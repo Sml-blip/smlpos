@@ -18,9 +18,10 @@ import SettingsTab from './modules/settings/SettingsTab'
 import ClientsTab from './modules/clients/ClientsTab'
 import PersonnelsTab from './modules/personnels/PersonnelsTab'
 import DocumentsTab from './modules/documents/DocumentsTab'
+import DemandesTab from './modules/demandes/DemandesTab'
 import {
   ShoppingCart, History, Package, LayoutDashboard, Truck,
-  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen
+  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen, ClipboardList
 } from 'lucide-react'
 import { cn } from './lib/utils'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
@@ -49,6 +50,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
   { id: 'caisse_interne', label: 'Caisse Interne',    short: 'Trésorerie', icon: <Vault size={13} /> },
   { id: 'documents',      label: 'Documents',         short: 'Documents',  icon: <FolderOpen size={13} /> },
   { id: 'dashboard',      label: 'Tableau de bord',   short: 'Dashboard',  icon: <LayoutDashboard size={13} /> },
+  { id: 'demandes',       label: 'Demandes / Rappels', short: 'Demandes',   icon: <ClipboardList size={13} /> },
   { id: 'settings',       label: 'Paramètres',        short: 'Paramètres', icon: <Settings size={13} /> },
 ]
 
@@ -61,6 +63,7 @@ export default function App() {
   const [appVersion, setAppVersion] = useState('1.9.2')
   const [agentChangeOpen, setAgentChangeOpen] = useState(false)
   const [agentChangeSettings, setAgentChangeSettings] = useState<Record<string, string>>({})
+  const [pendingDemandes, setPendingDemandes] = useState(0)
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { status: updateStatus, showModal: showUpdateModal, isManualChecking, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
 
@@ -95,6 +98,23 @@ export default function App() {
 
   useEffect(() => {
     return installGlobalInteractionFeedback()
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void api.demandesClientsCountPending()
+        .then(count => { if (active) setPendingDemandes(Number(count) || 0) })
+        .catch(() => { /* migration may still be starting */ })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 15_000)
+    window.addEventListener('smlpos:demandes-changed', refresh)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('smlpos:demandes-changed', refresh)
+    }
   }, [])
 
   useEffect(() => {
@@ -184,7 +204,7 @@ export default function App() {
               onClick={() => setActiveTab(tab.id)}
               title={tab.label}
               className={cn(
-                'flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0',
+                'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0',
                 active
                   ? 'border-accent-500 text-text-primary bg-accent-50'
                   : 'border-transparent text-text-secondary hover:text-text-primary hover:bg-muted'
@@ -192,6 +212,11 @@ export default function App() {
             >
               {tab.icon}
               {tab.short}
+              {tab.id === 'demandes' && pendingDemandes > 0 && (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white shadow-sm">
+                  {pendingDemandes > 99 ? '99+' : pendingDemandes}
+                </span>
+              )}
             </button>
           )
         })}
@@ -211,6 +236,7 @@ export default function App() {
         {activeTab === 'clients'        && <ClientsTab />}
         {activeTab === 'personnels'     && <PersonnelsTab />}
         {activeTab === 'documents'      && <DocumentsTab />}
+        {activeTab === 'demandes'       && <DemandesTab />}
         {activeTab === 'settings'       && <SettingsTab onCheckForUpdates={checkForUpdates} updateChecking={isManualChecking} />}
       </div>
 

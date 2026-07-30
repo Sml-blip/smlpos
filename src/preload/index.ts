@@ -13,6 +13,9 @@ const api = {
   factoryReset: () => ipcRenderer.invoke('app:factoryReset'),
   resetDiagnostics: () => ipcRenderer.invoke('app:resetDiagnostics'),
   importDefaultCatalog: () => ipcRenderer.invoke('app:importDefaultCatalog'),
+  invoiceScanChooseImage: () => ipcRenderer.invoke('invoiceScan:chooseImage'),
+  invoiceScanAcquireWia: () => ipcRenderer.invoke('invoiceScan:acquireWia'),
+  invoiceScanRecognize: (scanId: string) => ipcRenderer.invoke('invoiceScan:recognize', scanId),
 
   // Auto-update (GitHub Releases + NSIS)
   updateCheck: (manual = false) => ipcRenderer.invoke('update:check', { manual }),
@@ -50,6 +53,13 @@ const api = {
   transactionsServicesCreate: (t: unknown) => ipcRenderer.invoke('transactionsServices:create', t),
   transactionsServicesList: (shiftId?: string) => ipcRenderer.invoke('transactionsServices:list', shiftId),
   transactionsServicesNoteSuggestions: (serviceId?: string) => ipcRenderer.invoke('transactionsServices:noteSuggestions', serviceId),
+
+  // Demandes clients / rappels
+  demandesClientsList: (filters?: unknown) => ipcRenderer.invoke('demandesClients:list', filters),
+  demandesClientsCountPending: () => ipcRenderer.invoke('demandesClients:countPending'),
+  demandesClientsCreate: (demande: unknown) => ipcRenderer.invoke('demandesClients:create', demande),
+  demandesClientsUpdateStatus: (id: string, statut: string, operateur?: string) =>
+    ipcRenderer.invoke('demandesClients:updateStatus', id, statut, operateur),
 
   // Produits
   produitsList: (filters?: unknown) => ipcRenderer.invoke('produits:list', filters),

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Client, Operateur, Shift } from '../lib/types'
 
-export type TabId = 'pos' | 'historique' | 'inventaire' | 'achats' | 'dashboard' | 'caisse_interne' | 'vente_en_ligne' | 'credits' | 'retours' | 'settings' | 'clients' | 'personnels' | 'documents'
+export type TabId = 'pos' | 'historique' | 'inventaire' | 'achats' | 'dashboard' | 'caisse_interne' | 'vente_en_ligne' | 'credits' | 'retours' | 'settings' | 'clients' | 'personnels' | 'documents' | 'demandes'
 
 interface AppState {
   currentShift: Shift | null

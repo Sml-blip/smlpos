@@ -227,6 +227,28 @@ export interface TransactionService {
   created_at: string
 }
 
+export type TypeDemandeClient = 'PRODUIT' | 'PIECE' | 'RAPPEL'
+export type StatutDemandeClient = 'A_FAIRE' | 'TERMINE' | 'ANNULE'
+
+export interface DemandeClient {
+  id: string
+  type_demande: TypeDemandeClient
+  titre: string
+  details?: string | null
+  client_nom?: string | null
+  client_tel?: string | null
+  avance: number
+  responsable_id?: string | null
+  responsable_nom: string
+  echeance?: string | null
+  priorite: 'NORMALE' | 'URGENTE'
+  statut: StatutDemandeClient
+  created_by?: string | null
+  completed_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
 // ── Fournisseurs & Achats ────────────────────────────────────────────────────
 
 export interface Fournisseur {

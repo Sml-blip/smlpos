@@ -46,6 +46,7 @@
     "@radix-ui/react-toast": "^1.2.3",
     "@radix-ui/react-tooltip": "^1.1.5",
     "@supabase/supabase-js": "^2.105.1",
+    "@tesseract.js-data/fra": "1.0.0",
     "better-sqlite3": "^11.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -55,12 +56,14 @@
     "jsbarcode": "^3.12.3",
     "label-printer": "^0.13.10",
     "lucide-react": "^0.468.0",
+    "pdfjs-dist": "4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.54.2",
     "react-to-print": "^3.0.3",
     "recharts": "^2.14.1",
     "tailwind-merge": "^2.5.5",
+    "tesseract.js": "7.0.0",
     "usb": "^3.0.1",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1",
@@ -92,7 +95,10 @@
     "copyright": "Copyright © 2026 SMLPOS",
     "asar": true,
     "asarUnpack": [
-      "node_modules/better-sqlite3/**/*"
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*",
+      "node_modules/@tesseract.js-data/fra/**/*"
     ],
     "files": [
       "out/**/*",

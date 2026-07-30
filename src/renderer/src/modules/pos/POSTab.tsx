@@ -8,7 +8,7 @@ import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
 import { printAdvanceReceipt, printCreditReceipt } from '../../lib/clientPaymentReceipt'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
-import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock, ClipboardList } from 'lucide-react'
 import ReparationModal from './ReparationModal'
 import RetourModal from './RetourModal'
 import SortieCaisseModal from './SortieCaisseModal'
@@ -17,6 +17,7 @@ import CheckoutModal from './CheckoutModal'
 import ServicePOSModal from './ServicePOSModal'
 import FactureClientModal from './FactureClientModal'
 import TicketModal from './TicketModal'
+import { DemandeClientModal } from '../demandes/DemandesTab'
 import {
   deleteSavedPanier,
   loadActiveCartDraft,
@@ -54,6 +55,7 @@ export default function POSTab() {
   const [showRetour, setShowRetour] = useState(false)
   const [showProductBrowse, setShowProductBrowse] = useState(false)
   const [showSavedPaniers, setShowSavedPaniers] = useState(false)
+  const [showDemandeClient, setShowDemandeClient] = useState(false)
   const [savedPanierCount, setSavedPanierCount] = useState(() => listSavedPaniers().length)
   const [cartDraftReady, setCartDraftReady] = useState(false)
   const [availableSerials, setAvailableSerials] = useState<string[]>([])
@@ -122,7 +124,7 @@ export default function POSTab() {
 
       // Global auto-scan: redirect printable chars to scanner when no modal open,
       // scan not focused, AND no other input/textarea/select is focused
-      const noModalOpen = !showCheckout && !showReparation && !showSortie && !showService && !showFacture && !showCreditPaiement && !showClientAdvance && !showLastTicket && !unknownBarcode && !showRetour
+      const noModalOpen = !showCheckout && !showReparation && !showDemandeClient && !showSortie && !showService && !showFacture && !showCreditPaiement && !showClientAdvance && !showLastTicket && !unknownBarcode && !showRetour
       const ae = document.activeElement
       const otherInputFocused = ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement || ae instanceof HTMLSelectElement
       const scanInputFocused = ae === scanRef.current
@@ -137,7 +139,7 @@ export default function POSTab() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [items, lastVente, showCheckout, showReparation, showSortie, showService, showFacture, showCreditPaiement, showClientAdvance, showLastTicket, unknownBarcode, showRetour, scanFocused, showShiftModal])
+  }, [items, lastVente, showCheckout, showReparation, showDemandeClient, showSortie, showService, showFacture, showCreditPaiement, showClientAdvance, showLastTicket, unknownBarcode, showRetour, scanFocused, showShiftModal])
 
   const showNotif = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotification({ msg, type })
@@ -751,6 +753,9 @@ export default function POSTab() {
           <button onClick={() => setShowReparation(true)} className="flex items-center justify-center gap-2 bg-white hover:bg-muted border border-border text-text-primary py-3 rounded-xl font-semibold transition-colors text-sm">
             <Wrench size={15} />Réparation (F4)
           </button>
+          <button onClick={() => setShowDemandeClient(true)} className="col-span-2 justify-self-center w-4/5 flex items-center justify-center gap-2 bg-amber-50 hover:bg-amber-100 border-2 border-amber-300 text-amber-900 py-3 rounded-xl font-bold transition-colors text-sm">
+            <ClipboardList size={16} /> Demande client / Rappels
+          </button>
           <button onClick={() => setShowSortie(true)} className="flex items-center justify-center gap-2 bg-white hover:bg-muted border border-border text-text-primary py-3 rounded-xl font-semibold transition-colors text-sm">
             <ArrowDownCircle size={15} />Sortie Caisse (F5)
           </button>
@@ -939,6 +944,7 @@ export default function POSTab() {
         />
       )}
       {showReparation && <ReparationModal onClose={() => { setShowReparation(false); refocusScanner() }} />}
+      {showDemandeClient && <DemandeClientModal onClose={() => { setShowDemandeClient(false); refocusScanner() }} />}
       {showSortie && <SortieCaisseModal onClose={() => { setShowSortie(false); refocusScanner() }} />}
       {showCheckout && (
         <CheckoutModal
