@@ -10,6 +10,28 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 export default async function afterPack(context) {
   if (context.electronPlatformName !== 'win32') return
 
+  const unpackedRoot = join(context.appOutDir, 'resources', 'app.asar.unpacked')
+  const requiredOcrFiles = [
+    join(unpackedRoot, 'node_modules', 'tesseract.js', 'src', 'worker-script', 'node', 'index.js'),
+    join(unpackedRoot, 'node_modules', 'tesseract.js-core', 'tesseract-core.wasm.js'),
+    join(unpackedRoot, 'node_modules', 'regenerator-runtime', 'runtime.js'),
+    join(unpackedRoot, 'node_modules', 'wasm-feature-detect', 'dist', 'cjs', 'index.cjs'),
+    join(
+      unpackedRoot,
+      'node_modules',
+      '@tesseract.js-data',
+      'fra',
+      '4.0.0_best_int',
+      'fra.traineddata.gz'
+    ),
+  ]
+  const missingOcrFiles = requiredOcrFiles.filter((path) => !existsSync(path))
+  if (missingOcrFiles.length > 0) {
+    throw new Error(
+      `Incomplete OCR package. Missing unpacked runtime files:\n${missingOcrFiles.join('\n')}`
+    )
+  }
+
   const iconPath = join(root, 'resources', 'icon.ico')
   if (!existsSync(iconPath)) {
     throw new Error(`Missing Windows icon: ${iconPath}`)

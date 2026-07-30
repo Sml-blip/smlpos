@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.998",
+  "version": "1.9.999",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -95,10 +95,17 @@
     "copyright": "Copyright © 2026 SMLPOS",
     "asar": true,
     "asarUnpack": [
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/tesseract.js/**/*",
-      "node_modules/tesseract.js-core/**/*",
-      "node_modules/@tesseract.js-data/fra/**/*"
+      "**/node_modules/better-sqlite3/**/*",
+      "**/node_modules/bmp-js/**/*",
+      "**/node_modules/idb-keyval/**/*",
+      "**/node_modules/is-url/**/*",
+      "**/node_modules/node-fetch/**/*",
+      "**/node_modules/regenerator-runtime/**/*",
+      "**/node_modules/tesseract.js/**/*",
+      "**/node_modules/tesseract.js-core/**/*",
+      "**/node_modules/@tesseract.js-data/fra/**/*",
+      "**/node_modules/wasm-feature-detect/**/*",
+      "**/node_modules/zlibjs/**/*"
     ],
     "files": [
       "out/**/*",
