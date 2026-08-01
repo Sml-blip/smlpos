@@ -5,6 +5,8 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   SALE_CANCELLED: 'Vente annulée',
   REPAIR_CREATED: 'Réparation créée',
   REPAIR_STATUS_UPDATED: 'Statut réparation',
+  REPAIR_PAYMENT_CONFIRMED: 'Paiement réparation confirmé',
+  REPAIR_PAYMENT_PENDING: 'Paiement réparation en attente',
   CASH_OUT_CREATED: 'Sortie caisse',
   SERVICE_TRANSACTION_CREATED: 'Transaction service',
   CLIENT_INVOICE_CREATED: 'Facture client',

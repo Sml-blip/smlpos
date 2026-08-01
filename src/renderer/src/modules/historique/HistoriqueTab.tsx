@@ -32,6 +32,24 @@ type MissingDailyInvoiceDay = {
   day_total_ttc: number
 }
 
+type RepairPaymentInfo = {
+  paid: boolean
+  totalFinal?: number
+  technicianSpent?: number
+  at?: string
+}
+
+function getRepairPaymentInfo(repair: Reparation): RepairPaymentInfo | null {
+  const marker = String(repair.notes_technicien ?? '').match(/\[SMLPOS_PAYMENT\](\{[^\r\n]*\})/)
+  if (!marker) return null
+  try {
+    const parsed = JSON.parse(marker[1]) as RepairPaymentInfo
+    return typeof parsed.paid === 'boolean' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 const STATUT_CONFIG: Record<StatutRep, { label: string; color: string; icon: ReactNode }> = {
   EN_ATTENTE: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800 border border-yellow-200', icon: <Clock size={11} /> },
   DIAGNOSTIC: { label: 'Diagnostic', color: 'bg-purple-100 text-purple-800 border border-purple-200', icon: <Search size={11} /> },
@@ -118,7 +136,7 @@ export default function HistoriqueTab() {
   const [venteLignes, setVenteLignes] = useState<Record<string, LigneVente[]>>({})
   const [expandedRep, setExpandedRep] = useState<string | null>(null)
   const [updatingStatut, setUpdatingStatut] = useState<string | null>(null)
-  const [finalizeRepair, setFinalizeRepair] = useState<Reparation | null>(null)
+  const [paymentRepair, setPaymentRepair] = useState<Reparation | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
@@ -233,16 +251,21 @@ export default function HistoriqueTab() {
   }
 
   const updateStatut = async (repId: string, statut: StatutRep) => {
-    if (statut === 'TERMINE') {
-      const repair = reparations.find(r => r.id === repId)
-      if (repair) setFinalizeRepair(repair)
-      return
-    }
     setUpdatingStatut(repId)
     await runAction('Mise à jour réparation', async () => {
       await api.reparationsUpdateStatut(repId, statut)
       setReparations(prev => prev.map(r => r.id === repId ? { ...r, statut } : r))
     }, { successMessage: 'Statut mis à jour' })
+    setUpdatingStatut(null)
+  }
+
+  const markRepairUnpaid = async (repair: Reparation) => {
+    setUpdatingStatut(repair.id)
+    await runAction('Paiement réparation', async () => {
+      const result = await api.reparationsMarkPayment(repair.id, { paid: false })
+      if (!result?.success) throw new Error(result?.error || 'Mise à jour impossible')
+      await load()
+    }, { successMessage: 'Réparation marquée non payée' })
     setUpdatingStatut(null)
   }
 
@@ -518,6 +541,8 @@ export default function HistoriqueTab() {
               setExpandedRep={setExpandedRep}
               updatingStatut={updatingStatut}
               onUpdateStatut={updateStatut}
+              onPaymentDone={setPaymentRepair}
+              onPaymentPending={markRepairUnpaid}
             />
           </>
         )}
@@ -594,11 +619,11 @@ export default function HistoriqueTab() {
           onConfirm={(motif) => handleCancelVente(cancelTarget, motif)}
         />
       )}
-      {finalizeRepair && (
-        <FinalizeRepairModal
-          repair={finalizeRepair}
-          onClose={() => setFinalizeRepair(null)}
-          onSaved={() => { setFinalizeRepair(null); void load() }}
+      {paymentRepair && (
+        <RepairPaymentModal
+          repair={paymentRepair}
+          onClose={() => setPaymentRepair(null)}
+          onSaved={() => { setPaymentRepair(null); void load() }}
         />
       )}
       {/* New Document Modal */}
@@ -824,20 +849,23 @@ function VentesTable({
   )
 }
 
-function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation; onClose: () => void; onSaved: () => void }) {
+function RepairPaymentModal({ repair, onClose, onSaved }: { repair: Reparation; onClose: () => void; onSaved: () => void }) {
   const initialPrice = Number(repair.total_estime) > 0 ? Number(repair.total_estime).toFixed(3) : ''
   const [price, setPrice] = useState(initialPrice)
+  const [spent, setSpent] = useState(Number(repair.main_oeuvre || 0).toFixed(3))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const finalPrice = parseFloat(price.replace(',', '.')) || 0
-  const benefit = finalPrice - Number(repair.main_oeuvre || 0)
+  const technicianSpent = parseFloat(spent.replace(',', '.')) || 0
+  const benefit = finalPrice - technicianSpent
 
   const save = async () => {
-    if (finalPrice <= 0) { setError('Saisissez un prix final supérieur à zéro'); return }
-    const ok = await runAction('Finalisation réparation', async () => {
-      const result = await api.reparationsFinalize(repair.id, finalPrice)
-      if (!result?.success) throw new Error(result?.error || 'Finalisation impossible')
-    }, { setSaving, onError: msg => setError(msg.replace(/^Finalisation réparation : /, '')), successMessage: 'Réparation terminée et bénéfice calculé' })
+    if (finalPrice <= 0) { setError('Saisissez le montant total réellement payé'); return }
+    if (technicianSpent < 0) { setError('Les dépenses ne peuvent pas être négatives'); return }
+    const ok = await runAction('Paiement réparation', async () => {
+      const result = await api.reparationsMarkPayment(repair.id, { paid: true, totalFinal: finalPrice, technicianSpent })
+      if (!result?.success) throw new Error(result?.error || 'Confirmation impossible')
+    }, { setSaving, onError: msg => setError(msg.replace(/^Paiement réparation : /, '')), successMessage: 'Paiement confirmé et bénéfice calculé' })
     if (ok) onSaved()
   }
 
@@ -845,18 +873,25 @@ function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation;
     <div className="fixed inset-0 z-[150] bg-black/50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <div><h3 className="font-bold">Terminer la réparation</h3><p className="text-xs text-text-muted mt-0.5">{repair.numero} · {repair.client_nom || 'Client'}</p></div>
+          <div><h3 className="font-bold">Confirmer le paiement</h3><p className="text-xs text-text-muted mt-0.5">{repair.numero} · {repair.client_nom || 'Client'}</p></div>
           <button type="button" onClick={onClose} disabled={saving}><X size={17} /></button>
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Prix final client (TND)</label>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Montant total payé par le client (TND)</label>
             <input autoFocus inputMode="decimal" value={price} onFocus={e => e.currentTarget.select()}
               onChange={e => { setPrice(e.target.value.replace(/[^0-9.,]/g, '')); setError('') }}
               className="w-full rounded-xl border border-accent-400 px-4 py-3 text-xl font-price font-bold outline-none focus:ring-2 focus:ring-accent-300" placeholder="0.000" />
           </div>
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Dépenses technicien / pièces (TND, zéro autorisé)</label>
+            <input inputMode="decimal" value={spent} onFocus={e => e.currentTarget.select()}
+              onChange={e => { setSpent(e.target.value.replace(/[^0-9.,]/g, '')); setError('') }}
+              className="w-full rounded-xl border border-border px-4 py-3 text-lg font-price font-bold outline-none focus:ring-2 focus:ring-accent-300" placeholder="0.000" />
+          </div>
           <div className="rounded-xl bg-muted p-3 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-text-muted">Coût des pièces</span><span className="font-price">{formatPrice(repair.main_oeuvre || 0)}</span></div>
+            <div className="flex justify-between"><span className="text-text-muted">Total client</span><span className="font-price">{formatPrice(finalPrice)}</span></div>
+            <div className="flex justify-between"><span className="text-text-muted">Dépenses technicien</span><span className="font-price">-{formatPrice(technicianSpent)}</span></div>
             <div className={cn('flex justify-between font-bold border-t border-border pt-1', benefit >= 0 ? 'text-success' : 'text-danger')}>
               <span>Bénéfice</span><span className="font-price">{benefit >= 0 ? '+' : ''}{formatPrice(benefit)}</span>
             </div>
@@ -865,7 +900,7 @@ function FinalizeRepairModal({ repair, onClose, onSaved }: { repair: Reparation;
         </div>
         <div className="flex gap-2 border-t border-border px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Fermer</button>
-          <button type="button" onClick={() => void save()} disabled={saving || finalPrice <= 0} className="flex-1 rounded-xl bg-accent-500 py-2.5 font-bold disabled:opacity-50">{saving ? 'Enregistrement…' : 'Terminer'}</button>
+          <button type="button" onClick={() => void save()} disabled={saving || finalPrice <= 0} className="flex-1 rounded-xl bg-green-600 text-white py-2.5 font-bold disabled:opacity-50">{saving ? 'Enregistrement…' : 'Confirmer paiement reçu'}</button>
         </div>
       </div>
     </div>
@@ -915,12 +950,16 @@ function ReparationsTable({
   setExpandedRep,
   updatingStatut,
   onUpdateStatut,
+  onPaymentDone,
+  onPaymentPending,
 }: {
   reparations: Reparation[]
   expandedRep: string | null
   setExpandedRep: (id: string | null) => void
   updatingStatut: string | null
   onUpdateStatut: (id: string, statut: StatutRep) => void
+  onPaymentDone: (repair: Reparation) => void
+  onPaymentPending: (repair: Reparation) => void
 }) {
   const [searchRepairs, setSearchRepairs] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -985,13 +1024,16 @@ function ReparationsTable({
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-text-secondary">Panne</th>
           <th className="text-center px-4 py-2.5 text-xs font-semibold text-text-secondary">Statut</th>
           <th className="text-right px-4 py-2.5 text-xs font-semibold text-text-secondary">Total estimé</th>
-          <th className="w-8 px-4 py-2.5"></th>
+          <th className="sticky right-8 z-20 min-w-[230px] bg-muted px-4 py-2.5 text-center text-xs font-semibold text-text-secondary">Paiement</th>
+          <th className="sticky right-0 z-20 w-8 bg-muted px-4 py-2.5"></th>
         </tr>
       </thead>
       <tbody>
         {filteredRepairs.map(r => {
           const sc = STATUT_CONFIG[r.statut as StatutRep] || STATUT_CONFIG.EN_ATTENTE
           const deviceIcon = r.type_appareil === 'PC' ? '💻' : r.type_appareil === 'SCOOTER' ? '🛵' : r.type_appareil === 'IMPRIMANTE' ? '🖨️' : '📱'
+          const payment = getRepairPaymentInfo(r)
+          const canTrackPayment = r.statut === 'TERMINE' || r.statut === 'RENDU'
           return (
             <Fragment key={r.id}>
               <tr
@@ -1029,16 +1071,32 @@ function ReparationsTable({
                   </div>
                 </td>
                 <td className="px-4 py-2.5 text-right font-price font-bold text-sm">{Number(r.total_final || r.total_estime) > 0 ? formatPrice(r.total_final || r.total_estime) : '—'}</td>
-                <td className="px-4 py-2.5 text-center text-text-muted">
+                <td className="sticky right-8 z-[5] min-w-[230px] border-l border-slate-100 bg-white px-3 py-2" onClick={e => e.stopPropagation()}>
+                  {canTrackPayment ? (
+                    <div className="flex items-center justify-center gap-1.5">
+                      <button type="button" onClick={() => onPaymentPending(r)} className={cn(
+                        'rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors',
+                        !payment?.paid ? 'border-orange-300 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                      )}>Non payé</button>
+                      <button type="button" onClick={() => onPaymentDone(r)} className={cn(
+                        'flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors',
+                        payment?.paid ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 bg-white text-slate-600 hover:border-green-300 hover:bg-green-50'
+                      )}><CheckCircle size={12} /> Payé</button>
+                    </div>
+                  ) : (
+                    <div className="text-center text-[10px] font-medium text-slate-400">Disponible après Terminé</div>
+                  )}
+                </td>
+                <td className="sticky right-0 z-[5] bg-white px-4 py-2.5 text-center text-text-muted">
                   {expandedRep === r.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </td>
               </tr>
               {r.estimated_completion && (
-                <tr className="border-b border-slate-100"><td colSpan={8} className="p-0"><RepairTimeBar repair={r} /></td></tr>
+                <tr className="border-b border-slate-100"><td colSpan={9} className="p-0"><RepairTimeBar repair={r} /></td></tr>
               )}
               {expandedRep === r.id && (
                 <tr className="bg-amber-50/70">
-                  <td colSpan={8} className="px-6 py-3">
+                  <td colSpan={9} className="px-6 py-3">
                     <div className="text-xs font-semibold text-text-secondary mb-2 flex items-center gap-1">
                       <Eye size={12} /> Détail de la réparation
                     </div>
@@ -1052,9 +1110,13 @@ function ReparationsTable({
                         <div className="font-medium">{r.operateur_nom || '—'}</div>
                       </div>
                       <div className="rounded-lg bg-white border border-amber-100 p-3 text-right">
+                        <div className={cn('mb-2 flex items-center justify-between rounded-md px-2 py-1.5 font-semibold', payment?.paid ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-orange-700')}>
+                          <span>Paiement</span>
+                          <span>{payment?.paid ? 'Payé' : 'Non payé'}</span>
+                        </div>
                         <div className="flex justify-between font-price">
-                          <span className="text-text-muted">Pièces (M.O.):</span>
-                          <span>{formatPrice(r.main_oeuvre)}</span>
+                          <span className="text-text-muted">Dépenses technicien:</span>
+                          <span>{formatPrice(payment?.technicianSpent ?? r.main_oeuvre)}</span>
                         </div>
                         <div className="flex justify-between font-price">
                           <span className="text-text-muted">Acompte:</span>
@@ -1079,7 +1141,7 @@ function ReparationsTable({
           )
         })}
         {filteredRepairs.length === 0 && (
-          <tr><td colSpan={8} className="px-6 py-12 text-center text-sm text-text-muted"><Wrench size={28} className="mx-auto mb-2 opacity-30" />Aucune réparation ne correspond à cette recherche.</td></tr>
+          <tr><td colSpan={9} className="px-6 py-12 text-center text-sm text-text-muted"><Wrench size={28} className="mx-auto mb-2 opacity-30" />Aucune réparation ne correspond à cette recherche.</td></tr>
         )}
       </tbody>
     </table>

@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.2'
+export const SCHEMA_VERSION = '1.10.3'
 
 export function initDatabase() {
   const db = getDb()
@@ -921,7 +921,10 @@ export function initDatabase() {
     fidelite_min_achat:      '0',
     fidelite_max_utilisation_pct: '100',
     shift_close_reminder_enabled: 'true',
+    shift_morning_close_time:     '14:00',
     shift_close_reminder_time:    '21:00',
+    shift_close_snooze_minutes:   '10',
+    shift_close_alarm_enabled:    'true',
     // Impression
     impression_largeur:      '80',
     impression_copies:       '1',

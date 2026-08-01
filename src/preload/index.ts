@@ -101,6 +101,7 @@ const api = {
   reparationsList: (filters?: unknown) => ipcRenderer.invoke('reparations:list', filters),
   reparationsUpdateStatut: (id: string, statut: string) => ipcRenderer.invoke('reparations:updateStatut', id, statut),
   reparationsFinalize: (id: string, totalFinal: number) => ipcRenderer.invoke('reparations:finalize', id, totalFinal),
+  reparationsMarkPayment: (id: string, data: unknown) => ipcRenderer.invoke('reparations:markPayment', id, data),
   reparationsGetPieces: (repId: string) => ipcRenderer.invoke('reparations:getPieces', repId),
   reparationsGetLastNumber: (prefix: string) => ipcRenderer.invoke('reparations:getLastNumber', prefix),
   reparationsGetBeneficeStats: (mois?: string) => ipcRenderer.invoke('reparations:getBeneficeStats', mois),

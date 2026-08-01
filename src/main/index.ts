@@ -952,7 +952,13 @@ function setupIpcHandlers() {
     `).get(shiftId) as { total: number; count: number }
     const reparations = db.prepare(`
       SELECT COALESCE(SUM(total_estime),0) as total, COUNT(*) as count
-      FROM reparations WHERE shift_id = ?
+      FROM reparations
+      WHERE shift_id = ? AND statut IN ('TERMINE', 'RENDU')
+        AND (
+          notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%'
+          OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%'
+          OR notes_technicien IS NULL
+        )
     `).get(shiftId) as { total: number; count: number }
     const sorties = db.prepare(`
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
@@ -975,11 +981,11 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('shifts:countClosedToday', () => {
-    const today = new Date().toISOString().slice(0, 10)
     const row = db.prepare(`
       SELECT COUNT(*) as cnt FROM shifts
-      WHERE ended_at IS NOT NULL AND started_at >= ? AND started_at <= ?
-    `).get(`${today}T00:00:00.000Z`, `${today}T23:59:59.999Z`) as { cnt: number }
+      WHERE ended_at IS NOT NULL
+        AND date(started_at, 'localtime') = date('now', 'localtime')
+    `).get() as { cnt: number }
     return row?.cnt ?? 0
   })
 
@@ -1899,6 +1905,7 @@ function setupIpcHandlers() {
     const overall = db.prepare(`
       SELECT SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net, COUNT(*) as nb
       FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut IN ('TERMINE', 'RENDU')
+        AND (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL)
     `).get(targetMois) as { benefice_net: number; nb: number }
     const breakdown = db.prepare(`
       SELECT type_appareil, COUNT(*) as nb,
@@ -1906,6 +1913,7 @@ function setupIpcHandlers() {
              SUM(COALESCE(total_final,0)) as total_encaisse,
              SUM(COALESCE(total_final,0) - COALESCE(main_oeuvre,0)) as benefice_net
       FROM reparations WHERE strftime('%Y-%m', created_at) = ? AND statut IN ('TERMINE', 'RENDU')
+        AND (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL)
       GROUP BY type_appareil
     `).all(targetMois) as { type_appareil: string; nb: number; total_pieces: number; total_encaisse: number; benefice_net: number }[]
 
@@ -1947,8 +1955,20 @@ function setupIpcHandlers() {
 
   ipcMain.handle('reparations:updateStatut', (_e, id, statut) => {
     const now = new Date().toISOString()
-    const result = db.prepare('UPDATE reparations SET statut = ?, updated_at = ? WHERE id = ?')
-      .run(statut, now, id)
+    const existing = db.prepare('SELECT * FROM reparations WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    if (!existing) return { changes: 0 }
+    let notes = String(existing.notes_technicien ?? '')
+    if (statut === 'TERMINE' && !notes.includes('[SMLPOS_PAYMENT]')) {
+      const marker = `[SMLPOS_PAYMENT]${JSON.stringify({
+        paid: false,
+        totalFinal: money3(existing.total_final ?? existing.total_estime),
+        technicianSpent: money3(existing.main_oeuvre),
+        at: now,
+      })}`
+      notes = [notes.trim(), marker].filter(Boolean).join('\n')
+    }
+    const result = db.prepare('UPDATE reparations SET statut = ?, notes_technicien = ?, updated_at = ? WHERE id = ?')
+      .run(statut, notes || null, now, id)
     addActivityLog({ action: 'REPAIR_STATUS_UPDATED', details: { id, statut } })
     const row = db.prepare('SELECT * FROM reparations WHERE id = ?').get(id) as Record<string, unknown> | undefined
     if (row) enqueueSync('reparations', 'UPDATE', row)
@@ -1967,6 +1987,49 @@ function setupIpcHandlers() {
     const row = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown>
     addActivityLog({ action: 'REPAIR_FINALIZED', details: { id, total_final: finalPrice, benefice }, montant: finalPrice })
     enqueueSync('reparations', 'UPDATE', row)
+    return { success: true, benefice }
+  })
+
+  ipcMain.handle('reparations:markPayment', (_e, id: string, data: { paid?: boolean; totalFinal?: number; technicianSpent?: number }) => {
+    const rep = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    if (!rep) return { success: false, error: 'Réparation introuvable' }
+    if (!['TERMINE', 'RENDU'].includes(String(rep.statut))) {
+      return { success: false, error: 'Terminez d’abord la réparation avant de confirmer son paiement' }
+    }
+
+    const paid = data?.paid === true
+    const finalPrice = money3(data?.totalFinal ?? rep.total_final ?? rep.total_estime)
+    const technicianSpent = money3(data?.technicianSpent ?? rep.main_oeuvre)
+    if (paid && finalPrice <= 0) return { success: false, error: 'Le montant payé doit être supérieur à zéro' }
+    if (technicianSpent < 0) return { success: false, error: 'Les dépenses technicien ne peuvent pas être négatives' }
+
+    const now = new Date().toISOString()
+    const marker = `[SMLPOS_PAYMENT]${JSON.stringify({ paid, totalFinal: finalPrice, technicianSpent, at: now })}`
+    const cleanNotes = String(rep.notes_technicien ?? '')
+      .replace(/\n?\[SMLPOS_PAYMENT\]\{[^\r\n]*\}/g, '')
+      .trim()
+    const notes = [cleanNotes, marker].filter(Boolean).join('\n')
+    const benefice = paid ? money3(finalPrice - technicianSpent) : money3(Number(rep.benefice) || 0)
+
+    if (paid) {
+      db.prepare(`
+        UPDATE reparations
+        SET total_final = ?, total_estime = ?, main_oeuvre = ?, benefice = ?, notes_technicien = ?, updated_at = ?
+        WHERE id = ?
+      `).run(finalPrice, finalPrice, technicianSpent, benefice, notes, now, id)
+    } else {
+      db.prepare(`UPDATE reparations SET notes_technicien = ?, updated_at = ? WHERE id = ?`).run(notes, now, id)
+    }
+
+    const updated = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown>
+    addActivityLog({
+      shift_id: rep.shift_id as string,
+      operateur: rep.operateur_nom as string,
+      action: paid ? 'REPAIR_PAYMENT_CONFIRMED' : 'REPAIR_PAYMENT_PENDING',
+      montant: paid ? finalPrice : 0,
+      details: { id, total_final: finalPrice, depenses_technicien: technicianSpent, benefice },
+    })
+    enqueueSync('reparations', 'UPDATE', updated)
     return { success: true, benefice }
   })
 
@@ -2938,7 +3001,11 @@ function setupIpcHandlers() {
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
     const ventesTotal = db.prepare(`SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes WHERE shift_id = ? AND type = 'VENTE'`).get(shiftId) as { total: number }
-    const repsTotal = db.prepare(`SELECT COALESCE(SUM(total_estime),0) as total FROM reparations WHERE shift_id = ?`).get(shiftId) as { total: number }
+    const repsTotal = db.prepare(`
+      SELECT COALESCE(SUM(total_estime),0) as total FROM reparations
+      WHERE shift_id = ? AND statut IN ('TERMINE', 'RENDU')
+        AND (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL)
+    `).get(shiftId) as { total: number }
     const servicesTotal = db.prepare(`SELECT COALESCE(SUM(montant_frais),0) as total FROM transactions_services WHERE shift_id = ?`).get(shiftId) as { total: number }
     const total = ventesTotal.total + repsTotal.total + servicesTotal.total
     if (total <= 0) return { success: true, montant: 0 }
