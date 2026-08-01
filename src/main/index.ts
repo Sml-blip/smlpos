@@ -984,7 +984,7 @@ function setupIpcHandlers() {
     const row = db.prepare(`
       SELECT COUNT(*) as cnt FROM shifts
       WHERE ended_at IS NOT NULL
-        AND date(started_at, 'localtime') = date('now', 'localtime')
+        AND date(ended_at, 'localtime') = date('now', 'localtime')
     `).get() as { cnt: number }
     return row?.cnt ?? 0
   })

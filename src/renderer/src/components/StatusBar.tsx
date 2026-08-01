@@ -38,7 +38,7 @@ export default function StatusBar() {
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [errorRows, setErrorRows] = useState<SyncErrorRow[]>([])
   const [dbHealth, setDbHealth] = useState<{ ok: boolean; error?: string } | null>(null)
-  const [closedShiftsToday, setClosedShiftsToday] = useState(0)
+  const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
   const [snoozedUntil, setSnoozedUntil] = useState(0)
   const lastAlarmAtRef = useRef(0)
   const [shiftReminderSettings, setShiftReminderSettings] = useState({
@@ -92,7 +92,8 @@ export default function StatusBar() {
   useEffect(() => {
     let cancelled = false
     const refresh = () => {
-      if (!currentShift) { setClosedShiftsToday(0); return }
+      if (!currentShift) { setClosedShiftsToday(null); return }
+      setClosedShiftsToday(null)
       void (api.shiftsCountClosedToday?.() ?? Promise.resolve(0)).then(count => {
         if (!cancelled) setClosedShiftsToday(Number(count) || 0)
       })
@@ -112,6 +113,7 @@ export default function StatusBar() {
   const shiftReminderTiming = reminderTiming(time, activeReminderTime)
   const snoozed = snoozedUntil > time.getTime()
   const showPinnedShiftReminder = !!currentShift
+    && closedShiftsToday !== null
     && !showFermeture
     && shiftReminderSettings.enabled
     && shiftReminderTiming.pinned
@@ -138,12 +140,12 @@ export default function StatusBar() {
   }, [])
 
   useEffect(() => {
-    if (!currentShift || !shiftReminderSettings.enabled || !shiftReminderSettings.alarmEnabled) return
+    if (!currentShift || closedShiftsToday === null || !shiftReminderSettings.enabled || !shiftReminderSettings.alarmEnabled) return
     if (!shiftReminderTiming.overdue || snoozed || showFermeture) return
     if (time.getTime() - lastAlarmAtRef.current < 60_000) return
     lastAlarmAtRef.current = time.getTime()
     playClosingAlarm()
-  }, [currentShift, playClosingAlarm, shiftReminderSettings.alarmEnabled, shiftReminderSettings.enabled, shiftReminderTiming.overdue, showFermeture, snoozed, time])
+  }, [closedShiftsToday, currentShift, playClosingAlarm, shiftReminderSettings.alarmEnabled, shiftReminderSettings.enabled, shiftReminderTiming.overdue, showFermeture, snoozed, time])
 
   const refreshCounts = useCallback(async () => {
     if (!isSupabaseEnabled || !window.api?.syncQueuePendingCount) return

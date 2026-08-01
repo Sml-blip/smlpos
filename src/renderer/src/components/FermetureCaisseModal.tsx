@@ -37,7 +37,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   const [loading, setLoading] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
-  const [closedShiftsToday, setClosedShiftsToday] = useState(0)
+  const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
 
   useEffect(() => {
     if (!currentShift) return
@@ -75,6 +75,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   const isMorningClosure = closedShiftsToday === 0
 
   const handleClose = async () => {
+    if (closedShiftsToday === null) return
     if (!confirmed) { setConfirmed(true); return }
     let dailyInvoice: { documentId?: string; numero?: string; skipped?: boolean; reason?: string } | undefined
     const succeeded = await runAction('Fermeture de caisse', async () => {
@@ -162,7 +163,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
             </div>
             <div className="flex items-center justify-between text-sm mt-1">
               <span className="text-text-secondary">Shifts déjà clos aujourd&apos;hui</span>
-              <span className="font-semibold">{closedShiftsToday}</span>
+              <span className="font-semibold">{closedShiftsToday ?? '…'}</span>
             </div>
           </div>
 
