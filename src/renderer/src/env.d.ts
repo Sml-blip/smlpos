@@ -117,7 +117,7 @@ interface Window {
     reparationsList: (filters?: unknown) => Promise<unknown[]>
     reparationsUpdateStatut: (id: string, statut: string) => Promise<unknown>
     reparationsFinalize: (id: string, totalFinal: number) => Promise<{ success?: boolean; error?: string; benefice?: number }>
-    reparationsMarkPayment: (id: string, data: { paid: boolean; totalFinal?: number; technicianSpent?: number }) => Promise<{ success?: boolean; error?: string; benefice?: number }>
+    reparationsMarkPayment: (id: string, data: { paid: boolean; totalFinal?: number; technicianSpent?: number; shiftId?: string; operateur?: string }) => Promise<{ success?: boolean; error?: string; benefice?: number }>
     reparationsGetPieces: (repId: string) => Promise<unknown[]>
     reparationsGetLastNumber: (prefix: string) => Promise<number>
     reparationsGetBeneficeStats: (mois?: string) => Promise<unknown>

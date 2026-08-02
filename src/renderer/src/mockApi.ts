@@ -211,8 +211,10 @@ const mockApi = {
   shiftsGetSummary: async () => ({
     ventes: { total: 338, count: 2 },
     reparations: { total: 75, count: 1 },
+    services: { total: 0, count: 0 },
     sorties: { total: 50, count: 1 },
     creditsPercus: { total: 85, count: 1 },
+    avancesClients: { total: 0, count: 0 },
     parMode: [
       { mode_paiement: 'ESPECES', total: 284 },
       { mode_paiement: 'CARTE', total: 143 },

@@ -7,6 +7,7 @@ import { generateInternalEan13 } from '../../lib/ean13'
 import { runAction, loadData } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
 import { saveBalanceReport } from '../../lib/reportPdf'
+import { useAppStore } from '../../store/appStore'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import FactureAchatPrintModal from './FactureAchatPrintModal'
 import FactureSerialModal from './FactureSerialModal'
@@ -201,6 +202,11 @@ export default function AchatsTab() {
               )}
             >
               <Icon size={14} /> {t.label}
+              {t.id === 'echeancier' && factures.filter(f => f.statut_paiement !== 'PAYE').length > 0 && (
+                <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                  {factures.filter(f => f.statut_paiement !== 'PAYE').length}
+                </span>
+              )}
             </button>
           )
         })}
@@ -414,7 +420,7 @@ function FournisseursTable({ fournisseurs, factures, onEdit, onAdjust, onExport 
               <td className="px-4 py-3 text-text-secondary">{f.telephone || '—'}</td>
               <td className="px-4 py-3 text-right">
                 <span className={cn('font-price font-bold', f.solde_du > 0 ? 'text-danger' : 'text-success')}>{formatPrice(f.solde_du)}</span>
-                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <div className="mt-1 ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div> })()}
+                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <><div className="mt-1 text-[10px] text-text-muted">Factures {formatPrice(total)} · Payé {formatPrice(paid)}</div><div className="mt-1 ml-auto h-1.5 w-32 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div></> })()}
               </td>
               <td className="px-4 py-3 text-right">
                 <div className="flex items-center justify-end gap-1">
@@ -605,6 +611,7 @@ function FournisseurModal({ fournisseur, onClose, onSaved }: { fournisseur: Four
       }
     )
     if (ok) {
+      window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
       onSaved()
       onClose()
     }
@@ -1369,6 +1376,7 @@ function FactureFournisseurModal({
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
   const [savingDraft, setSavingDraft] = useState(false)
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveInFlight = useRef(false)
   const [fournisseurId, setFournisseurId] = useState('')
   const [fournisseurs, setFournisseurs] = useState(initialFournisseurs)
   const [numeroFacture, setNumeroFacture] = useState('')
@@ -1547,6 +1555,7 @@ function FactureFournisseurModal({
   }, [draftId, fournisseurId, numeroFacture, dateFacture, dateEcheance, notes, isBL, lignes, exoFlag, exoText, timbre, remiseGlobale])
 
   const persistDraft = useCallback(async () => {
+    if (saveInFlight.current) return
     if (!api.facturesFournisseursSaveDraft) return
     const payload = buildDraftPayload()
     if (payload.lignes.length === 0 && !fournisseurId && !numeroFacture) return
@@ -1607,9 +1616,10 @@ function FactureFournisseurModal({
       actif: 1,
       created_at: now,
       updated_at: now,
+      idempotent_create: true,
     }
-    await api.produitsCreate(p)
-    return p as Produit
+    const result = await api.produitsCreate(p) as { product?: Produit }
+    return result?.product ?? p as Produit
   }
 
   const handleClose = () => {
@@ -1787,10 +1797,14 @@ function FactureFournisseurModal({
   const montantTTC = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
 
   const handleSave = async () => {
+    if (saveInFlight.current) return
     if (!fournisseurId || !numeroFacture) return
     const filledLignes = lignes.filter(l => l.designation.trim())
     if (filledLignes.length === 0) return
-    const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
+    saveInFlight.current = true
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    try {
+      const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
       const resolvedLignes: FactureLigneState[] = []
       let produitsSnapshot = [...produits]
       for (const l of filledLignes) {
@@ -1807,7 +1821,8 @@ function FactureFournisseurModal({
       const serialErr = validateSerialLines(resolvedLignes, produitsSnapshot)
       if (serialErr) throw new Error(serialErr)
 
-      const factureId = generateId()
+      // Reuse the draft id so conversion is retry-safe and cannot create two finals.
+      const factureId = draftId || generateId()
       const now = new Date().toISOString()
       const mHT = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
       const mTTC = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
@@ -1822,6 +1837,7 @@ function FactureFournisseurModal({
       const tva19 = ht19 * 0.19
       const facture = {
         id: factureId, numero_facture: numeroFacture, fournisseur_id: fournisseurId,
+        draft_id: draftId,
         date_facture: dateFacture, date_echeance: dateEcheance || null,
         statut_paiement: 'EN_ATTENTE', montant_ht: mHT, montant_tva: tvaAmount,
         montant_ttc: totalGeneral, notes: notes || null, created_at: now,
@@ -1848,15 +1864,18 @@ function FactureFournisseurModal({
         }
       })
       await api.facturesFournisseursCreate(facture, lignesData)
-      if (draftId) await api.facturesFournisseursDeleteDraft?.(draftId)
     }, {
       setLoading,
       successMessage: isBL ? 'Bon de livraison enregistré' : 'Facture fournisseur enregistrée',
       feedback: isBL ? 'success' : 'invoice',
     })
-    if (ok) {
-      onSaved()
-      onClose()
+      if (ok) {
+        window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
+        onSaved()
+        onClose()
+      }
+    } finally {
+      saveInFlight.current = false
     }
   }
 
@@ -2383,11 +2402,14 @@ function SupplierBalanceModal({ target, onClose, onSaved }: { target: { fourniss
 }
 
 function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFournisseur; onClose: () => void; onSaved: () => void }) {
+  const { currentShift } = useAppStore()
   const restant = facture.montant_restant ?? (facture.montant_ttc - facture.montant_paye)
   const [montant, setMontant] = useState(restant.toFixed(3))
   const [mode, setMode] = useState<'ESPECES' | 'CHEQUE' | 'VIREMENT' | 'AUTRE'>('ESPECES')
   const [refCheque, setRefCheque] = useState('')
   const [notes, setNotes] = useState('')
+  const [caisseSource, setCaisseSource] = useState<'INTERNE' | 'EXTERNE'>('INTERNE')
+  const [paymentType, setPaymentType] = useState<'INSTANT' | 'TRANCHE'>('INSTANT')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -2406,6 +2428,10 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
         reference_cheque: refCheque || null,
         date_paiement: new Date().toISOString().slice(0, 10),
         notes: notes || null,
+        caisse_source: caisseSource,
+        paiement_type: paymentType,
+        shift_id: currentShift?.id ?? null,
+        operateur: currentShift?.operateur_nom ?? 'superadmin',
         created_at: new Date().toISOString(),
       })
     }, {
@@ -2414,6 +2440,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
       onError: msg => setError(msg),
     })
     if (ok) {
+      window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
       onSaved()
       onClose()
     }
@@ -2421,7 +2448,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[420px] animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[420px] max-h-[calc(100vh-2rem)] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="font-bold text-base flex items-center gap-2"><DollarSign size={15} /> Enregistrer un paiement</h2>
           <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
@@ -2434,6 +2461,16 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
             <div className="flex justify-between mt-2 text-sm">
               <span className="text-text-secondary">Restant dû</span>
               <span className="font-price font-bold text-danger">{formatPrice(restant)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { setPaymentType('INSTANT'); setMontant(restant.toFixed(3)) }} className={cn('rounded-xl border-2 py-2 text-xs font-bold', paymentType === 'INSTANT' ? 'border-accent-500 bg-accent-50' : 'border-border')}>Paiement total</button>
+            <button type="button" onClick={() => setPaymentType('TRANCHE')} className={cn('rounded-xl border-2 py-2 text-xs font-bold', paymentType === 'TRANCHE' ? 'border-accent-500 bg-accent-50' : 'border-border')}>Paiement par tranche</button>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Caisse débitée</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['INTERNE', 'EXTERNE'] as const).map(source => <button key={source} type="button" onClick={() => setCaisseSource(source)} className={cn('rounded-xl border-2 py-2 text-xs font-bold', caisseSource === source ? 'border-accent-500 bg-accent-50' : 'border-border')}>Caisse {source === 'INTERNE' ? 'interne' : 'externe'}</button>)}
             </div>
           </div>
           <div>
@@ -2466,7 +2503,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl text-sm transition-colors">Annuler</button>
-          <button type="button" onClick={handlePayer} disabled={loading || montantNum <= 0} className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl text-sm transition-colors">
+          <button type="button" onClick={handlePayer} disabled={loading || montantNum <= 0 || montantNum > restant || (caisseSource === 'EXTERNE' && !currentShift?.id)} className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl text-sm transition-colors">
             {loading ? 'Enregistrement...' : `Payer ${formatPrice(montantNum)}`}
           </button>
         </div>

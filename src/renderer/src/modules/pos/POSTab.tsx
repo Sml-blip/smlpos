@@ -842,7 +842,19 @@ export default function POSTab() {
                       {!item.numero_serie && (
                         <button onClick={() => updateItem(idx, { quantite: item.quantite + 1 })} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">+</button>
                       )}
-                      {item.remise_pct > 0 && <span className="text-xs text-danger font-medium">-{item.remise_pct}%</span>}
+                      <div className="ml-1 flex items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5" title="Remise pour cet article">
+                        <Tag size={10} className="text-red-500" />
+                        <input
+                          aria-label={`Remise ${item.designation}`}
+                          inputMode="decimal"
+                          value={item.remise_pct || ''}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => updateItem(idx, { remise_pct: Math.min(100, Math.max(0, Number(e.target.value.replace(',', '.')) || 0)) })}
+                          className="w-9 bg-transparent text-right text-[11px] font-semibold text-red-600 outline-none"
+                          placeholder="0"
+                        />
+                        <span className="text-[10px] font-semibold text-red-500">%</span>
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">

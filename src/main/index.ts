@@ -498,6 +498,21 @@ app.on('window-all-closed', () => {
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
 
 function setupIpcHandlers() {
+  const applyInternalCashOut = (amountInput: unknown, createdAt?: unknown) => {
+    const amount = money3(amountInput)
+    const parsed = new Date(String(createdAt ?? new Date().toISOString()))
+    const date = Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString('en-CA') : new Date().toLocaleDateString('en-CA')
+    let cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown> | undefined
+    if (!cash) {
+      const previous = db.prepare('SELECT solde_ouverture,total_entrees,total_sorties FROM caisse_interne WHERE date_journal < ? ORDER BY date_journal DESC LIMIT 1').get(date) as { solde_ouverture?: number; total_entrees?: number; total_sorties?: number } | undefined
+      const opening = previous ? money3(Number(previous.solde_ouverture) + Number(previous.total_entrees) - Number(previous.total_sorties)) : 100
+      db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(`ci-${date}`, date, opening)
+    }
+    db.prepare('UPDATE caisse_interne SET total_sorties = total_sorties + ? WHERE date_journal = ?').run(amount, date)
+    cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown>
+    enqueueSync('caisse_interne', 'UPDATE', cash)
+  }
+
   type SavedPanierPayload = {
     id?: unknown
     label?: unknown
@@ -950,15 +965,26 @@ function setupIpcHandlers() {
       SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
     `).get(shiftId) as { total: number; count: number }
-    const reparations = db.prepare(`
-      SELECT COALESCE(SUM(total_estime),0) as total, COUNT(*) as count
+    const repairFinalPayments = db.prepare(`
+      SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total, COUNT(*) as count
       FROM reparations
-      WHERE shift_id = ? AND statut IN ('TERMINE', 'RENDU')
+      WHERE statut IN ('TERMINE', 'RENDU')
         AND (
-          notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%'
-          OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%'
-          OR notes_technicien IS NULL
+          (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' AND notes_technicien LIKE ?)
+          OR ((notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL) AND shift_id = ?)
         )
+    `).get(`%"paymentShiftId":"${shiftId}"%`, shiftId) as { total: number; count: number }
+    const repairDeposits = db.prepare(`
+      SELECT COALESCE(SUM(acompte),0) as total, SUM(CASE WHEN acompte > 0 THEN 1 ELSE 0 END) as count
+      FROM reparations WHERE shift_id = ? AND statut != 'ANNULE'
+    `).get(shiftId) as { total: number; count: number }
+    const reparations = {
+      total: money3(repairFinalPayments.total + repairDeposits.total),
+      count: Number(repairFinalPayments.count || 0) + Number(repairDeposits.count || 0),
+    }
+    const services = db.prepare(`
+      SELECT COALESCE(SUM(montant_frais),0) as total, COUNT(*) as count
+      FROM transactions_services WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
     const sorties = db.prepare(`
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
@@ -977,7 +1003,7 @@ function setupIpcHandlers() {
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
       FROM avances_clients WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
-    return { ventes, reparations, sorties, parMode, creditsPercus, avancesClients }
+    return { ventes, reparations, services, sorties, parMode, creditsPercus, avancesClients }
   })
 
   ipcMain.handle('shifts:countClosedToday', () => {
@@ -1319,11 +1345,48 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('produits:create', (_e, p) => {
+    const idempotentCreate = p.idempotent_create === true
     const normalized = {
       has_serial_number: 0, numero_serie: null,
       tva_achat_pct: 0, marge_pct: null, coef_av: null,
       cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
       ...p
+    }
+    delete normalized.idempotent_create
+    normalized.reference = String(normalized.reference ?? '').trim()
+    normalized.code_barre = String(normalized.code_barre ?? '').trim() || null
+    normalized.nom = String(normalized.nom ?? '').trim()
+    const makeUniqueReference = () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = `PRD-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`
+        if (!db.prepare('SELECT 1 FROM produits WHERE reference = ?').get(candidate)) return candidate
+      }
+      return `PRD-${randomUUID().toUpperCase()}`
+    }
+    if (!normalized.reference) normalized.reference = makeUniqueReference()
+
+    const byId = normalized.id ? db.prepare('SELECT * FROM produits WHERE id = ?').get(normalized.id) as Record<string, unknown> | undefined : undefined
+    if (byId) return { success: true, product: byId, reused: true }
+
+    const byBarcode = normalized.code_barre
+      ? db.prepare('SELECT * FROM produits WHERE code_barre = ?').get(normalized.code_barre) as Record<string, unknown> | undefined
+      : undefined
+    if (byBarcode) {
+      if (idempotentCreate && String(byBarcode.nom ?? '').trim().toLocaleLowerCase() === normalized.nom.toLocaleLowerCase()) {
+        return { success: true, product: byBarcode, reused: true }
+      }
+      throw new Error(`Le code-barres ${normalized.code_barre} appartient déjà au produit « ${String(byBarcode.nom)} »`)
+    }
+
+    const byReference = db.prepare('SELECT * FROM produits WHERE reference = ?').get(normalized.reference) as Record<string, unknown> | undefined
+    if (byReference) {
+      const sameName = String(byReference.nom ?? '').trim().toLocaleLowerCase() === normalized.nom.toLocaleLowerCase()
+      const existingBarcode = String(byReference.code_barre ?? '').trim()
+      const sameBarcode = !normalized.code_barre || !existingBarcode || existingBarcode === normalized.code_barre
+      const samePendingProduct = sameName && sameBarcode
+      if (idempotentCreate && samePendingProduct) return { success: true, product: byReference, reused: true }
+      if (idempotentCreate) normalized.reference = makeUniqueReference()
+      else throw new Error(`La référence ${normalized.reference} existe déjà pour « ${String(byReference.nom)} »`)
     }
     const stmt = db.prepare(`
       INSERT INTO produits (id, code_barre, reference, nom, description, categorie, type,
@@ -1340,7 +1403,7 @@ function setupIpcHandlers() {
     const result = stmt.run(normalized)
     addActivityLog({ action: 'PRODUCT_CREATED', details: { id: normalized.id, nom: normalized.nom, reference: normalized.reference } })
     enqueueSync('produits', 'INSERT', normalized)
-    return result
+    return { success: true, changes: result.changes, product: normalized, reused: false }
   })
 
   ipcMain.handle('produits:update', (_e, id, p) => {
@@ -1673,6 +1736,9 @@ function setupIpcHandlers() {
       ...vente,
     }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue', 'fidelite_utilisee', 'fidelite_gagnee'])
     const normalizedLignes = (lignes as Record<string, unknown>[]).map(ligne => normalizeVenteLine({ numero_serie: null, ...ligne }))
+    if (normalizedVente.type === 'VENTE' && !normalizedVente.shift_id) {
+      throw new Error('Ouvrez une caisse externe avant l’encaissement')
+    }
     const loyaltyUsed = Math.max(0, money3(normalizedVente.fidelite_utilisee))
     const loyaltyClient = normalizedVente.client_id
       ? db.prepare(`SELECT * FROM clients WHERE id = ? AND actif = 1`).get(normalizedVente.client_id) as Record<string, unknown> | undefined
@@ -1827,6 +1893,9 @@ function setupIpcHandlers() {
     normalizedRep.benefice = Number(normalizedRep.total_final) > 0
       ? Number(normalizedRep.total_final) - Number(normalizedRep.main_oeuvre ?? 0)
       : 0
+    if (Number(normalizedRep.acompte) > 0 && !normalizedRep.shift_id) {
+      throw new Error('Ouvrez une caisse externe avant d’encaisser l’acompte')
+    }
 
     const insertRep = db.prepare(`
       INSERT INTO reparations (id, numero, shift_id, operateur_nom, client_nom, client_tel,
@@ -1990,7 +2059,7 @@ function setupIpcHandlers() {
     return { success: true, benefice }
   })
 
-  ipcMain.handle('reparations:markPayment', (_e, id: string, data: { paid?: boolean; totalFinal?: number; technicianSpent?: number }) => {
+  ipcMain.handle('reparations:markPayment', (_e, id: string, data: { paid?: boolean; totalFinal?: number; technicianSpent?: number; shiftId?: string; operateur?: string }) => {
     const rep = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown> | undefined
     if (!rep) return { success: false, error: 'Réparation introuvable' }
     if (!['TERMINE', 'RENDU'].includes(String(rep.statut))) {
@@ -2004,7 +2073,8 @@ function setupIpcHandlers() {
     if (technicianSpent < 0) return { success: false, error: 'Les dépenses technicien ne peuvent pas être négatives' }
 
     const now = new Date().toISOString()
-    const marker = `[SMLPOS_PAYMENT]${JSON.stringify({ paid, totalFinal: finalPrice, technicianSpent, at: now })}`
+    if (paid && !data.shiftId) return { success: false, error: 'Ouvrez une caisse externe avant de confirmer le paiement' }
+    const marker = `[SMLPOS_PAYMENT]${JSON.stringify({ paid, totalFinal: finalPrice, technicianSpent, paymentShiftId: data.shiftId ?? null, operateur: data.operateur ?? null, at: now })}`
     const cleanNotes = String(rep.notes_technicien ?? '')
       .replace(/\n?\[SMLPOS_PAYMENT\]\{[^\r\n]*\}/g, '')
       .trim()
@@ -2023,8 +2093,8 @@ function setupIpcHandlers() {
 
     const updated = db.prepare(`SELECT * FROM reparations WHERE id = ?`).get(id) as Record<string, unknown>
     addActivityLog({
-      shift_id: rep.shift_id as string,
-      operateur: rep.operateur_nom as string,
+      shift_id: (data.shiftId ?? rep.shift_id) as string,
+      operateur: (data.operateur ?? rep.operateur_nom) as string,
       action: paid ? 'REPAIR_PAYMENT_CONFIRMED' : 'REPAIR_PAYMENT_PENDING',
       montant: paid ? finalPrice : 0,
       details: { id, total_final: finalPrice, depenses_technicien: technicianSpent, benefice },
@@ -2040,26 +2110,36 @@ function setupIpcHandlers() {
   // ─── Sorties Caisse ──────────────────────────────────────────────────────────
   ipcMain.handle('sorties:create', (_e, s) => {
     const now = new Date().toISOString()
-    const today = now.slice(0, 10)
-    // 1. Insert mouvement caisse interne (SORTIE)
-    const { randomUUID } = require('crypto') as typeof import('crypto')
-    const mvtId = randomUUID()
-    db.prepare(`
-      INSERT INTO mouvements_caisse_interne (id, date_journal, type, categorie, montant, note, operateur, created_at)
-      VALUES (?, ?, 'SORTIE', 'SORTIE_INTERNE', ?, ?, ?, ?)
-    `).run(mvtId, today, s.montant, s.note ?? null, s.operateur ?? null, now)
-    enqueueSync('mouvements_caisse_interne', 'INSERT', {
-      id: mvtId, date_journal: today, type: 'SORTIE', categorie: 'SORTIE_INTERNE',
-      montant: s.montant, note: s.note, operateur: s.operateur, created_at: now,
-    })
-
-    // 2. Insert sorties_caisse with link to mouvement interne
-    const sortie = { shift_id: null, ...s, mouvement_interne_id: mvtId }
+    const source = s.caisse_source === 'INTERNE' ? 'INTERNE' : 'EXTERNE'
+    const montant = money3(s.montant)
+    if (montant <= 0) throw new Error('Le montant doit être supérieur à zéro')
+    if (!String(s.note ?? '').trim()) throw new Error('Le motif est obligatoire')
+    if (source === 'EXTERNE' && !s.shift_id) throw new Error('Une caisse externe active est obligatoire')
+    const mvtId = source === 'INTERNE' ? randomUUID() : null
+    const accountingNote = `[CAISSE:${source}] ${String(s.note).trim()}`
+    const sortie = {
+      id: s.id,
+      shift_id: source === 'EXTERNE' ? s.shift_id : null,
+      montant,
+      note: accountingNote,
+      operateur: s.operateur ?? null,
+      mouvement_interne_id: mvtId,
+      created_at: s.created_at ?? now,
+    }
+    if (source === 'INTERNE' && mvtId) {
+      const internalRow = {
+        id: mvtId, date_journal: new Date().toLocaleDateString('en-CA'), type: 'SORTIE', categorie: 'SORTIE_LIBRE',
+        montant, reference_id: sortie.id, note: String(s.note).trim(), operateur: s.operateur ?? 'superadmin', created_at: now,
+      }
+      db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (@id,@date_journal,@type,@categorie,@montant,@reference_id,@note,@operateur,@created_at)`).run(internalRow)
+      applyInternalCashOut(montant, now)
+      enqueueSync('mouvements_caisse_interne', 'INSERT', internalRow)
+    }
     db.prepare(`
       INSERT INTO sorties_caisse (id, shift_id, montant, note, operateur, mouvement_interne_id, created_at)
       VALUES (@id, @shift_id, @montant, @note, @operateur, @mouvement_interne_id, @created_at)
     `).run(sortie)
-    addActivityLog({ shift_id: s.shift_id, operateur: s.operateur, action: 'CASH_OUT_CREATED', montant: s.montant, details: { note: s.note } })
+    addActivityLog({ shift_id: sortie.shift_id, operateur: s.operateur, action: 'CASH_OUT_CREATED', montant, details: { note: s.note, caisse_source: source } })
     enqueueSync('sorties_caisse', 'INSERT', sortie)
     return { success: true }
   })
@@ -2076,7 +2156,7 @@ function setupIpcHandlers() {
       SELECT note, COUNT(*) as cnt FROM sorties_caisse
       GROUP BY note ORDER BY cnt DESC LIMIT 10
     `).all() as { note: string; cnt: number }[]
-    return rows.map(r => r.note)
+    return rows.map(r => String(r.note ?? '').replace(/^\[CAISSE:(?:EXTERNE|INTERNE)\]\s*/, '')).filter(Boolean)
   })
 
   // ─── Activity Logs ──────────────────────────────────────────────────────────
@@ -2201,6 +2281,8 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('transactionsServices:create', (_e, t) => {
+    if (!t.shift_id) throw new Error('Ouvrez une caisse externe avant d’encaisser un service')
+    if (money3(t.montant_frais) <= 0) throw new Error('Le montant du service doit être supérieur à zéro')
     const result = db.prepare(`
       INSERT INTO transactions_services (id, shift_id, service_id, service_nom, montant_frais, note, operateur, created_at)
       VALUES (@id, @shift_id, @service_id, @service_nom, @montant_frais, @note, @operateur, @created_at)
@@ -2511,15 +2593,27 @@ function setupIpcHandlers() {
     const updateSolde = db.prepare(`UPDATE fournisseurs SET solde_du = solde_du + ? WHERE id=?`)
 
     const f = facture as Record<string, unknown>
+    const draftId = String(f.draft_id ?? '').trim() || null
+    const { draft_id: _draftId, ...factureData } = f
+    if (draftId) {
+      const existingFinal = db.prepare(`SELECT id, statut_paiement FROM factures_fournisseurs WHERE id = ?`).get(draftId) as { id: string; statut_paiement: string } | undefined
+      if (existingFinal && existingFinal.statut_paiement !== 'BROUILLON') {
+        return { success: true, alreadyCreated: true, id: existingFinal.id }
+      }
+    }
     const isBL = f.type === 'FACTURE_ACHAT_BL'
     const factureWithDefaults = {
       exo: null, timbre: 1, total_remise: null, ht_7: null, tva_7: null, ht_19: null, tva_19: null,
-      ...f,
+      ...factureData,
       type: f.type ?? 'FACTURE_ACHAT',
       statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
       stock_applied: f.stock_applied ?? 1,
     }
     const transaction = db.transaction(() => {
+      if (draftId) {
+        db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(draftId)
+        db.prepare(`DELETE FROM factures_fournisseurs WHERE id = ? AND statut_paiement = 'BROUILLON'`).run(draftId)
+      }
       insertFacture.run(factureWithDefaults)
       for (const l of lignes) {
         insertLigne.run(l)
@@ -2540,7 +2634,7 @@ function setupIpcHandlers() {
           }
         }
       }
-      updateSolde.run(facture.montant_ttc, facture.fournisseur_id)
+      updateSolde.run(factureWithDefaults.montant_ttc, factureWithDefaults.fournisseur_id)
     })
     transaction()
     addActivityLog({ action: 'SUPPLIER_INVOICE_CREATED', montant: facture.montant_ttc, details: { numero: facture.numero_facture, type: factureWithDefaults.type } })
@@ -2832,6 +2926,23 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('paiementsFournisseurs:create', (_e, p: Record<string, unknown>) => {
+    const source = p.caisse_source === 'EXTERNE' ? 'EXTERNE' : 'INTERNE'
+    const paymentType = p.paiement_type === 'TRANCHE' ? 'TRANCHE' : 'INSTANT'
+    const shiftId = String(p.shift_id ?? '').trim() || null
+    const operateur = String(p.operateur ?? 'superadmin')
+    if (source === 'EXTERNE' && !shiftId) throw new Error('Ouvrez une caisse externe avant ce paiement')
+    const factureBefore = db.prepare('SELECT * FROM factures_fournisseurs WHERE id = ?').get(p.facture_id) as Record<string, unknown> | undefined
+    if (!factureBefore) throw new Error('Facture fournisseur introuvable')
+    const restant = money3(Number(factureBefore.montant_ttc) - Number(factureBefore.montant_paye))
+    const requestedAmount = money3(p.montant)
+    const amount = paymentType === 'INSTANT' ? restant : requestedAmount
+    if (amount <= 0 || amount > restant + 0.0001) throw new Error('Le paiement dépasse le montant restant')
+    const metadata = `[SMLPOS_ACCOUNTING]${JSON.stringify({ caisse: source, paiement: paymentType, shiftId })}`
+    const paymentPayload = {
+      id: p.id ?? randomUUID(), facture_id: p.facture_id ?? '', fournisseur_id: p.fournisseur_id ?? '', montant: amount,
+      mode_paiement: p.mode_paiement ?? 'ESPECES', reference_cheque: p.reference_cheque ?? null,
+      date_paiement: p.date_paiement ?? new Date().toLocaleDateString('en-CA'), notes: [String(p.notes ?? '').trim(), metadata].filter(Boolean).join('\n'), created_at: p.created_at ?? new Date().toISOString(),
+    }
     const row = bindRow({
       id: '',
       facture_id: '',
@@ -2842,7 +2953,7 @@ function setupIpcHandlers() {
       date_paiement: new Date().toISOString().slice(0, 10),
       notes: null,
       created_at: new Date().toISOString(),
-    }, p)
+    }, paymentPayload)
     const insertPaiement = db.prepare(`
       INSERT INTO paiements_fournisseurs (id, facture_id, fournisseur_id, montant, mode_paiement,
         reference_cheque, date_paiement, notes, created_at)
@@ -2863,10 +2974,25 @@ function setupIpcHandlers() {
       insertPaiement.run(row)
       updateFacture.run(row.montant, row.montant, row.montant, row.facture_id)
       updateFournisseur.run(row.montant, row.fournisseur_id)
+      if (source === 'INTERNE') {
+        db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE','PAIEMENT_FOURNISSEUR',?,?,?,?,?)`)
+          .run(`mci-${row.id}`, row.montant, row.facture_id, `Paiement fournisseur ${factureBefore.numero_facture}`, operateur, row.created_at)
+        applyInternalCashOut(row.montant, row.created_at)
+      } else {
+        db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
+          .run(`supplier-${row.id}`, shiftId, row.montant, `[CAISSE:EXTERNE] Paiement fournisseur ${factureBefore.numero_facture}`, operateur, row.created_at)
+      }
     })
     transaction()
-    addActivityLog({ action: 'SUPPLIER_PAYMENT_CREATED', montant: row.montant, details: { facture_id: row.facture_id, mode: row.mode_paiement } })
+    addActivityLog({ shift_id: shiftId ?? undefined, operateur, action: 'SUPPLIER_PAYMENT_CREATED', montant: row.montant, details: { facture_id: row.facture_id, mode: row.mode_paiement, caisse_source: source, paiement_type: paymentType } })
     enqueueSync('paiements_fournisseurs', 'INSERT', row)
+    if (source === 'INTERNE') {
+      const internal = db.prepare('SELECT * FROM mouvements_caisse_interne WHERE id = ?').get(`mci-${row.id}`) as Record<string, unknown>
+      enqueueSync('mouvements_caisse_interne', 'INSERT', internal)
+    } else {
+      const cashOut = db.prepare('SELECT * FROM sorties_caisse WHERE id = ?').get(`supplier-${row.id}`) as Record<string, unknown>
+      enqueueSync('sorties_caisse', 'INSERT', cashOut)
+    }
     const facture = db.prepare('SELECT * FROM factures_fournisseurs WHERE id = ?').get(row.facture_id) as Record<string, unknown> | undefined
     if (facture) enqueueSync('factures_fournisseurs', 'UPDATE', facture)
     const fournisseur = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(row.fournisseur_id) as Record<string, unknown> | undefined
@@ -3001,16 +3127,33 @@ function setupIpcHandlers() {
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
     const ventesTotal = db.prepare(`SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes WHERE shift_id = ? AND type = 'VENTE'`).get(shiftId) as { total: number }
-    const repsTotal = db.prepare(`
-      SELECT COALESCE(SUM(total_estime),0) as total FROM reparations
-      WHERE shift_id = ? AND statut IN ('TERMINE', 'RENDU')
-        AND (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' OR notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL)
-    `).get(shiftId) as { total: number }
-    const servicesTotal = db.prepare(`SELECT COALESCE(SUM(montant_frais),0) as total FROM transactions_services WHERE shift_id = ?`).get(shiftId) as { total: number }
-    const total = ventesTotal.total + repsTotal.total + servicesTotal.total
-    if (total <= 0) return { success: true, montant: 0 }
+    const repairFinalTotal = db.prepare(`
+      SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total FROM reparations
+      WHERE statut IN ('TERMINE', 'RENDU') AND (
+        (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' AND notes_technicien LIKE ?)
+        OR ((notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL) AND shift_id = ?)
+      )
+    `).get(`%"paymentShiftId":"${shiftId}"%`, shiftId) as { total: number }
+    const repairDepositTotal = db.prepare(`SELECT COALESCE(SUM(acompte),0) as total FROM reparations WHERE shift_id = ? AND statut != 'ANNULE'`).get(shiftId) as { total: number }
+    const repsTotal = { total: money3(repairFinalTotal.total + repairDepositTotal.total) }
+    const creditsTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'`).get(shiftId) as { total: number }
+    const advancesTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM avances_clients WHERE shift_id = ?`).get(shiftId) as { total: number }
+    const cashOutTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM sorties_caisse WHERE shift_id = ?`).get(shiftId) as { total: number }
+    // Service transactions are also NF lines inside ventes.total_ttc; do not count them twice.
+    const total = money3(ventesTotal.total + repsTotal.total + creditsTotal.total + advancesTotal.total - cashOutTotal.total)
+    if (total <= 0) {
+      db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
+      enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
+      return { success: true, montant: 0 }
+    }
 
-    const today = new Date().toISOString().slice(0, 10)
+    const today = new Date().toLocaleDateString('en-CA')
+    const existingCash = db.prepare('SELECT id FROM caisse_interne WHERE date_journal = ?').get(today)
+    if (!existingCash) {
+      const previous = db.prepare('SELECT solde_ouverture,total_entrees,total_sorties FROM caisse_interne ORDER BY date_journal DESC LIMIT 1').get() as { solde_ouverture?: number; total_entrees?: number; total_sorties?: number } | undefined
+      const opening = previous ? money3(Number(previous.solde_ouverture) + Number(previous.total_entrees) - Number(previous.total_sorties)) : 100
+      db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(`ci-${today}`, today, opening)
+    }
     const id = `mvt-${Date.now()}`
     const m = {
       id, date_journal: today,
@@ -3027,6 +3170,8 @@ function setupIpcHandlers() {
     db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
     addActivityLog({ shift_id: shiftId, action: 'SHIFT_TRANSFERRED_TO_INTERNAL_CASH', montant: total })
     enqueueSync('mouvements_caisse_interne', 'INSERT', m)
+    const cashSnapshot = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown> | undefined
+    if (cashSnapshot) enqueueSync('caisse_interne', 'UPDATE', cashSnapshot)
     enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
     return { success: true, montant: total }
   })
@@ -3238,6 +3383,14 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('credits:create', (_e, credit: Record<string, unknown>) => {
+    const productId = String(credit.produit_id ?? '').trim() || null
+    const quantity = Math.max(1, Math.floor(Number(credit.quantite) || 1))
+    const product = productId ? db.prepare('SELECT id,nom,stock_actuel FROM produits WHERE id = ? AND actif = 1').get(productId) as { id: string; nom: string; stock_actuel: number } | undefined : undefined
+    if (credit.type === 'CREDIT' && productId && !product) throw new Error('Produit de crédit introuvable')
+    if (credit.type === 'CREDIT' && product && Number(product.stock_actuel) < quantity) throw new Error('Stock insuffisant pour ce produit')
+    const productMeta = credit.type === 'CREDIT' && product
+      ? `[SMLPOS_ACCOUNTING]${JSON.stringify({ nature: 'PRODUIT', produitId: product.id, produit: product.nom, quantite: quantity })}`
+      : ''
     const row = bindRow({
       id: '',
       client_id: '',
@@ -3249,7 +3402,12 @@ function setupIpcHandlers() {
       note: null,
       operateur: 'superadmin',
       created_at: new Date().toISOString(),
-    }, credit)
+    }, {
+      id: credit.id ?? randomUUID(), client_id: credit.client_id ?? '', client_nom: credit.client_nom ?? '', shift_id: credit.shift_id ?? null,
+      type: credit.type ?? 'CREDIT', montant: money3(credit.montant), reference: credit.reference ?? null,
+      note: [String(credit.note ?? '').trim(), productMeta].filter(Boolean).join('\n') || null,
+      operateur: credit.operateur ?? 'superadmin', created_at: credit.created_at ?? new Date().toISOString(),
+    })
     const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(row.client_id) as Record<string, unknown> | undefined
     if (!client) throw new Error('Client introuvable')
     const montant = Number(row.montant)
@@ -3261,6 +3419,9 @@ function setupIpcHandlers() {
     db.transaction(() => {
       db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (@id,@client_id,@client_nom,@shift_id,@type,@montant,@reference,@note,@operateur,@created_at)`).run(row)
       db.prepare(`UPDATE clients SET solde_credit = ? WHERE id = ?`).run(after, row.client_id)
+      if (row.type === 'CREDIT' && product) {
+        db.prepare(`UPDATE produits SET stock_actuel = stock_actuel - ?, updated_at = ? WHERE id = ?`).run(quantity, row.created_at, product.id)
+      }
       if (row.type === 'PAIEMENT' && row.shift_id) {
         db.prepare(`UPDATE shifts SET total_credits_recus = total_credits_recus + ? WHERE id = ?`).run(montant, row.shift_id)
       }
@@ -3268,8 +3429,9 @@ function setupIpcHandlers() {
         db.prepare(`UPDATE organisations SET credit_total = COALESCE((SELECT SUM(CASE WHEN c.solde_credit > 0 THEN c.solde_credit ELSE 0 END) FROM clients c WHERE c.actif=1 AND (c.organisation_id=organisations.id OR lower(trim(c.organisation_id))=lower(trim(organisations.nom)))),0) WHERE id=? OR lower(trim(nom))=lower(trim(?))`).run(organisationId, organisationId)
       }
     })()
-    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: row.type === 'CREDIT' ? 'CLIENT_CREDIT_CREATED' : 'CLIENT_PAYMENT_RECEIVED', montant: row.montant as number, details: { client_nom: row.client_nom } })
+    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: row.type === 'CREDIT' ? 'CLIENT_CREDIT_CREATED' : 'CLIENT_PAYMENT_RECEIVED', montant: row.montant as number, details: { client_nom: row.client_nom, produit: product?.nom, quantite: product ? quantity : null } })
     enqueueSync('credits_clients', 'INSERT', row)
+    if (row.type === 'CREDIT' && product) enqueueProductSnapshot(product.id)
     const clientSnapshot = db.prepare('SELECT * FROM clients WHERE id = ?').get(row.client_id) as Record<string, unknown> | undefined
     if (clientSnapshot) enqueueSync('clients', 'UPDATE', clientSnapshot)
     const organisation = organisationId ? db.prepare(`SELECT * FROM organisations WHERE id=? OR lower(trim(nom))=lower(trim(?)) LIMIT 1`).get(organisationId, organisationId) as Record<string, unknown> | undefined : undefined
@@ -3278,13 +3440,16 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('avancesClients:create', (_e, advance: Record<string, unknown>) => {
-    const row = bindRow({ id: '', numero: '', client_id: '', client_nom: '', client_tel: null, client_adresse: null, produit_description: '', montant: 0, mode_paiement: 'ESPECES', reference: null, note: null, shift_id: null, operateur: 'superadmin', created_at: new Date().toISOString() }, advance)
+    const advancePayload = { ...advance, note: [String(advance.note ?? '').trim(), '[CAISSE:EXTERNE] Avance client'].filter(Boolean).join('\n') }
+    const row = bindRow({ id: '', numero: '', client_id: '', client_nom: '', client_tel: null, client_adresse: null, produit_description: '', montant: 0, mode_paiement: 'ESPECES', reference: null, note: null, shift_id: null, operateur: 'superadmin', created_at: new Date().toISOString() }, advancePayload)
     const client = db.prepare(`SELECT * FROM clients WHERE id=? AND actif=1`).get(row.client_id) as Record<string, unknown> | undefined
     if (!client) throw new Error('Veuillez sélectionner un client valide')
     if (!String(row.produit_description).trim()) throw new Error('La description du produit est obligatoire')
     if (!(Number(row.montant) > 0)) throw new Error('Le montant doit être supérieur à zéro')
+    if (!row.shift_id) throw new Error('Ouvrez une caisse externe avant d’enregistrer une avance')
     db.prepare(`INSERT INTO avances_clients (id,numero,client_id,client_nom,client_tel,client_adresse,produit_description,montant,mode_paiement,reference,note,shift_id,operateur,created_at) VALUES (@id,@numero,@client_id,@client_nom,@client_tel,@client_adresse,@produit_description,@montant,@mode_paiement,@reference,@note,@shift_id,@operateur,@created_at)`).run(row)
     addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: 'CLIENT_ADVANCE_RECEIVED', montant: Number(row.montant), details: { numero: row.numero, client_nom: row.client_nom, produit: row.produit_description } })
+    enqueueSync('avances_clients', 'INSERT', row)
     return { success: true, advance: row }
   })
 
@@ -3550,6 +3715,18 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('mouvementsPersonnels:create', (_e, mvt: Record<string, unknown>) => {
+    const natureCredit = mvt.nature_credit === 'PRODUIT' ? 'PRODUIT' : 'ARGENT'
+    const source = mvt.caisse_source === 'EXTERNE' ? 'EXTERNE' : 'INTERNE'
+    const shiftId = String(mvt.shift_id ?? '').trim() || null
+    const productId = String(mvt.produit_id ?? '').trim() || null
+    const quantity = Math.max(1, Math.floor(Number(mvt.quantite) || 1))
+    const product = productId ? db.prepare('SELECT id,nom,stock_actuel FROM produits WHERE id = ? AND actif = 1').get(productId) as { id: string; nom: string; stock_actuel: number } | undefined : undefined
+    if (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'PRODUIT' && !product) throw new Error('Sélectionnez un produit valide')
+    if (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'PRODUIT' && Number(product?.stock_actuel) < quantity) throw new Error('Stock insuffisant pour ce produit')
+    if (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'ARGENT' && source === 'EXTERNE' && !shiftId) throw new Error('Ouvrez une caisse externe avant ce crédit')
+    const accountingMeta = mvt.type === 'CREDIT_PERSONNEL'
+      ? `[SMLPOS_ACCOUNTING]${JSON.stringify({ nature: natureCredit, caisse: natureCredit === 'ARGENT' ? source : null, produitId: productId, produit: product?.nom ?? null, quantite: natureCredit === 'PRODUIT' ? quantity : null, shiftId })}`
+      : ''
     const row = bindRow({
       id: '',
       personnel_id: '',
@@ -3559,7 +3736,12 @@ function setupIpcHandlers() {
       note: null,
       operateur: 'superadmin',
       created_at: new Date().toISOString(),
-    }, mvt)
+    }, {
+      id: mvt.id ?? randomUUID(), personnel_id: mvt.personnel_id ?? '', type: mvt.type ?? 'AVANCE', montant: money3(mvt.montant), mois: mvt.mois ?? null,
+      note: [String(mvt.note ?? '').trim(), accountingMeta].filter(Boolean).join('\n') || null,
+      operateur: mvt.operateur ?? 'superadmin', created_at: mvt.created_at ?? new Date().toISOString(),
+    })
+    if (Number(row.montant) <= 0) throw new Error('Le montant doit être supérieur à zéro')
     const reverseType = row.type === 'AVANCE_REMBOURSEMENT' ? 'avance_solde' : row.type === 'CREDIT_REMBOURSEMENT' ? 'credit_solde' : null
     if (reverseType) {
       const person = db.prepare(`SELECT ${reverseType} as balance FROM personnels WHERE id = ?`).get(row.personnel_id) as { balance?: number } | undefined
@@ -3575,14 +3757,29 @@ function setupIpcHandlers() {
       else if (type === 'AVANCE_REMBOURSEMENT') db.prepare(`UPDATE personnels SET avance_solde = MAX(0, avance_solde - ?) WHERE id = ?`).run(montant, pid)
       else if (type === 'CREDIT_PERSONNEL') db.prepare(`UPDATE personnels SET credit_solde = credit_solde + ? WHERE id = ?`).run(montant, pid)
       else if (type === 'CREDIT_REMBOURSEMENT') db.prepare(`UPDATE personnels SET credit_solde = MAX(0, credit_solde - ?) WHERE id = ?`).run(montant, pid)
-      if (['SALAIRE', 'AVANCE', 'CREDIT_PERSONNEL'].includes(type)) {
+      if (type === 'CREDIT_PERSONNEL' && natureCredit === 'PRODUIT' && productId) {
+        db.prepare(`UPDATE produits SET stock_actuel = stock_actuel - ?, updated_at = ? WHERE id = ?`).run(quantity, row.created_at, productId)
+      } else if (type === 'CREDIT_PERSONNEL' && source === 'EXTERNE') {
+        db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
+          .run(`staff-${row.id}`, shiftId, montant, `[CAISSE:EXTERNE] Crédit argent personnel`, row.operateur, row.created_at)
+      } else if (['SALAIRE', 'AVANCE', 'CREDIT_PERSONNEL'].includes(type)) {
         const categorie = type === 'SALAIRE' ? 'SALAIRE' : type === 'AVANCE' ? 'AVANCE_PERSONNEL' : 'CHARGE'
-        db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now'),'SORTIE',?,?,?,?,?,?)`)
+        db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE',?,?,?,?,?,?)`)
           .run(`mci-${row.id}`, categorie, montant, pid, row.note ?? type, row.operateur, row.created_at)
+        applyInternalCashOut(montant, row.created_at)
       }
     })()
-    addActivityLog({ operateur: row.operateur as string, action: 'STAFF_MOVEMENT_CREATED', montant: row.montant as number, details: { type: row.type, personnel_id: row.personnel_id, mois: row.mois } })
+    addActivityLog({ shift_id: shiftId ?? undefined, operateur: row.operateur as string, action: 'STAFF_MOVEMENT_CREATED', montant: row.montant as number, details: { type: row.type, personnel_id: row.personnel_id, mois: row.mois, nature_credit: natureCredit, caisse_source: source, produit: product?.nom, quantite: quantity } })
     enqueueSync('mouvements_personnels', 'INSERT', row)
+    if (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'PRODUIT' && productId) enqueueProductSnapshot(productId)
+    if (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'ARGENT' && source === 'EXTERNE') {
+      const cashOut = db.prepare('SELECT * FROM sorties_caisse WHERE id = ?').get(`staff-${row.id}`) as Record<string, unknown>
+      enqueueSync('sorties_caisse', 'INSERT', cashOut)
+    }
+    if (['SALAIRE', 'AVANCE'].includes(String(mvt.type)) || (mvt.type === 'CREDIT_PERSONNEL' && natureCredit === 'ARGENT' && source === 'INTERNE')) {
+      const internal = db.prepare('SELECT * FROM mouvements_caisse_interne WHERE id = ?').get(`mci-${row.id}`) as Record<string, unknown> | undefined
+      if (internal) enqueueSync('mouvements_caisse_interne', 'INSERT', internal)
+    }
     const personnel = db.prepare('SELECT * FROM personnels WHERE id = ?').get(mvt.personnel_id) as Record<string, unknown> | undefined
     if (personnel) enqueueSync('personnels', 'UPDATE', personnel)
     return { success: true }

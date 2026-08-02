@@ -11,6 +11,7 @@ const api = window.api
 interface ShiftSummary {
   ventes: { total: number; count: number }
   reparations: { total: number; count: number }
+  services: { total: number; count: number }
   sorties: { total: number; count: number }
   parMode: Array<{ mode_paiement: string; total: number }>
   creditsPercus: { total: number; count: number }
@@ -68,6 +69,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
 
   if (!currentShift) return null
 
+  // Services are cart lines already included in ventes.total; keep their card informational only.
   const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) : 0
   const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0)
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
@@ -189,6 +191,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <div className="font-price font-bold text-sm text-blue-800">{formatPrice(summary.reparations.total)}</div>
                   <div className="text-xs text-blue-600">{summary.reparations.count} dossier{summary.reparations.count > 1 ? 's' : ''}</div>
                 </div>
+                {(summary.services?.total ?? 0) > 0 && <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-3"><div className="text-xs text-cyan-700 font-semibold mb-1">Services (inclus dans ventes)</div><div className="font-price font-bold text-sm text-cyan-800">{formatPrice(summary.services.total)}</div><div className="text-xs text-cyan-600">{summary.services.count} service(s)</div></div>}
                 {(summary.creditsPercus?.total ?? 0) > 0 && (
                   <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
                     <div className="flex items-center gap-1 text-xs text-orange-700 font-semibold mb-1">
@@ -233,7 +236,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <span className="font-price font-bold text-lg text-text-primary">{formatPrice(soldeTheorique)}</span>
                 </div>
                 <div className="text-xs text-text-secondary mt-1">
-                  Fond + Ventes + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties
+                  Fond + Ventes (services inclus) + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties externes
                 </div>
               </div>
             </div>

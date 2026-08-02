@@ -622,6 +622,7 @@ export default function HistoriqueTab() {
       {paymentRepair && (
         <RepairPaymentModal
           repair={paymentRepair}
+          currentShift={currentShift}
           onClose={() => setPaymentRepair(null)}
           onSaved={() => { setPaymentRepair(null); void load() }}
         />
@@ -849,7 +850,7 @@ function VentesTable({
   )
 }
 
-function RepairPaymentModal({ repair, onClose, onSaved }: { repair: Reparation; onClose: () => void; onSaved: () => void }) {
+function RepairPaymentModal({ repair, currentShift, onClose, onSaved }: { repair: Reparation; currentShift: { id?: string; operateur_nom?: string } | null; onClose: () => void; onSaved: () => void }) {
   const initialPrice = Number(repair.total_estime) > 0 ? Number(repair.total_estime).toFixed(3) : ''
   const [price, setPrice] = useState(initialPrice)
   const [spent, setSpent] = useState(Number(repair.main_oeuvre || 0).toFixed(3))
@@ -863,7 +864,7 @@ function RepairPaymentModal({ repair, onClose, onSaved }: { repair: Reparation; 
     if (finalPrice <= 0) { setError('Saisissez le montant total réellement payé'); return }
     if (technicianSpent < 0) { setError('Les dépenses ne peuvent pas être négatives'); return }
     const ok = await runAction('Paiement réparation', async () => {
-      const result = await api.reparationsMarkPayment(repair.id, { paid: true, totalFinal: finalPrice, technicianSpent })
+      const result = await api.reparationsMarkPayment(repair.id, { paid: true, totalFinal: finalPrice, technicianSpent, shiftId: currentShift?.id, operateur: currentShift?.operateur_nom })
       if (!result?.success) throw new Error(result?.error || 'Confirmation impossible')
     }, { setSaving, onError: msg => setError(msg.replace(/^Paiement réparation : /, '')), successMessage: 'Paiement confirmé et bénéfice calculé' })
     if (ok) onSaved()

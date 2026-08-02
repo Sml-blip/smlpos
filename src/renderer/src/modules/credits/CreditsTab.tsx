@@ -7,7 +7,7 @@ import {
   ArrowUpCircle, ArrowDownCircle, DollarSign, Clock, User,
   FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus
 } from 'lucide-react'
-import type { Organisation } from '../../lib/types'
+import type { Organisation, Produit } from '../../lib/types'
 import { runAction, loadData } from '../../lib/apiCall'
 import { saveBalanceReport } from '../../lib/reportPdf'
 
@@ -28,6 +28,10 @@ interface CreditLigne {
 interface CreditWithBalance extends CreditLigne {
   balance: number
 }
+
+const cleanAccountingNote = (note?: string) => String(note ?? '')
+  .replace(/\n?\[SMLPOS_ACCOUNTING\]\{[^\r\n]*\}/g, '')
+  .trim()
 
 export default function CreditsTab() {
   const { currentShift } = useAppStore()
@@ -393,7 +397,7 @@ export default function CreditsTab() {
               </div>
               {/* Action buttons */}
               <div className="flex flex-col gap-2 flex-shrink-0">
-                <button onClick={() => void saveBalanceReport('Historique crédit client', selected.nom, [['Solde actuel', `${formatPrice(selected.solde_credit)} DT`], ['Limite', selected.credit_limite == null ? '—' : `${formatPrice(selected.credit_limite)} DT`], ['Mouvements', String(history.length)]], history.map(row => ({ date: row.created_at, type: row.type === 'CREDIT' ? 'Crédit' : 'Paiement', amount: row.montant, operator: row.operateur, note: row.note || row.reference })), `credit-${selected.nom}`)} className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:bg-muted rounded-xl text-xs font-semibold"><Download size={12} /> PDF</button>
+                <button onClick={() => void saveBalanceReport('Historique crédit client', selected.nom, [['Solde actuel', `${formatPrice(selected.solde_credit)} DT`], ['Limite', selected.credit_limite == null ? '—' : `${formatPrice(selected.credit_limite)} DT`], ['Mouvements', String(history.length)]], history.map(row => ({ date: row.created_at, type: row.type === 'CREDIT' ? 'Crédit' : 'Paiement', amount: row.montant, operator: row.operateur, note: cleanAccountingNote(row.note) || row.reference })), `credit-${selected.nom}`)} className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:bg-muted rounded-xl text-xs font-semibold"><Download size={12} /> PDF</button>
                 <button
                   onClick={() => setShowAddTranche('CREDIT')}
                   className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-colors"
@@ -515,8 +519,8 @@ export default function CreditsTab() {
                             </td>
                             {/* Note + Reference */}
                             <td className="px-3 py-2.5 max-w-[200px]">
-                              {row.note ? (
-                                <span className="text-text-secondary truncate block" title={row.note}>{row.note}</span>
+                              {cleanAccountingNote(row.note) ? (
+                                <span className="text-text-secondary truncate block" title={cleanAccountingNote(row.note)}>{cleanAccountingNote(row.note)}</span>
                               ) : row.reference ? (
                                 <span className="font-mono text-[10px] text-text-secondary bg-muted px-1.5 py-0.5 rounded">{row.reference}</span>
                               ) : (
@@ -603,7 +607,6 @@ function NewClientModal({
   const [montantApres, setMontantApres] = useState('')  // after interest = actual debt
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
   const agent = currentShift?.operateur_nom ?? 'superadmin'
   const brutNum = parseFloat(montantBrut.replace(',', '.')) || 0
   const apresNum = parseFloat(montantApres.replace(',', '.')) || 0
@@ -782,6 +785,14 @@ function AddTrancheModal({
   const [agent, setAgent] = useState(currentShift?.operateur_nom ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [products, setProducts] = useState<Produit[]>([])
+  const [productId, setProductId] = useState('')
+  const [quantity, setQuantity] = useState(1)
+
+  useEffect(() => {
+    if (type !== 'CREDIT' || products.length) return
+    void loadData('Chargement produits', () => api.produitsList({ actif: 1 }), { silent: true }).then(rows => rows && setProducts(rows as Produit[]))
+  }, [products.length, type])
 
   const montantNum = parseFloat(montant.replace(',', '.')) || 0
   const newSolde = type === 'CREDIT'
@@ -802,6 +813,8 @@ function AddTrancheModal({
         montant: montantNum,
         reference: reference.trim() || null,
         note: note.trim() || null,
+        produit_id: type === 'CREDIT' && productId ? productId : null,
+        quantite: type === 'CREDIT' && productId ? quantity : null,
         operateur: agent.trim() || 'superadmin',
         created_at: new Date().toISOString(),
       })
@@ -864,6 +877,18 @@ function AddTrancheModal({
                 Ce paiement sera enregistré sur le <strong>shift en cours</strong> (caisse externe).
                 {currentShift?.operateur_nom && ` Opérateur : ${currentShift.operateur_nom}.`}
               </span>
+            </div>
+          )}
+          {type === 'CREDIT' && (
+            <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
+              <label className="mb-1.5 block text-xs font-semibold text-purple-800">Produit remis au client (optionnel — met à jour le stock)</label>
+              <div className="grid grid-cols-[1fr_80px] gap-2">
+                <select value={productId} onChange={e => setProductId(e.target.value)} className="rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs">
+                  <option value="">Aucun produit / crédit libre</option>
+                  {products.filter(p => p.stock_actuel > 0).map(p => <option key={p.id} value={p.id}>{p.nom} (stock {p.stock_actuel})</option>)}
+                </select>
+                <input type="number" min="1" value={quantity} disabled={!productId} onChange={e => setQuantity(Math.max(1, Number(e.target.value) || 1))} className="rounded-lg border border-purple-200 bg-white px-2 py-2 text-center disabled:opacity-50" />
+              </div>
             </div>
           )}
 
