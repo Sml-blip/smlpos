@@ -8,7 +8,7 @@ import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
 import { printAdvanceReceipt, printCreditReceipt } from '../../lib/clientPaymentReceipt'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
-import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock, ClipboardList } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Save, Clock, ClipboardList } from 'lucide-react'
 import ReparationModal from './ReparationModal'
 import RetourModal from './RetourModal'
 import SortieCaisseModal from './SortieCaisseModal'
@@ -38,9 +38,7 @@ export default function POSTab() {
   const [scannedProduct, setScannedProduct] = useState<Produit | null>(null)
   const [qty, setQty] = useState(1)
   const [remise, setRemise] = useState(0)
-  const [remiseMode, setRemiseMode] = useState<'%' | 'DT'>('%')
   const [remiseTotaleInput, setRemiseTotaleInput] = useState('')
-  const [remiseTotaleMode, setRemiseTotaleMode] = useState<'%' | 'DT'>('DT')
   const [searchResults, setSearchResults] = useState<Produit[]>([])
   const [showSearch, setShowSearch] = useState(false)
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null)
@@ -370,9 +368,9 @@ export default function POSTab() {
       showNotif(`Stock épuisé — ${scannedProduct.nom} ne peut pas être ajouté`, 'error')
       return
     }
-    const effectivePct = remiseMode === 'DT'
+    const effectivePct = scannedProduct.prix_vente > 0
       ? Math.min(100, (remise / scannedProduct.prix_vente) * 100)
-      : remise
+      : 0
     const needsSerial = productTracksSerial(scannedProduct)
     if (needsSerial) {
       if (!availableSerials.length) {
@@ -426,11 +424,7 @@ export default function POSTab() {
   const handleRemiseTotaleChange = (val: string) => {
     setRemiseTotaleInput(val)
     const num = parseFloat(val.replace(',', '.')) || 0
-    if (remiseTotaleMode === '%') {
-      setRemiseTotale((cartTotal * num) / 100)
-    } else {
-      setRemiseTotale(Math.min(cartTotal, num))
-    }
+    setRemiseTotale(Math.min(cartTotal, num))
   }
 
   const refreshSavedPanierCount = () => setSavedPanierCount(listSavedPaniers().length)
@@ -668,13 +662,7 @@ export default function POSTab() {
                 </div>
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-text-secondary">Remise</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden text-xs">
-                    <button onClick={() => { setRemiseMode('%'); setRemise(0) }} className={cn('px-2 py-0.5 font-semibold transition-colors', remiseMode === '%' ? 'bg-accent-500 text-text-primary' : 'bg-white hover:bg-muted')}>%</button>
-                    <button onClick={() => { setRemiseMode('DT'); setRemise(0) }} className={cn('px-2 py-0.5 font-semibold transition-colors', remiseMode === 'DT' ? 'bg-accent-500 text-text-primary' : 'bg-white hover:bg-muted')}>DT</button>
-                  </div>
-                </div>
+                <label className="block text-xs font-semibold text-text-secondary mb-1.5">Remise unitaire (DT)</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -683,14 +671,13 @@ export default function POSTab() {
                     onChange={e => {
                       const val = e.target.value.replace(/[^0-9.,]/g, '')
                       const v = parseFloat(val.replace(',', '.')) || 0
-                      if (remiseMode === '%') setRemise(Math.min(100, Math.max(0, v)))
-                      else setRemise(Math.min(scannedProduct?.prix_vente ?? 0, Math.max(0, v)))
+                      setRemise(Math.min(scannedProduct?.prix_vente ?? 0, Math.max(0, v)))
                     }}
                     onKeyDown={e => { if (e.key === 'Enter') handleAddToCart() }}
                     className="w-20 text-center border border-border rounded-lg py-1.5 font-price font-semibold"
-                    min={0} step={remiseMode === '%' ? 5 : 0.5}
+                    min={0} step={0.001}
                   />
-                  <span className="text-text-secondary text-sm font-medium">{remiseMode}</span>
+                  <span className="text-text-secondary text-sm font-medium">DT</span>
                 </div>
               </div>
             </div>
@@ -730,7 +717,7 @@ export default function POSTab() {
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
               <span className="text-sm text-text-secondary font-medium">Prix final :</span>
               <span className="text-lg font-bold font-price text-text-primary">
-                {formatPrice(scannedProduct.prix_vente * (1 - (remiseMode === 'DT' ? Math.min(100, (remise / (scannedProduct.prix_vente || 1)) * 100) : remise) / 100) * qty)}
+                {formatPrice(Math.max(0, scannedProduct.prix_vente - remise) * qty)}
               </span>
             </div>
 
@@ -842,18 +829,21 @@ export default function POSTab() {
                       {!item.numero_serie && (
                         <button onClick={() => updateItem(idx, { quantite: item.quantite + 1 })} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">+</button>
                       )}
-                      <div className="ml-1 flex items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5" title="Remise pour cet article">
+                      <div className="ml-1 flex items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5" title="Remise unitaire en dinars">
                         <Tag size={10} className="text-red-500" />
                         <input
-                          aria-label={`Remise ${item.designation}`}
+                          aria-label={`Remise en dinars ${item.designation}`}
                           inputMode="decimal"
-                          value={item.remise_pct || ''}
+                          value={item.remise_pct > 0 ? Number((item.prix_unitaire * item.remise_pct / 100).toFixed(3)) : ''}
                           onClick={e => e.stopPropagation()}
-                          onChange={e => updateItem(idx, { remise_pct: Math.min(100, Math.max(0, Number(e.target.value.replace(',', '.')) || 0)) })}
-                          className="w-9 bg-transparent text-right text-[11px] font-semibold text-red-600 outline-none"
+                          onChange={e => {
+                            const discountDt = Math.min(item.prix_unitaire, Math.max(0, Number(e.target.value.replace(',', '.')) || 0))
+                            updateItem(idx, { remise_pct: item.prix_unitaire > 0 ? discountDt / item.prix_unitaire * 100 : 0 })
+                          }}
+                          className="w-12 bg-transparent text-right text-[11px] font-semibold text-red-600 outline-none"
                           placeholder="0"
                         />
-                        <span className="text-[10px] font-semibold text-red-500">%</span>
+                        <span className="text-[10px] font-semibold text-red-500">DT</span>
                       </div>
                     </div>
                   </div>
@@ -885,10 +875,6 @@ export default function POSTab() {
             <div className="flex items-center gap-2 mb-2">
               <Tag size={11} className="text-text-muted flex-shrink-0" />
               <span className="text-xs text-text-secondary flex-1">Remise panier</span>
-              <div className="flex rounded border border-border overflow-hidden text-[10px]">
-                <button onClick={() => { setRemiseTotaleMode('%'); setRemiseTotaleInput(''); setRemiseTotale(0) }} className={cn('px-1.5 py-0.5 font-bold', remiseTotaleMode === '%' ? 'bg-accent-500' : 'bg-white hover:bg-muted')}><Percent size={9} /></button>
-                <button onClick={() => { setRemiseTotaleMode('DT'); setRemiseTotaleInput(''); setRemiseTotale(0) }} className={cn('px-1.5 py-0.5 font-bold', remiseTotaleMode === 'DT' ? 'bg-accent-500' : 'bg-white hover:bg-muted')}>DT</button>
-              </div>
               <input
                 type="text"
                 inputMode="decimal"
@@ -897,6 +883,7 @@ export default function POSTab() {
                 className="w-16 border border-border rounded px-2 py-0.5 text-xs font-price text-center outline-none focus:border-accent-500"
                 placeholder="0"
               />
+              <span className="text-[10px] font-bold text-text-secondary">DT</span>
             </div>
             {remiseTotale > 0 && (
               <div className="flex justify-between text-sm text-danger mb-1">
