@@ -1038,13 +1038,55 @@ function SavedPaniersModal({
   onDelete: (id: string) => void | Promise<void>
 }) {
   const [paniers, setPaniers] = useState(() => listSavedPaniers())
+  const [pendingDelete, setPendingDelete] = useState<SavedPanier | null>(null)
+  const [holdProgress, setHoldProgress] = useState(0)
+  const [deleting, setDeleting] = useState(false)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const holdDuration = 1600
 
   const refresh = () => setPaniers(listSavedPaniers())
+
+  const cancelHold = useCallback(() => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    if (progressTimer.current) clearInterval(progressTimer.current)
+    holdTimer.current = null
+    progressTimer.current = null
+    if (!deleting) setHoldProgress(0)
+  }, [deleting])
+
+  const startHoldDelete = () => {
+    if (!pendingDelete || deleting || holdTimer.current) return
+    const startedAt = Date.now()
+    setHoldProgress(0)
+    progressTimer.current = setInterval(() => {
+      setHoldProgress(Math.min(100, ((Date.now() - startedAt) / holdDuration) * 100))
+    }, 30)
+    holdTimer.current = setTimeout(() => {
+      if (progressTimer.current) clearInterval(progressTimer.current)
+      holdTimer.current = null
+      progressTimer.current = null
+      setHoldProgress(100)
+      setDeleting(true)
+      void Promise.resolve(onDelete(pendingDelete.id)).then(() => {
+        refresh()
+        setPendingDelete(null)
+      }).finally(() => {
+        setDeleting(false)
+        setHoldProgress(0)
+      })
+    }, holdDuration)
+  }
 
   useEffect(() => {
     void syncSavedPaniers().then(setPaniers).catch(error => {
       console.error('[POS] Failed to load protected carts:', error)
     })
+  }, [])
+
+  useEffect(() => () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    if (progressTimer.current) clearInterval(progressTimer.current)
   }, [])
 
   return (
@@ -1083,7 +1125,7 @@ function SavedPaniersModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { void Promise.resolve(onDelete(p.id)).then(refresh) }}
+                    onClick={() => { cancelHold(); setPendingDelete(p) }}
                     className="px-3 py-1.5 bg-muted hover:bg-red-50 text-danger text-xs font-semibold rounded-lg"
                   >
                     Suppr.
@@ -1099,6 +1141,48 @@ function SavedPaniersModal({
           </button>
         </div>
       </div>
+      {pendingDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-red-200 bg-white p-5 shadow-2xl animate-slide-in">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <Trash2 size={20} />
+            </div>
+            <h3 className="text-center text-base font-bold">Supprimer ce panier ?</h3>
+            <p className="mt-1 text-center text-xs text-text-secondary">
+              « {pendingDelete.label} » sera supprimé définitivement. Oui ou non ?
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => { cancelHold(); setPendingDelete(null) }}
+                className="rounded-xl border border-border bg-muted py-3 text-sm font-bold hover:bg-border disabled:opacity-50"
+              >
+                Non, garder
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onPointerDown={startHoldDelete}
+                onPointerUp={cancelHold}
+                onPointerCancel={cancelHold}
+                onPointerLeave={cancelHold}
+                onKeyDown={event => {
+                  if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) startHoldDelete()
+                }}
+                onKeyUp={event => {
+                  if (event.key === 'Enter' || event.key === ' ') cancelHold()
+                }}
+                className="relative overflow-hidden rounded-xl border border-red-600 bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-60"
+              >
+                <span className="absolute inset-y-0 left-0 bg-red-800/45 transition-[width] duration-75" style={{ width: `${holdProgress}%` }} />
+                <span className="relative">{deleting ? 'Suppression…' : holdProgress > 0 ? 'Continuez…' : 'Maintenir Oui'}</span>
+              </button>
+            </div>
+            <p className="mt-3 text-center text-[10px] font-medium text-red-500">Maintenez le bouton rouge pendant 1,6 seconde.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
