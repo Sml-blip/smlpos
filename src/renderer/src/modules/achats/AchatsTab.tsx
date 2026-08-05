@@ -712,34 +712,38 @@ const emptyFullForm = (): FullProductFormData => ({
   numero_serie: '',
 })
 
-function NewProductModal({ onClose, onCreated, deferCreate = false, initialProduct, onUpdated }: {
+function NewProductModal({ onClose, onCreated, deferCreate = false, initialProduct, initialPending, onUpdated, onPendingUpdated }: {
   onClose: () => void
   onCreated: (p: Produit | PendingProduct) => Promise<void>
   deferCreate?: boolean
   initialProduct?: Produit
+  initialPending?: PendingProduct
   onUpdated?: (p: Produit) => void
+  onPendingUpdated?: (p: PendingProduct) => void
 }) {
   const isEdit = !!initialProduct
+  const isPendingEdit = !initialProduct && !!initialPending
   const [formData, setFormData] = useState<FullProductFormData>(() => {
-    if (!initialProduct) return emptyFullForm()
+    const source = initialProduct ?? initialPending
+    if (!source) return emptyFullForm()
     return {
-      code_barre: initialProduct.code_barre ?? '',
-      reference: initialProduct.reference ?? '',
-      nom: initialProduct.nom ?? '',
-      description: initialProduct.description ?? '',
-      categorie: initialProduct.categorie ?? 'Général',
-      type: initialProduct.type ?? 'F',
-      prix_achat: initialProduct.prix_achat != null ? String(initialProduct.prix_achat) : '',
-      cout_supplementaire: String(initialProduct.cout_supplementaire ?? 0),
-      tva_achat_pct: String(initialProduct.tva_achat_pct ?? 0),
-      marge_pct: initialProduct.marge_pct != null ? String(initialProduct.marge_pct) : '',
-      coef_av: initialProduct.coef_av != null ? String(initialProduct.coef_av) : '',
-      prix_vente: String(initialProduct.prix_vente ?? ''),
-      tva_taux: String(initialProduct.tva_taux ?? 0),
-      stock_actuel: String(initialProduct.stock_actuel ?? 0),
-      stock_minimum: String(initialProduct.stock_minimum ?? 5),
-      fournisseur: initialProduct.fournisseur ?? '',
-      numero_serie: initialProduct.numero_serie ?? '',
+      code_barre: source.code_barre ?? '',
+      reference: source.reference ?? '',
+      nom: source.nom ?? '',
+      description: source.description ?? '',
+      categorie: source.categorie ?? 'Général',
+      type: source.type ?? 'F',
+      prix_achat: source.prix_achat != null ? String(source.prix_achat) : '',
+      cout_supplementaire: String(source.cout_supplementaire ?? 0),
+      tva_achat_pct: String(source.tva_achat_pct ?? 0),
+      marge_pct: source.marge_pct != null ? String(source.marge_pct) : '',
+      coef_av: source.coef_av != null ? String(source.coef_av) : '',
+      prix_vente: String(source.prix_vente ?? ''),
+      tva_taux: String(source.tva_taux ?? 0),
+      stock_actuel: String('stock_actuel' in source ? (source.stock_actuel ?? 0) : 0),
+      stock_minimum: String(source.stock_minimum ?? 5),
+      fournisseur: source.fournisseur ?? '',
+      numero_serie: source.numero_serie ?? '',
     }
   })
   const [formErrors, setFormErrors] = useState<Partial<FullProductFormData>>({})
@@ -855,7 +859,8 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
     setFormErrors(errors)
     if (Object.keys(errors).length > 0) return
 
-    const ok = await runAction(isEdit ? 'Modification produit' : 'Création produit', async () => {
+    const editing = isEdit || isPendingEdit
+    const ok = await runAction(editing ? 'Modification produit' : 'Création produit', async () => {
       const now = new Date().toISOString()
       const prixAchatHT = parseFloat(formData.prix_achat) || 0
       const coutSupp = parseFloat(formData.cout_supplementaire) || 0
@@ -893,37 +898,39 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
         created_at: initialProduct?.created_at ?? now,
         updated_at: now,
       }
+      const pending: PendingProduct = {
+        nom: p.nom,
+        reference: p.reference,
+        code_barre: p.code_barre,
+        prix_achat: p.prix_achat,
+        prix_vente: p.prix_vente,
+        categorie: p.categorie,
+        type: p.type,
+        tva_taux: p.tva_taux,
+        description: p.description,
+        cout_supplementaire: p.cout_supplementaire,
+        tva_achat_pct: p.tva_achat_pct,
+        marge_pct: p.marge_pct,
+        coef_av: p.coef_av,
+        cout_de_revient: p.cout_de_revient,
+        prix_vente_ht: p.prix_vente_ht,
+        prix_achat_ttc: p.prix_achat_ttc,
+        stock_minimum: p.stock_minimum,
+        fournisseur: p.fournisseur,
+        numero_serie: p.numero_serie,
+      }
       if (isEdit) {
         await api.produitsUpdate(p.id, p)
         onUpdated?.(p as Produit)
+      } else if (isPendingEdit) {
+        onPendingUpdated?.(pending)
       } else if (deferCreate) {
-        const pending: PendingProduct = {
-          nom: p.nom,
-          reference: p.reference,
-          code_barre: p.code_barre,
-          prix_achat: p.prix_achat,
-          prix_vente: p.prix_vente,
-          categorie: p.categorie,
-          type: p.type,
-          tva_taux: p.tva_taux,
-          description: p.description,
-          cout_supplementaire: p.cout_supplementaire,
-          tva_achat_pct: p.tva_achat_pct,
-          marge_pct: p.marge_pct,
-          coef_av: p.coef_av,
-          cout_de_revient: p.cout_de_revient,
-          prix_vente_ht: p.prix_vente_ht,
-          prix_achat_ttc: p.prix_achat_ttc,
-          stock_minimum: p.stock_minimum,
-          fournisseur: p.fournisseur,
-          numero_serie: p.numero_serie,
-        }
         await onCreated(pending)
       } else {
         await api.produitsCreate(p)
         await onCreated(p as Produit)
       }
-    }, { setSaving, successMessage: isEdit ? 'Produit modifié' : 'Produit créé' })
+    }, { setSaving, successMessage: editing ? 'Produit modifié' : 'Produit créé' })
     if (ok) onClose()
   }
 
@@ -934,7 +941,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
           <h2 className="font-bold flex items-center gap-2">
-            <Package size={16} /> {isEdit ? 'Modifier le produit' : 'Nouveau produit'}
+            <Package size={16} /> {isEdit || isPendingEdit ? 'Modifier le produit' : 'Nouveau produit'}
           </h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
             <X size={18} />
@@ -1396,6 +1403,7 @@ function FactureFournisseurModal({
   // Product search popup
   const [showProductPopup, setShowProductPopup] = useState(false)
   const [popupLineId, setPopupLineId] = useState<string | null>(null)
+  const [editLineId, setEditLineId] = useState<string | null>(null)
   // Fiscal fields
   const [exoFlag, setExoFlag] = useState(false)
   const [exoText, setExoText] = useState('')
@@ -1439,7 +1447,11 @@ function FactureFournisseurModal({
       if (l.produit_id) {
         const p = produits.find(x => x.id === l.produit_id)
         if (p) {
-          const merged = mergeProductIntoLine(l, p)
+          const merged = {
+            ...mergeProductIntoLine(l, p),
+            // The catalog may change later; never rewrite the price recorded on this invoice line.
+            nouveau_prix_achat: l.nouveau_prix_achat,
+          }
           if (l.numeros_serie?.length) {
             return {
               ...merged,
@@ -1453,10 +1465,13 @@ function FactureFournisseurModal({
       if (!l.produit_id && l.numeros_serie?.length && l.designation.trim()) {
         const match = produits.find(p => p.nom.trim() === l.designation.trim())
         if (match) {
-          return mergeProductIntoLine(
-            { ...l, tracks_serial: true, numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite) },
-            match,
-          )
+          return {
+            ...mergeProductIntoLine(
+              { ...l, tracks_serial: true, numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite) },
+              match,
+            ),
+            nouveau_prix_achat: l.nouveau_prix_achat,
+          }
         }
       }
       if (l.numeros_serie?.length && (l.produit_id || l.pendingProduct)) {
@@ -1698,6 +1713,21 @@ function FactureFournisseurModal({
     setLignes(prev => prev.map(l => l.id === lineId ? mergeProductIntoLine(l, p) : l))
     setLineSearches(prev => ({ ...prev, [lineId]: '' }))
     setLineResults(prev => ({ ...prev, [lineId]: [] }))
+  }
+
+  const applyEditedProductToLines = (updated: Produit) => {
+    setProduits(prev => prev.map(p => p.id === updated.id ? updated : p))
+    setLignes(prev => prev.map(l => {
+      if (l.produit_id !== updated.id) return l
+      const tracksSerial = productTracksSerial(updated)
+      return {
+        ...l,
+        designation: updated.nom,
+        tva_taux: updated.tva_taux ?? l.tva_taux,
+        tracks_serial: tracksSerial,
+        numeros_serie: tracksSerial ? syncSerialNumsForQty(l.numeros_serie, l.quantite) : undefined,
+      }
+    }))
   }
 
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
@@ -2069,6 +2099,16 @@ function FactureFournisseurModal({
                       </div>
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0 pt-1">
+                      {(l.produit_id || l.pendingProduct) && (
+                        <button
+                          type="button"
+                          onClick={() => setEditLineId(l.id)}
+                          title="Modifier la fiche produit complète"
+                          className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-accent-300 bg-accent-50 text-accent-800 hover:bg-accent-100 transition-colors text-[9px] font-bold"
+                        >
+                          <Edit2 size={11} /> Modifier
+                        </button>
+                      )}
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -2273,6 +2313,37 @@ function FactureFournisseurModal({
           />
         )
       })()}
+      {editLineId && (() => {
+        const line = lignes.find(l => l.id === editLineId)
+        if (!line) return null
+        const existingProduct = line.produit_id
+          ? produits.find(p => p.id === line.produit_id)
+          : undefined
+        if (!existingProduct && !line.pendingProduct) return null
+        return (
+          <NewProductModal
+            initialProduct={existingProduct}
+            initialPending={line.pendingProduct}
+            deferCreate={!!line.pendingProduct}
+            onClose={() => setEditLineId(null)}
+            onCreated={async () => {}}
+            onUpdated={applyEditedProductToLines}
+            onPendingUpdated={(updated) => {
+              setLignes(prev => prev.map(l => l.id === line.id ? {
+                ...l,
+                designation: updated.nom,
+                tva_taux: updated.tva_taux ?? l.tva_taux,
+                pendingProduct: updated,
+                tracks_serial: !!updated.numero_serie?.trim(),
+                numeros_serie: updated.numero_serie?.trim()
+                  ? syncSerialNumsForQty(l.numeros_serie, l.quantite)
+                  : undefined,
+              } : l))
+              setEditLineId(null)
+            }}
+          />
+        )
+      })()}
       {/* Product Search Popup — multi-add mode (stays open until user closes) */}
       {showProductPopup && (
         <ProductSearchPopup
@@ -2296,12 +2367,7 @@ function FactureFournisseurModal({
             setPopupLineId(newId)
           }}
           onProductUpdated={(updated) => {
-            setProduits(prev => prev.map(p => p.id === updated.id ? updated : p))
-            setLignes(prev => prev.map(l =>
-              l.produit_id === updated.id
-                ? mergeProductIntoLine(l, updated)
-                : l
-            ))
+            applyEditedProductToLines(updated)
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
         />
