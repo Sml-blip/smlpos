@@ -1,5 +1,5 @@
 import type { CartItem, LigneVente, Vente } from './types'
-import ticketLogoUrl from '../assets/sml-ticket-logo.png?inline'
+import { SML_TICKET_LOGO_DATA_URL } from '../assets/sml-ticket-logo-data'
 
 type TicketLine = Pick<CartItem | LigneVente, 'designation' | 'quantite' | 'prix_unitaire' | 'remise_pct' | 'total_ligne'> & {
   produit_id?: string
@@ -183,7 +183,7 @@ export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): strin
 <body>
   <div class="ticket">
     <div class="center">
-      <img class="brand-logo" src="${ticketLogoUrl}" alt="SML" />
+      <img class="brand-logo" src="${SML_TICKET_LOGO_DATA_URL}" alt="SML" />
       <div class="brand">SML informatique</div>
       <div class="muted">${date} - ${time}</div>
       <div class="muted">Ticket No ${escapeHtml(vente.numero)}</div>

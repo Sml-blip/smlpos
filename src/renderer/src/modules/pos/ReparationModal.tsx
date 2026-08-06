@@ -7,7 +7,7 @@ import ClientPicker, { emptyClientForm, type ClientFormValue } from '../../compo
 import InventoryProductPickerModal from '../../components/InventoryProductPickerModal'
 import { openPrintManager } from '../../lib/printManager'
 import { printLabelHtml } from '../../lib/nativePrint'
-import ticketLogoUrl from '../../assets/sml-ticket-logo.png?inline'
+import { SML_TICKET_LOGO_DATA_URL } from '../../assets/sml-ticket-logo-data'
 import { X, Plus, Trash2, Monitor, Bike, Smartphone, Printer as PrinterIcon, Wrench, PackageSearch, CheckCircle, Tag } from 'lucide-react'
 
 const api = window.api
@@ -42,7 +42,7 @@ function printFicheReparation(data: CreatedRepairPrintData) {
   const reste = Math.max(0, data.totalFinal - data.acompte)
   const html = `<!DOCTYPE html><html><head><title>Ticket Réparation ${data.numero}</title>
   <style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}body{font-family:Arial,sans-serif;width:80mm;margin:0;padding:5mm 4mm;font-size:11px;color:#171717}.header{text-align:center;padding-bottom:3mm;border-bottom:1px dashed #777}.brand-logo{display:block;width:42mm;max-width:76%;height:auto;margin:0 auto}.brand{font-size:17px;font-weight:900;letter-spacing:.3px;margin-top:1mm}.subtitle{font-size:10px;margin-top:1mm}.number{display:inline-block;margin-top:2mm;border:1px solid #111;border-radius:10px;padding:1mm 3mm;font-family:monospace;font-weight:700}.section{padding:3mm 0;border-bottom:1px dashed #aaa}.section-title{font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:#666;font-weight:800;margin-bottom:1.5mm}.row,.item{display:flex;justify-content:space-between;gap:3mm;margin:1.2mm 0}.row span:first-child{color:#666}.value{font-weight:700;text-align:right}.problem{font-weight:700;line-height:1.35}.summary{margin-top:3mm;border:1.5px solid #111;border-radius:3mm;padding:3mm}.summary .row{font-size:12px}.grand{font-size:19px;font-weight:900;border-top:1px solid #111;padding-top:2mm;margin-top:2mm}.footer{text-align:center;margin-top:4mm;font-size:9px;color:#555}</style></head><body>
-  <div class="header"><img class="brand-logo" src="${ticketLogoUrl}" alt="SML"><div class="brand">SML informatique</div><div class="subtitle">Ticket de réparation</div><div class="number">${esc(data.numero)}</div></div>
+  <div class="header"><img class="brand-logo" src="${SML_TICKET_LOGO_DATA_URL}" alt="SML"><div class="brand">SML informatique</div><div class="subtitle">Ticket de réparation</div><div class="number">${esc(data.numero)}</div></div>
   <div class="section"><div class="section-title">Client</div><div class="row"><span>Nom</span><span class="value">${esc(data.clientNom || '—')}</span></div><div class="row"><span>Téléphone</span><span class="value">${esc(data.clientTel || '—')}</span></div></div>
   <div class="section"><div class="section-title">Réparation</div><div class="row"><span>Date</span><span class="value">${esc(dateStr)}</span></div><div class="row"><span>Appareil</span><span class="value">${esc([data.typeAppareil, data.marque, data.modele].filter(Boolean).join(' '))}</span></div><div class="problem">${esc(data.panne)}</div>${data.estimatedCompletion ? `<div class="row"><span>Prévue pour</span><span class="value">${esc(new Date(data.estimatedCompletion).toLocaleString('fr-TN'))}</span></div>` : ''}</div>
   ${piecesHtml}

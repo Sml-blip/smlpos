@@ -428,7 +428,32 @@ export class PrinterService {
         resolve({ success: false, error: 'Échec chargement HTML impression' });
       });
 
-      win.webContents.once('did-finish-load', () => {
+      win.webContents.once('did-finish-load', async () => {
+        // Electron can finish loading the HTML before a thermal-ticket image is
+        // decoded. Waiting here prevents Epson drivers from receiving a blank or
+        // partially rasterized logo. The timeout keeps printing available if an
+        // unrelated remote image cannot be loaded.
+        try {
+          await win.webContents.executeJavaScript(`
+            Promise.race([
+              Promise.all(Array.from(document.images).map(async (image) => {
+                if (!image.complete) {
+                  await new Promise((resolve) => {
+                    image.addEventListener('load', resolve, { once: true });
+                    image.addEventListener('error', resolve, { once: true });
+                  });
+                }
+                if (typeof image.decode === 'function') {
+                  try { await image.decode(); } catch { /* keep printing */ }
+                }
+              })),
+              new Promise((resolve) => setTimeout(resolve, 2000)),
+            ]).then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+          `)
+        } catch {
+          // Continue with printing if readiness detection is unavailable.
+        }
+        if (win.isDestroyed()) return
         const printOpts: Electron.WebContentsPrintOptions = {
           deviceName: options.printerName || undefined,
           silent: options.silent === true,
