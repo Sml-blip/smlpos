@@ -13,6 +13,7 @@ import FactureAchatPrintModal from './FactureAchatPrintModal'
 import FactureSerialModal from './FactureSerialModal'
 import InvoiceScanModal from './InvoiceScanModal'
 import { buildAchatInvoiceDoc, mapFactureAchatLignes } from '../../lib/invoiceAchatMapper'
+import { pricingFromPrixAchatTtc } from '../../lib/productPricing'
 import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
   emptyFactureLigne,
@@ -682,6 +683,7 @@ interface FullProductFormData {
   prix_achat: string
   cout_supplementaire: string
   tva_achat_pct: string
+  prix_achat_ttc: string
   marge_pct: string
   coef_av: string
   prix_vente: string
@@ -702,6 +704,7 @@ const emptyFullForm = (): FullProductFormData => ({
   prix_achat: '',
   cout_supplementaire: '0',
   tva_achat_pct: '0',
+  prix_achat_ttc: '',
   marge_pct: '',
   coef_av: '',
   prix_vente: '',
@@ -736,6 +739,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
       prix_achat: source.prix_achat != null ? String(source.prix_achat) : '',
       cout_supplementaire: String(source.cout_supplementaire ?? 0),
       tva_achat_pct: String(source.tva_achat_pct ?? 0),
+      prix_achat_ttc: source.prix_achat_ttc != null ? String(source.prix_achat_ttc) : '',
       marge_pct: source.marge_pct != null ? String(source.marge_pct) : '',
       coef_av: source.coef_av != null ? String(source.coef_av) : '',
       prix_vente: String(source.prix_vente ?? ''),
@@ -779,6 +783,10 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
     const marge = (coef - 1) * 100
     const isBelowCost = coutRevient > 0 && prixVente < prixAchatTTC
     return { coutRevient, prixAchatTTC, prixVenteHT, coef, marge, isBelowCost }
+  }
+
+  const onPrixAchatTtcChange = (val: string) => {
+    setFormData(prev => ({ ...prev, ...pricingFromPrixAchatTtc(prev, val) }))
   }
 
   const onMargePctChange = (val: string) => {
@@ -1064,11 +1072,16 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
             </div>
             <div className="grid grid-cols-2 gap-3 px-4 pb-3 pt-1 border-b border-border">
               <div>
-                <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT) ✅</label>
-                <div className="border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800">
-                  {formatPrice(pricing.prixAchatTTC)}
-                </div>
-                <p className="text-[10px] text-text-muted mt-0.5">= HT × (1 + TVA Achat)</p>
+                <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT)</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={formData.prix_achat_ttc}
+                  placeholder={pricing.prixAchatTTC.toFixed(3)}
+                  onChange={e => onPrixAchatTtcChange(e.target.value.replace(/[^0-9.,]/g, ''))}
+                  className="w-full border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800 outline-none focus:ring-2 focus:ring-blue-200"
+                />
+                <p className="text-[10px] text-text-muted mt-0.5">Saisie directe → recalcule HT</p>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-green-700 mb-1">Prix Vente HT (DT) ✅</label>

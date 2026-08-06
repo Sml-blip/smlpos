@@ -92,6 +92,7 @@ export default function InventaireTab() {
   const [filterType, setFilterType] = useState<'all' | 'F' | 'NF'>('all')
   const [filterLowStock, setFilterLowStock] = useState(false)
   const [filterCategorie, setFilterCategorie] = useState<string>('all')
+  const [filterTva, setFilterTva] = useState<string>('all')
   const [sortKey, setSortKey] = useState<SortKey>('nom')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showInventoryPriceSearch, setShowInventoryPriceSearch] = useState(false)
@@ -190,7 +191,7 @@ export default function InventaireTab() {
   }, [debouncedSearch, produits])
 
   // Reset visible count when filters change
-  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, sortKey, sortDir])
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, filterTva, sortKey, sortDir])
 
   // Infinite scroll — show more rows when sentinel is visible
   useEffect(() => {
@@ -230,6 +231,7 @@ export default function InventaireTab() {
       if (filterType !== 'all' && p.type !== filterType) return []
       if (filterLowStock && p.stock_actuel > p.stock_minimum) return []
       if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return []
+      if (filterTva !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTva)) return []
       return [p]
     }
     const baseList = debouncedSearch.length >= 2
@@ -240,6 +242,7 @@ export default function InventaireTab() {
         if (filterType !== 'all' && p.type !== filterType) return false
         if (filterLowStock && p.stock_actuel > p.stock_minimum) return false
         if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return false
+        if (filterTva !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTva)) return false
         return true
       })
       .sort((a, b) => {
@@ -251,7 +254,7 @@ export default function InventaireTab() {
           ? va < vb ? -1 : va > vb ? 1 : 0
           : va > vb ? -1 : va < vb ? 1 : 0
       })
-  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, sortKey, sortDir])
+  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, filterTva, sortKey, sortDir])
 
   // Visible slice — virtual scroll
   const visibleRows = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
@@ -260,6 +263,11 @@ export default function InventaireTab() {
   const lowStockCount = useMemo(() => produits.filter(p => p.stock_actuel <= p.stock_minimum).length, [produits])
   const totalValeur = useMemo(() => produits.reduce((s, p) => s + p.prix_vente * p.stock_actuel, 0), [produits])
   const categories = useMemo(() => Array.from(new Set(produits.map(p => p.categorie).filter(Boolean))), [produits])
+  const tvaRates = useMemo(() => Array.from(new Set(
+    [0, 7, 13, 19, ...produits
+      .map(p => Number(p.tva_taux ?? 0))
+      .filter(rate => Number.isFinite(rate))],
+  )).sort((a, b) => a - b), [produits])
   const inventoryPriceMatches = useMemo(() => {
     const target = parseFloat(inventoryPriceQuery.replace(',', '.'))
     if (!Number.isFinite(target) || target < 0) return []
@@ -578,6 +586,21 @@ export default function InventaireTab() {
         >
           <option value="all">Toutes catégories</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+
+        {/* Sales VAT filter */}
+        <select
+          value={filterTva}
+          onChange={e => setFilterTva(e.target.value)}
+          className={cn(
+            'border rounded-lg px-2 py-1.5 text-xs bg-white transition-colors',
+            filterTva === 'all' ? 'border-border text-text-secondary' : 'border-blue-300 bg-blue-50 text-blue-800 font-semibold',
+          )}
+          title="Filtrer par taux de TVA vente"
+          aria-label="Filtrer par taux de TVA vente"
+        >
+          <option value="all">Toutes TVA</option>
+          {tvaRates.map(rate => <option key={rate} value={String(rate)}>TVA {rate}%</option>)}
         </select>
 
         {/* Low stock filter */}
@@ -1053,7 +1076,8 @@ export default function InventaireTab() {
                         <input
                           type="text"
                           inputMode="decimal"
-                          value={formData.prix_achat_ttc || pricing.prixAchatTTC.toFixed(3)}
+                          value={formData.prix_achat_ttc}
+                          placeholder={pricing.prixAchatTTC.toFixed(3)}
                           onChange={e => onPrixAchatTtcChange(e.target.value.replace(/[^0-9.,]/g, ''))}
                           className="w-full border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800"
                         />
