@@ -153,7 +153,14 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
       if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } } }
     }
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31))
+    // Excel worksheet tabs cannot contain : \\ / ? * [ or ]. Keep the report
+    // title/file name untouched; sanitize only this internal workbook tab.
+    const sheetName = title
+      .replace(/[:\\/?*\[\]]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 31) || 'Export'
+    XLSX.utils.book_append_sheet(wb, ws, sheetName)
       const bytes = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
       if (api.exportsSaveExcel) {
         const result = await api.exportsSaveExcel(bytes, fileName)
