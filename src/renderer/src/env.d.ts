@@ -222,6 +222,7 @@ interface Window {
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
     documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: Record<string, unknown>) => Promise<{ success?: boolean; error?: string }>
     documentsGetLastNumber: (prefix: string) => Promise<number>
+    exportsSaveExcel?: (base64: string, suggestedName?: string) => Promise<{ success?: boolean; canceled?: boolean; path?: string; error?: string }>
 
     // Paramètres App
     settingsGetAll: () => Promise<Record<string, string>>

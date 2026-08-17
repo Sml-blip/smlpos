@@ -6,6 +6,7 @@ import { cn, formatPrice } from '../../lib/utils'
 import { usePrint } from '../../lib/usePrint'
 import { printLabelHtml } from '../../lib/nativePrint'
 import { loadData, runAction } from '../../lib/apiCall'
+import { showToast } from '../../lib/toast'
 import DocumentPrintModal from '../historique/DocumentPrintModal'
 import FactureAchatPrintModal from '../achats/FactureAchatPrintModal'
 import PinUnlockModal from '../../components/PinUnlockModal'
@@ -68,12 +69,14 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
 ]
 
 // ── Excel Export Preview Modal ─────────────────────────────────────────────────
-function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats }: {
+function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats, totalColumns = [], totalLabelColumn }: {
   rows: Record<string, unknown>[]
   columns: string[]
   title: string
   fileName: string
   isAchats?: boolean
+  totalColumns?: string[]
+  totalLabelColumn?: string
   onClose: () => void
 }) {
   const [editRows, setEditRows] = useState<Record<string, unknown>[]>(initialRows)
@@ -85,6 +88,7 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
   const [periodTrimestre, setPeriodTrimestre] = useState<'Q1' | 'Q2' | 'Q3' | 'Q4'>('Q1')
   const [periodFrom, setPeriodFrom] = useState('')
   const [periodTo, setPeriodTo] = useState('')
+  const [exporting, setExporting] = useState(false)
   const { printRef, handlePrint } = usePrint(title)
 
   // Update title/filename when period changes
@@ -100,8 +104,49 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
     setFileName(`${fileBase}_${label.replace(/\//g, '_')}.xlsx`)
   }, [periodMode, periodMois, periodAnnee, periodTrimestre, periodFrom, periodTo, isAchats])
 
-  const exportToExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(editRows)
+  const periodBounds = useMemo(() => {
+    if (periodMode === 'mois' && /^\d{4}-\d{2}$/.test(periodMois)) {
+      const [year, month] = periodMois.split('-').map(Number)
+      const last = new Date(year, month, 0).getDate()
+      return { from: `${periodMois}-01`, to: `${periodMois}-${String(last).padStart(2, '0')}` }
+    }
+    if (periodMode === 'trimestre' && /^\d{4}$/.test(periodAnnee)) {
+      const startMonth = ({ Q1: 1, Q2: 4, Q3: 7, Q4: 10 } as const)[periodTrimestre]
+      const endMonth = startMonth + 2
+      const last = new Date(Number(periodAnnee), endMonth, 0).getDate()
+      return {
+        from: `${periodAnnee}-${String(startMonth).padStart(2, '0')}-01`,
+        to: `${periodAnnee}-${String(endMonth).padStart(2, '0')}-${String(last).padStart(2, '0')}`,
+      }
+    }
+    if (periodMode === 'annee' && /^\d{4}$/.test(periodAnnee)) return { from: `${periodAnnee}-01-01`, to: `${periodAnnee}-12-31` }
+    return { from: periodFrom, to: periodTo }
+  }, [periodMode, periodMois, periodAnnee, periodTrimestre, periodFrom, periodTo])
+
+  const visibleRows = useMemo(() => editRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => {
+      const rawDate = String(row.__exportDate ?? '').slice(0, 10)
+      if (!rawDate) return true
+      return (!periodBounds.from || rawDate >= periodBounds.from) && (!periodBounds.to || rawDate <= periodBounds.to)
+    }), [editRows, periodBounds])
+
+  const exportRows = useMemo(() => {
+    const data = visibleRows.map(({ row }) => Object.fromEntries(columns.map(column => [column, row[column] ?? ''])))
+    if (!totalColumns.length || !totalLabelColumn) return data
+    const total = Object.fromEntries(columns.map(column => [column, ''])) as Record<string, unknown>
+    total[totalLabelColumn] = 'TOTAL'
+    for (const column of totalColumns) {
+      total[column] = +data.reduce((sum, row) => sum + (Number(row[column]) || 0), 0).toFixed(3)
+    }
+    return [...data, total]
+  }, [visibleRows, columns, totalColumns, totalLabelColumn])
+
+  const exportToExcel = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const ws = XLSX.utils.json_to_sheet(exportRows, { header: columns })
     const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
     for (let c = range.s.c; c <= range.e.c; c++) {
       const cell = XLSX.utils.encode_cell({ r: 0, c })
@@ -109,7 +154,20 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
     }
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31))
-    XLSX.writeFile(wb, fileName)
+      const bytes = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
+      if (api.exportsSaveExcel) {
+        const result = await api.exportsSaveExcel(bytes, fileName)
+        if (result?.canceled) return
+        if (!result?.success) throw new Error(result?.error || 'Échec enregistrement Excel')
+      } else {
+        XLSX.writeFile(wb, fileName)
+      }
+      showToast('success', `${exportRows.length} ligne(s) exportée(s)`)
+    } catch (error) {
+      showToast('error', `Export Excel: ${error instanceof Error ? error.message : 'échec'}`)
+    } finally {
+      setExporting(false)
+    }
   }
 
   const updateCell = (rowIdx: number, col: string, val: string) => {
@@ -135,8 +193,8 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
             <button onClick={() => handlePrint()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
               <Printer size={13} /> Imprimer
             </button>
-            <button onClick={exportToExcel} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold">
-              <Download size={13} /> Exporter Excel
+            <button onClick={() => void exportToExcel()} disabled={exporting} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold">
+              <Download size={13} /> {exporting ? 'Export…' : 'Exporter Excel'}
             </button>
             <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
           </div>
@@ -192,19 +250,19 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
               </tr>
             </thead>
             <tbody>
-              {editRows.map((row, i) => (
-                <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+              {visibleRows.map(({ row, index }, i) => (
+                <tr key={index} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   {columns.map(col => (
                     <td key={col} className="border border-gray-200 px-1 py-0.5">
                       <input
                         value={String(row[col] ?? '')}
-                        onChange={e => updateCell(i, col, e.target.value)}
+                        onChange={e => updateCell(index, col, e.target.value)}
                         className="w-full bg-transparent text-xs outline-none px-1"
                       />
                     </td>
                   ))}
                   <td className="border border-gray-200 px-1 py-0.5 no-print">
-                    <button onClick={() => removeRow(i)} className="text-danger hover:text-red-700 w-full flex justify-center">
+                    <button onClick={() => removeRow(index)} className="text-danger hover:text-red-700 w-full flex justify-center">
                       <X size={11} />
                     </button>
                   </td>
@@ -219,7 +277,7 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
           <button onClick={addRow} className="flex items-center gap-1.5 px-3 py-1.5 bg-muted hover:bg-border border border-border rounded-lg text-xs font-semibold">
             <Plus size={12} /> Ajouter ligne
           </button>
-          <span className="text-xs text-text-muted ml-auto">{editRows.length} ligne(s)</span>
+          <span className="text-xs text-text-muted ml-auto">{visibleRows.length} ligne(s) sur {editRows.length}</span>
         </div>
       </div>
     </div>
@@ -234,7 +292,10 @@ export default function DocumentsTab() {
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [excelModal, setExcelModal] = useState<{ rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean } | null>(null)
+  const [excelModal, setExcelModal] = useState<{
+    rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean
+    totalColumns?: string[]; totalLabelColumn?: string
+  } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<DocRow | null>(null)
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
   const [printAchatId, setPrintAchatId] = useState<string | null>(null)
@@ -400,17 +461,8 @@ export default function DocumentsTab() {
       'HT 19%':        f.ht_19 != null ? +f.ht_19.toFixed(3) : null,
       'TVA 19%':       f.tva_19 != null ? +f.tva_19.toFixed(3) : null,
       'TOTAL REMISE':  f.total_remise != null ? +f.total_remise.toFixed(3) : null,
+      __exportDate:   f.created_at,
     }))
-    const sum = (key: string) => rows.reduce((s, r) => s + (Number(r[key as keyof typeof r]) || 0), 0)
-    rows.push({
-      'N° FACTURE': 'TOTAL', 'DATE DE FACTURE': '', 'SOCIETE': '', 'EXO': null,
-      'HT': +sum('HT').toFixed(3), 'TVA': +sum('TVA').toFixed(3),
-      'TTC': +sum('TTC').toFixed(3), 'TIMBRE': +sum('TIMBRE').toFixed(3),
-      'TOT GENERAL': +sum('TOT GENERAL').toFixed(3),
-      'HT 7%': +sum('HT 7%').toFixed(3), 'TVA 7%': +sum('TVA 7%').toFixed(3),
-      'HT 19%': +sum('HT 19%').toFixed(3), 'TVA 19%': +sum('TVA 19%').toFixed(3),
-      'TOTAL REMISE': +sum('TOTAL REMISE').toFixed(3),
-    })
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
     setExcelModal({
       rows: rows as Record<string, unknown>[],
@@ -418,12 +470,21 @@ export default function DocumentsTab() {
       title: `Bilan Factures Achat ${periode}`,
       fileName: `FACTURES_ACHAT_${periode.replace('/', '_')}.xlsx`,
       isAchats: true,
+      totalColumns: ['HT','TVA','TTC','TIMBRE','TOT GENERAL','HT 7%','TVA 7%','HT 19%','TVA 19%','TOTAL REMISE'],
+      totalLabelColumn: 'N° FACTURE',
     })
   }
 
   // ── Export Format B — Bilan Factures Vente ──
-  const exportVentes = () => {
-    const ventes = tabFiltered.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'DEVIS' || d.type_document === 'BON_LIVRAISON' || d.type_document === 'AVOIR'))
+  const exportVentes = async () => {
+    const exportFilters: Record<string, unknown> = {}
+    if (dateFrom) exportFilters.dateFrom = dateFrom
+    if (dateTo) exportFilters.dateTo = dateTo
+    const result = await loadData('Préparation export ventes', () => api.documentsListAll(exportFilters) as Promise<DocRow[]>)
+    if (!result) return
+    const ventes = result.filter(d => d._source !== 'ff' && (
+      d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F'
+    ))
     const rows = ventes.map(f => ({
       'DOCUMENT':  f.numero,
       'CLIENT':    f.client_nom ?? '',
@@ -438,21 +499,16 @@ export default function DocumentsTab() {
       'TOTAL TVA': +(f.total_tva ?? 0).toFixed(3),
       'TOTAL HT':  +(f.total_ht ?? 0).toFixed(3),
       'TOTAL TTC': +(f.total_ttc ?? 0).toFixed(3),
+      __exportDate: f.created_at,
     }))
-    const sum = (key: string) => rows.reduce((s, r) => s + (Number(r[key as keyof typeof r]) || 0), 0)
-    rows.push({
-      'DOCUMENT': 'TOTAL', 'CLIENT': '', 'DATE': '', 'AVOIR': '',
-      'EXO': null,
-      'TVA': +sum('TVA').toFixed(3), 'BASE': +sum('BASE').toFixed(3), 'MONTANT': +sum('MONTANT').toFixed(3),
-      'TAXE': +sum('TAXE').toFixed(3), 'MT TAXE': +sum('MT TAXE').toFixed(3),
-      'TOTAL TVA': +sum('TOTAL TVA').toFixed(3), 'TOTAL HT': +sum('TOTAL HT').toFixed(3), 'TOTAL TTC': +sum('TOTAL TTC').toFixed(3),
-    })
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
     setExcelModal({
       rows: rows as Record<string, unknown>[],
       columns: ['DOCUMENT','CLIENT','DATE','AVOIR','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
       title: `Bilan Ventes ${periode}`,
       fileName: `BILAN_VENTES_${periode.replace('/', '_')}.xlsx`,
+      totalColumns: ['TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
+      totalLabelColumn: 'DOCUMENT',
     })
   }
 
@@ -621,6 +677,8 @@ export default function DocumentsTab() {
           title={excelModal.title}
           fileName={excelModal.fileName}
           isAchats={excelModal.isAchats}
+          totalColumns={excelModal.totalColumns}
+          totalLabelColumn={excelModal.totalLabelColumn}
           onClose={() => setExcelModal(null)}
         />
       )}

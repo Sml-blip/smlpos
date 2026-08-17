@@ -1406,6 +1406,27 @@ function setupIpcHandlers() {
     return { success: true, changes: result.changes, product: normalized, reused: false }
   })
 
+  // Excel exports must use Electron's native save path. Browser downloads can
+  // appear frozen in packaged Windows builds because there is no browser shelf.
+  ipcMain.handle('exports:saveExcel', async (_e, base64: string, suggestedName = 'export.xlsx') => {
+    try {
+      if (typeof base64 !== 'string' || !base64.trim()) return { success: false, error: 'Fichier Excel vide' }
+      const safeName = `${basename(suggestedName, extname(suggestedName)) || 'export'}.xlsx`
+      const target = await dialog.showSaveDialog(mainWindow ?? undefined, {
+        title: 'Enregistrer export Excel',
+        defaultPath: safeName,
+        filters: [{ name: 'Fichier Excel', extensions: ['xlsx'] }],
+      })
+      if (target.canceled || !target.filePath) return { success: false, canceled: true }
+      const buffer = Buffer.from(base64, 'base64')
+      if (!buffer.length) return { success: false, error: 'Données Excel invalides' }
+      writeFileSync(target.filePath, buffer)
+      return { success: true, path: target.filePath }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('produits:update', (_e, id, p) => {
     const normalized = {
       has_serial_number: 0, numero_serie: null,

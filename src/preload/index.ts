@@ -213,6 +213,7 @@ const api = {
   documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
     ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),
   documentsGetLastNumber: (prefix: string) => ipcRenderer.invoke('documents:getLastNumber', prefix),
+  exportsSaveExcel: (base64: string, suggestedName?: string) => ipcRenderer.invoke('exports:saveExcel', base64, suggestedName),
   facturesCountBLPending: () => ipcRenderer.invoke('factures:countBLPending'),
   facturesListBLPending: () => ipcRenderer.invoke('factures:listBLPending'),
 
