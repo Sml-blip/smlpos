@@ -7,6 +7,7 @@ import { cn, formatPrice } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
 import { printAdvanceReceipt, printCreditReceipt } from '../../lib/clientPaymentReceipt'
+import { parseInstallmentPlan, upcomingInstallments } from '../../lib/creditInstallments'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
 import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Save, Clock, ClipboardList } from 'lucide-react'
 import ReparationModal from './ReparationModal'
@@ -1309,6 +1310,7 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
 // ── Credit Client Paiement Modal ─────────────────────────────────────────────
 interface ClientMin { id: string; nom: string; telephone?: string; adresse?: string; solde_credit: number; organisation_id?: string }
 interface OrganisationMin { id: string; nom: string }
+interface CreditPaymentHistory { id: string; type: 'CREDIT' | 'PAIEMENT'; montant: number; note?: string; created_at: string }
 
 function CreditClientPaiementModal({
   currentShift, onClose, onSuccess,
@@ -1320,6 +1322,7 @@ function CreditClientPaiementModal({
   const [search, setSearch] = useState('')
   const [clients, setClients] = useState<ClientMin[]>([])
   const [selected, setSelected] = useState<ClientMin | null>(null)
+  const [creditHistory, setCreditHistory] = useState<CreditPaymentHistory[]>([])
   const [organisations, setOrganisations] = useState<OrganisationMin[]>([])
   const [organisationId, setOrganisationId] = useState('all')
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -1340,6 +1343,21 @@ function CreditClientPaiementModal({
   }, [search, organisationId])
 
   const montantNum = parseFloat(montant.replace(',', '.')) || 0
+  const activePlan = creditHistory
+    .filter(row => row.type === 'CREDIT')
+    .map(row => ({ row, plan: parseInstallmentPlan(row.note) }))
+    .find((item): item is { row: CreditPaymentHistory; plan: NonNullable<ReturnType<typeof parseInstallmentPlan>> } => Boolean(item.plan))
+  const planSchedule = activePlan ? upcomingInstallments(activePlan.plan) : []
+  const planPaid = activePlan ? Math.min(activePlan.plan.total, creditHistory
+    .filter(row => row.type === 'PAIEMENT' && row.created_at >= activePlan.row.created_at)
+    .reduce((sum, row) => sum + row.montant, 0)) : 0
+  const nextInstallment = activePlan ? planSchedule.find(due => due.amount > planPaid - planSchedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0)) : null
+
+  useEffect(() => {
+    if (!selected) { setCreditHistory([]); return }
+    void loadData('Chargement échéancier', () => api.creditsList(selected.id), { silent: true })
+      .then(rows => rows && setCreditHistory(rows as CreditPaymentHistory[]))
+  }, [selected])
 
   const handleSave = async () => {
     if (!selected || montantNum <= 0) return
@@ -1441,6 +1459,14 @@ function CreditClientPaiementModal({
                   <XIcon size={14} />
                 </button>
               </div>
+
+              {activePlan && (
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-indigo-900">Mensualités · {activePlan.plan.months} mois</span><span className="font-price text-xs font-bold text-indigo-700">{formatPrice(activePlan.plan.monthlyAmount)} DT/mois</span></div>
+                  <div className="mt-1 text-[11px] text-indigo-800">{formatPrice(planPaid)} payé sur {formatPrice(activePlan.plan.total)}{nextInstallment && <> · prochaine échéance <strong>{new Date(`${nextInstallment.date}T12:00:00`).toLocaleDateString('fr-FR')}</strong></>}</div>
+                  <div className="mt-2 flex gap-1">{planSchedule.map(due => { const before = planSchedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0); return <span key={due.number} className={cn('h-1.5 min-w-3 flex-1 rounded-full', planPaid >= before + due.amount - 0.0001 ? 'bg-green-500' : 'bg-indigo-200')} /> })}</div>
+                </div>
+              )}
 
               {/* Amount */}
               <div>

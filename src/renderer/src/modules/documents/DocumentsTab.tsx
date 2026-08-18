@@ -487,13 +487,11 @@ export default function DocumentsTab() {
     const exportFilters: Record<string, unknown> = {}
     if (dateFrom) exportFilters.dateFrom = dateFrom
     if (dateTo) exportFilters.dateTo = dateTo
-    const result = await loadData('Préparation export ventes', () => api.documentsListAll(exportFilters) as Promise<DocRow[]>)
+    const result = await loadData('Préparation export ventes', () => api.documentsExportSalesBilan(exportFilters) as Promise<DocRow[]>)
     if (!result) return
-    const ventes = result.filter(d => d._source !== 'ff' && (
-      d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F'
-    ))
-    const rows = ventes.map(f => ({
+    const rows = result.map(f => ({
       'DOCUMENT':  f.numero,
+      'TYPE':      f.type_document === 'FACTURE_JOURNALIERE_F' ? 'Facture journalière' : 'Facture vente',
       'CLIENT':    f.client_nom ?? '',
       'DATE':      format(new Date(f.created_at), 'dd/MM/yyyy'),
       'AVOIR':     f.avoir_numero ?? '',
@@ -511,7 +509,7 @@ export default function DocumentsTab() {
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
     setExcelModal({
       rows: rows as Record<string, unknown>[],
-      columns: ['DOCUMENT','CLIENT','DATE','AVOIR','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
+      columns: ['DOCUMENT','TYPE','CLIENT','DATE','AVOIR','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
       title: `Bilan Ventes ${periode}`,
       fileName: `BILAN_VENTES_${periode.replace('/', '_')}.xlsx`,
       totalColumns: ['TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],

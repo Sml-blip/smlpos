@@ -212,6 +212,7 @@ interface Window {
     // Documents (Facture/Devis/BL)
     documentsList: (filters?: unknown) => Promise<unknown[]>
     documentsListAll?: (filters?: unknown) => Promise<unknown[]>
+    documentsExportSalesBilan: (filters?: unknown) => Promise<unknown[]>
     documentsGet?: (id: string) => Promise<Record<string, unknown> | null | undefined>
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
     documentsCreateDailyFactureF?: (localDate?: string) => Promise<{ success?: boolean; skipped?: boolean; updated?: boolean; documentId?: string; numero?: string; lineCount?: number; reason?: string; error?: string }>

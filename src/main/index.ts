@@ -3340,10 +3340,13 @@ function setupIpcHandlers() {
       const creditRow = {
         id, client_id: clientData.id, client_nom: clientData.nom, shift_id: null,
         type: 'CREDIT', montant: creditInitial, reference: null,
-        note: 'Crédit initial à la création', operateur: agent_initial ?? 'superadmin', created_at: now,
+        // The client form may attach a structured installment plan to the note.
+        // Persist it with the credit movement so it is available in history, POS
+        // repayments and across sync without adding a fragile parallel balance.
+        note: String(note_credit ?? '').trim() || 'Crédit initial à la création', operateur: agent_initial ?? 'superadmin', created_at: now,
       }
       db.prepare(`INSERT INTO credits_clients (id,client_id,client_nom,shift_id,type,montant,reference,note,operateur,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-        .run(id, clientData.id, clientData.nom, null, 'CREDIT', creditInitial, null, 'Crédit initial à la création', agent_initial ?? 'superadmin', now)
+        .run(id, clientData.id, clientData.nom, null, 'CREDIT', creditInitial, null, String(note_credit ?? '').trim() || 'Crédit initial à la création', agent_initial ?? 'superadmin', now)
       db.prepare(`UPDATE clients SET solde_credit = solde_credit + ? WHERE id = ?`).run(creditInitial, clientData.id)
       enqueueSync('credits_clients', 'INSERT', creditRow)
     }
@@ -4209,6 +4212,24 @@ function setupIpcHandlers() {
     return [...docs, ...ffDocs].sort((a, b) =>
       String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
     ).slice(0, 500)
+  })
+
+  // Fiscal sales export: regular invoices and daily invoices are one report.
+  // This avoids the documents screen pagination limit and excludes cancelled docs.
+  ipcMain.handle('documents:exportSalesBilan', (_e, filters: Record<string, unknown> = {}) => {
+    const params: unknown[] = []
+    let dateCond = ''
+    if (filters.dateFrom) { dateCond += ' AND created_at >= ?'; params.push(`${filters.dateFrom}T00:00:00.000Z`) }
+    if (filters.dateTo) { dateCond += ' AND created_at <= ?'; params.push(`${filters.dateTo}T23:59:59.999Z`) }
+    return db.prepare(`
+      SELECT id, numero, type_document, statut, client_nom, total_ht, total_tva, total_ttc,
+        exo, created_at, avoir_id
+      FROM documents
+      WHERE type_document IN ('FACTURE_VENTE', 'FACTURE_JOURNALIERE_F')
+        AND COALESCE(statut, 'ACTIF') NOT IN ('ANNULE', 'REVOQUE')
+        ${dateCond}
+      ORDER BY created_at ASC, numero ASC
+    `).all(...params)
   })
 
   // ── Sync Queue (production-safe, no raw SQL exposure) ──────────────────────

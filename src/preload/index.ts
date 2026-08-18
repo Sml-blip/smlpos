@@ -202,6 +202,7 @@ const api = {
   // Documents (Facture/Devis/BL)
   documentsList: (filters?: unknown) => ipcRenderer.invoke('documents:list', filters),
   documentsListAll: (filters?: unknown) => ipcRenderer.invoke('documents:listAll', filters),
+  documentsExportSalesBilan: (filters?: unknown) => ipcRenderer.invoke('documents:exportSalesBilan', filters),
   documentsGet: (id: string) => ipcRenderer.invoke('documents:get', id),
   documentsCreate: (doc: unknown, lignes: unknown[]) => ipcRenderer.invoke('documents:create', doc, lignes),
   documentsCreateDailyFactureF: (localDate?: string) => ipcRenderer.invoke('documents:createDailyFactureF', localDate),
