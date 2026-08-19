@@ -48,6 +48,72 @@ interface DocRow {
   facture_origine_numero?: string | null
 }
 
+interface TvaBucket { taux: number; base: number; montant: number }
+interface TvaExportDoc extends DocRow {
+  client_id?: string | null
+  tax_buckets?: TvaBucket[]
+}
+
+const money3 = (value: number) => Math.round((Number(value) || 0) * 1000) / 1000
+
+function buildTvaSalesWorksheet(docs: TvaExportDoc[], bounds: { from: string; to: string }) {
+  const periodStart = bounds.from ? new Date(`${bounds.from}T12:00:00`) : null
+  const periodEnd = bounds.to ? new Date(`${bounds.to}T12:00:00`) : null
+  const generatedAt = new Date()
+  const rows: unknown[][] = [
+    ['', '', '', '', '', 'TVA / Vente', '', '', '', '', '', '', 'Document généré le'],
+    ['', '', '', '', '', 'Sur la période de', '', periodStart ?? '', '', periodEnd ?? '', '', '', generatedAt],
+    ['Document', 'Code', 'Client', 'Date', 'Exoné', 'TVA', 'Base', 'Montant', 'Taxe', 'MT Taxe', 'Total TVA', 'Total HT', 'Total_TTC'],
+  ]
+  let totalHt = 0
+  let totalTva = 0
+  let totalTtc = 0
+  let totalTimbre = 0
+  for (const doc of docs) {
+    const timbre = money3(Number(doc.timbre) || 0)
+    const docHt = money3(doc.total_ht)
+    const docTva = money3(doc.total_tva)
+    const docTtc = money3(Number(doc.total_ttc) + timbre)
+    totalHt += docHt
+    totalTva += docTva
+    totalTtc += docTtc
+    totalTimbre += timbre
+    rows.push([doc.numero, doc.client_id ?? '', doc.client_nom ?? 'Client Passager', new Date(doc.created_at), doc.exo ? 'Oui' : '', '', '', '', '', '', docTva, docHt, docTtc])
+    const buckets = (doc.tax_buckets?.length ? doc.tax_buckets : [{ taux: 0, base: docHt, montant: docTva }])
+    for (const bucket of buckets) {
+      rows.push(['', '', '', '', bucket.taux <= 0 ? 'Oui' : '', bucket.taux > 0 ? bucket.taux : '', money3(bucket.base), money3(bucket.montant)])
+    }
+    if (timbre > 0) rows.push(['', '', '', '', '', '', '', '', 'TIMBRE FISCAL', timbre])
+  }
+  rows.push(['', '', '', 'Total HT', 'Total TVA', '', 'Vente TTC'])
+  rows.push(['Total', '', '', money3(totalHt), money3(totalTva), '', money3(totalTtc)])
+
+  const ws = XLSX.utils.aoa_to_sheet(rows)
+  ws['!cols'] = [15, 13, 26, 13, 10, 8, 12, 12, 12, 10, 12, 12, 12].map(wch => ({ wch }))
+  ws['!freeze'] = { xSplit: 0, ySplit: 3 }
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
+  for (let c = 0; c <= 12; c++) {
+    const cell = XLSX.utils.encode_cell({ r: 2, c })
+    if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } }, alignment: { horizontal: 'center' } }
+  }
+  for (const row of [0, 1]) for (let c = 0; c <= 12; c++) {
+    const cell = XLSX.utils.encode_cell({ r: row, c })
+    if (ws[cell]) ws[cell].s = { font: { bold: row === 0 }, alignment: { horizontal: c >= 5 ? 'center' : 'left' } }
+  }
+  for (let r = 3; r <= range.e.r; r++) {
+    for (const c of [3, 5, 6, 7, 9, 10, 11, 12]) {
+      const cell = XLSX.utils.encode_cell({ r, c })
+      if (ws[cell] && typeof ws[cell].v === 'number') ws[cell].z = c === 3 ? 'dd/mm/yyyy' : '#,##0.000'
+    }
+  }
+  const totalRow = rows.length - 1
+  for (let c = 0; c <= 12; c++) {
+    const cell = XLSX.utils.encode_cell({ r: totalRow, c })
+    if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFF2CC' } } }
+  }
+  return { ws, documentCount: docs.length, totalTimbre: money3(totalTimbre) }
+}
+
 const STATUT_CONFIG: Record<string, { label: string; cls: string }> = {
   ACTIF:      { label: 'Actif',      cls: 'bg-green-100 text-green-800 border-green-300' },
   NON_ARRIVE: { label: 'Non arrivé', cls: 'bg-yellow-100 text-yellow-800 border-yellow-300' },
@@ -69,7 +135,7 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
 ]
 
 // ── Excel Export Preview Modal ─────────────────────────────────────────────────
-function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats, totalColumns = [], totalLabelColumn }: {
+function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats, totalColumns = [], totalLabelColumn, tvaDocs }: {
   rows: Record<string, unknown>[]
   columns: string[]
   title: string
@@ -77,6 +143,7 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
   isAchats?: boolean
   totalColumns?: string[]
   totalLabelColumn?: string
+  tvaDocs?: TvaExportDoc[]
   onClose: () => void
 }) {
   const [editRows, setEditRows] = useState<Record<string, unknown>[]>(initialRows)
@@ -98,8 +165,8 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
     else if (periodMode === 'trimestre') label = `${periodTrimestre}_${periodAnnee}`
     else if (periodMode === 'annee') label = periodAnnee
     else label = `${periodFrom}_${periodTo}`
-    const base = isAchats ? 'Bilan Factures Achat' : 'Bilan Ventes'
-    const fileBase = isAchats ? 'FACTURES_ACHAT' : 'BILAN_VENTES'
+    const base = tvaDocs ? 'État TVA Vente' : isAchats ? 'Bilan Factures Achat' : 'Bilan Ventes'
+    const fileBase = tvaDocs ? 'ETAT_TVA_VENTE' : isAchats ? 'FACTURES_ACHAT' : 'BILAN_VENTES'
     setTitle(`${base} ${label}`)
     setFileName(`${fileBase}_${label.replace(/\//g, '_')}.xlsx`)
   }, [periodMode, periodMois, periodAnnee, periodTrimestre, periodFrom, periodTo, isAchats])
@@ -146,13 +213,18 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
     if (exporting) return
     setExporting(true)
     try {
-      const ws = XLSX.utils.json_to_sheet(exportRows, { header: columns })
-    const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const cell = XLSX.utils.encode_cell({ r: 0, c })
-      if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } } }
-    }
-    const wb = XLSX.utils.book_new()
+      const tvaTemplate = tvaDocs
+        ? buildTvaSalesWorksheet(visibleRows.map(({ index }) => tvaDocs[index]).filter(Boolean), periodBounds)
+        : null
+      const ws = tvaTemplate?.ws ?? XLSX.utils.json_to_sheet(exportRows, { header: columns })
+      if (!tvaTemplate) {
+        const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const cell = XLSX.utils.encode_cell({ r: 0, c })
+          if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } } }
+        }
+      }
+      const wb = XLSX.utils.book_new()
     // Excel worksheet tabs cannot contain : \\ / ? * [ or ]. Keep the report
     // title/file name untouched; sanitize only this internal workbook tab.
     const sheetName = title
@@ -169,7 +241,7 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
       } else {
         XLSX.writeFile(wb, fileName)
       }
-      showToast('success', `${exportRows.length} ligne(s) exportée(s)`)
+      showToast('success', tvaTemplate ? `État TVA exporté · ${tvaTemplate.documentCount} document(s)` : `${exportRows.length} ligne(s) exportée(s)`)
     } catch (error) {
       showToast('error', `Export Excel: ${error instanceof Error ? error.message : 'échec'}`)
     } finally {
@@ -301,7 +373,7 @@ export default function DocumentsTab() {
   const [dateTo, setDateTo] = useState('')
   const [excelModal, setExcelModal] = useState<{
     rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean
-    totalColumns?: string[]; totalLabelColumn?: string
+    totalColumns?: string[]; totalLabelColumn?: string; tvaDocs?: TvaExportDoc[]
   } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<DocRow | null>(null)
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
@@ -482,38 +554,35 @@ export default function DocumentsTab() {
     })
   }
 
-  // ── Export Format B — Bilan Factures Vente ──
+  // ── Export Format B — État TVA Vente (accountant invoice-block template) ──
   const exportVentes = async () => {
     const exportFilters: Record<string, unknown> = {}
     if (dateFrom) exportFilters.dateFrom = dateFrom
     if (dateTo) exportFilters.dateTo = dateTo
-    const result = await loadData('Préparation export ventes', () => api.documentsExportSalesBilan(exportFilters) as Promise<DocRow[]>)
+    const result = await loadData('Préparation état TVA vente', () => api.documentsExportSalesTva(exportFilters) as Promise<TvaExportDoc[]>)
     if (!result) return
     const rows = result.map(f => ({
       'DOCUMENT':  f.numero,
       'TYPE':      f.type_document === 'FACTURE_JOURNALIERE_F' ? 'Facture journalière' : 'Facture vente',
       'CLIENT':    f.client_nom ?? '',
       'DATE':      format(new Date(f.created_at), 'dd/MM/yyyy'),
-      'AVOIR':     f.avoir_numero ?? '',
-      'EXO':       f.exo ?? null,
+      'EXO':       f.exo ? 'Oui' : '',
       'TVA':       +(f.total_tva ?? 0).toFixed(3),
       'BASE':      +(f.total_ht ?? 0).toFixed(3),
-      'MONTANT':   +(f.total_ht ?? 0).toFixed(3),
-      'TAXE':      +(f.total_tva ?? 0).toFixed(3),
-      'MT TAXE':   +(f.total_tva ?? 0).toFixed(3),
       'TOTAL TVA': +(f.total_tva ?? 0).toFixed(3),
       'TOTAL HT':  +(f.total_ht ?? 0).toFixed(3),
-      'TOTAL TTC': +(f.total_ttc ?? 0).toFixed(3),
+      'TOTAL TTC': +((f.total_ttc ?? 0) + (f.timbre ?? 0)).toFixed(3),
       __exportDate: f.created_at,
     }))
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
     setExcelModal({
       rows: rows as Record<string, unknown>[],
-      columns: ['DOCUMENT','TYPE','CLIENT','DATE','AVOIR','EXO','TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
-      title: `Bilan Ventes ${periode}`,
-      fileName: `BILAN_VENTES_${periode.replace('/', '_')}.xlsx`,
-      totalColumns: ['TVA','BASE','MONTANT','TAXE','MT TAXE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
+      columns: ['DOCUMENT','TYPE','CLIENT','DATE','EXO','TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
+      title: `État TVA Vente ${periode}`,
+      fileName: `ETAT_TVA_VENTE_${periode.replace('/', '_')}.xlsx`,
+      totalColumns: ['TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
       totalLabelColumn: 'DOCUMENT',
+      tvaDocs: result,
     })
   }
 
@@ -684,6 +753,7 @@ export default function DocumentsTab() {
           isAchats={excelModal.isAchats}
           totalColumns={excelModal.totalColumns}
           totalLabelColumn={excelModal.totalLabelColumn}
+          tvaDocs={excelModal.tvaDocs}
           onClose={() => setExcelModal(null)}
         />
       )}

@@ -4232,6 +4232,46 @@ function setupIpcHandlers() {
     `).all(...params)
   })
 
+  // Fiscal "État TVA Vente" export. Each document carries its own tax buckets
+  // so the renderer can reproduce the accountant's invoice-block template.
+  ipcMain.handle('documents:exportSalesTva', (_e, filters: Record<string, unknown> = {}) => {
+    const params: unknown[] = []
+    let dateCond = ''
+    if (filters.dateFrom) { dateCond += ' AND d.created_at >= ?'; params.push(`${filters.dateFrom}T00:00:00.000Z`) }
+    if (filters.dateTo) { dateCond += ' AND d.created_at <= ?'; params.push(`${filters.dateTo}T23:59:59.999Z`) }
+    const docs = db.prepare(`
+      SELECT d.id, d.numero, d.type_document, d.client_id, d.client_nom, d.created_at,
+        d.exo, d.timbre, d.total_remise, d.total_ht, d.total_tva, d.total_ttc
+      FROM documents d
+      WHERE d.type_document IN ('FACTURE_VENTE', 'FACTURE_JOURNALIERE_F')
+        AND COALESCE(d.statut, 'ACTIF') NOT IN ('ANNULE', 'REVOQUE')
+        ${dateCond}
+      ORDER BY d.created_at ASC, d.numero ASC
+    `).all(...params) as Array<Record<string, unknown>>
+    if (!docs.length) return []
+    const ids = docs.map(doc => String(doc.id))
+    const placeholders = ids.map(() => '?').join(',')
+    const lines = db.prepare(`
+      SELECT document_id, tva_taux, total_ht, total_tva
+      FROM lignes_document
+      WHERE document_id IN (${placeholders})
+      ORDER BY document_id, tva_taux
+    `).all(...ids) as Array<{ document_id: string; tva_taux: number; total_ht: number; total_tva: number }>
+    const buckets = new Map<string, Array<{ taux: number; base: number; montant: number }>>()
+    for (const line of lines) {
+      const id = String(line.document_id)
+      const rate = Math.max(0, Number(line.tva_taux) || 0)
+      const group = buckets.get(id) ?? []
+      const found = group.find(item => item.taux === rate)
+      if (found) {
+        found.base = money3(found.base + (Number(line.total_ht) || 0))
+        found.montant = money3(found.montant + (Number(line.total_tva) || 0))
+      } else group.push({ taux: rate, base: money3(Number(line.total_ht) || 0), montant: money3(Number(line.total_tva) || 0) })
+      buckets.set(id, group)
+    }
+    return docs.map(doc => ({ ...doc, tax_buckets: buckets.get(String(doc.id)) ?? [] }))
+  })
+
   // ── Sync Queue (production-safe, no raw SQL exposure) ──────────────────────
   const SYNC_ALLOWED_TABLES = new Set([
     'operateurs', 'categories', 'fournisseurs', 'organisations', 'clients',
