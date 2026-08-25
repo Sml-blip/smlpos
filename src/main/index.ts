@@ -3587,9 +3587,10 @@ function setupIpcHandlers() {
     db.transaction(() => {
       db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par=@annule_par, annule_at=@annule_at, annule_motif=@annule_motif WHERE id=@id`)
         .run({ id, annule_par: data.annule_par, annule_at: now, annule_motif: data.annule_motif })
-      const lignes = db.prepare(`SELECT produit_id, quantite FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as { produit_id: string; quantite: number }[]
+      const lignes = db.prepare(`SELECT produit_id, quantite, numero_serie FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as Record<string, unknown>[]
       for (const l of lignes) {
-        db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?`).run(l.quantite, l.produit_id)
+        // Restore stock and the exact serial(s) selected for this sale.
+        revertVenteLineInventory(id, l, now)
       }
       loyaltyClientId = String(vente.client_id ?? '') || null
       if (loyaltyClientId) {
@@ -4049,6 +4050,9 @@ function setupIpcHandlers() {
     const now = new Date().toISOString()
     const avoirId = randomUUID()
     const neg = (n: unknown) => -Math.abs(Number(n) || 0)
+    const linkedVenteId = String(doc.vente_id ?? '').trim()
+    let cancelledLinkedSale = false
+    const restoredProductIds = new Set<string>()
 
     const avoirDoc = {
       id: avoirId,
@@ -4115,11 +4119,29 @@ function setupIpcHandlers() {
       for (const l of avoirLignes) insertLigne.run(l)
       db.prepare(`UPDATE documents SET statut='ANNULE', avoir_id=?, annule_motif=?, updated_at=? WHERE id=?`)
         .run(avoirId, motif?.trim() || null, now, id)
+      // A sales invoice generated from a POS sale represents the same inventory
+      // movement. Cancelling it with an avoir returns those items, including the
+      // exact serial numbers, and prevents the original sale from keeping them sold.
+      if (linkedVenteId) {
+        const vente = db.prepare(`SELECT statut FROM ventes WHERE id = ?`).get(linkedVenteId) as { statut?: string } | undefined
+        if (vente && vente.statut !== 'ANNULEE') {
+          const venteLignes = db.prepare(`SELECT produit_id, quantite, numero_serie FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(linkedVenteId) as Record<string, unknown>[]
+          for (const ligne of venteLignes) {
+            revertVenteLineInventory(linkedVenteId, ligne, now)
+            if (ligne.produit_id) restoredProductIds.add(String(ligne.produit_id))
+          }
+          db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par='FACTURE_AVOIR', annule_at=?, annule_motif=? WHERE id=?`)
+            .run(now, motif?.trim() || `Facture ${doc.numero} annulée avec avoir`, linkedVenteId)
+          cancelledLinkedSale = true
+        }
+      }
     })()
 
     enqueueSync('documents', 'INSERT', avoirDoc)
     for (const l of avoirLignes) enqueueSync('lignes_document', 'INSERT', l as Record<string, unknown>)
     enqueueSync('documents', 'UPDATE', { id, statut: 'ANNULE', avoir_id: avoirId, annule_motif: motif?.trim() || null, updated_at: now })
+    if (cancelledLinkedSale) enqueueSync('ventes', 'UPDATE', { id: linkedVenteId, statut: 'ANNULEE', annule_at: now, annule_par: 'FACTURE_AVOIR' })
+    for (const productId of restoredProductIds) enqueueProductSnapshot(productId)
     addActivityLog({
       action: 'FACTURE_ANNULEE_AVEC_AVOIR',
       details: { facture_id: id, facture_numero: doc.numero, avoir_numero: avoirNumero, motif: motif?.trim() || null },

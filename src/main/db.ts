@@ -788,6 +788,20 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE ventes ADD COLUMN client_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_vente ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
 
+  // Repair historical cancellations created before serial restoration existed.
+  // Cancelled sales/invoices must never keep their serial numbers marked VENDU.
+  db.prepare(`
+    UPDATE serial_numbers
+    SET statut = 'EN_STOCK', vente_id = NULL, updated_at = datetime('now')
+    WHERE statut = 'VENDU'
+      AND vente_id IN (
+        SELECT id FROM ventes WHERE statut = 'ANNULEE'
+        UNION
+        SELECT vente_id FROM documents
+        WHERE statut IN ('ANNULE', 'REVOQUE') AND vente_id IS NOT NULL
+      )
+  `).run()
+
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
 

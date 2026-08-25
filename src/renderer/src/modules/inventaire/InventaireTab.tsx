@@ -92,7 +92,8 @@ export default function InventaireTab() {
   const [filterType, setFilterType] = useState<'all' | 'F' | 'NF'>('all')
   const [filterLowStock, setFilterLowStock] = useState(false)
   const [filterCategorie, setFilterCategorie] = useState<string>('all')
-  const [filterTva, setFilterTva] = useState<string>('all')
+  const [filterTvaVente, setFilterTvaVente] = useState<string>('all')
+  const [filterTvaAchat, setFilterTvaAchat] = useState<string>('all')
   const [sortKey, setSortKey] = useState<SortKey>('nom')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showInventoryPriceSearch, setShowInventoryPriceSearch] = useState(false)
@@ -191,7 +192,7 @@ export default function InventaireTab() {
   }, [debouncedSearch, produits])
 
   // Reset visible count when filters change
-  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, filterTva, sortKey, sortDir])
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, filterTvaVente, filterTvaAchat, sortKey, sortDir])
 
   // Infinite scroll — show more rows when sentinel is visible
   useEffect(() => {
@@ -231,7 +232,8 @@ export default function InventaireTab() {
       if (filterType !== 'all' && p.type !== filterType) return []
       if (filterLowStock && p.stock_actuel > p.stock_minimum) return []
       if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return []
-      if (filterTva !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTva)) return []
+      if (filterTvaVente !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTvaVente)) return []
+      if (filterTvaAchat !== 'all' && Number(p.tva_achat_pct ?? 0) !== Number(filterTvaAchat)) return []
       return [p]
     }
     const baseList = debouncedSearch.length >= 2
@@ -242,7 +244,8 @@ export default function InventaireTab() {
         if (filterType !== 'all' && p.type !== filterType) return false
         if (filterLowStock && p.stock_actuel > p.stock_minimum) return false
         if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return false
-        if (filterTva !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTva)) return false
+        if (filterTvaVente !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTvaVente)) return false
+        if (filterTvaAchat !== 'all' && Number(p.tva_achat_pct ?? 0) !== Number(filterTvaAchat)) return false
         return true
       })
       .sort((a, b) => {
@@ -254,7 +257,7 @@ export default function InventaireTab() {
           ? va < vb ? -1 : va > vb ? 1 : 0
           : va > vb ? -1 : va < vb ? 1 : 0
       })
-  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, filterTva, sortKey, sortDir])
+  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, filterTvaVente, filterTvaAchat, sortKey, sortDir])
 
   // Visible slice — virtual scroll
   const visibleRows = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
@@ -263,9 +266,14 @@ export default function InventaireTab() {
   const lowStockCount = useMemo(() => produits.filter(p => p.stock_actuel <= p.stock_minimum).length, [produits])
   const totalValeur = useMemo(() => produits.reduce((s, p) => s + p.prix_vente * p.stock_actuel, 0), [produits])
   const categories = useMemo(() => Array.from(new Set(produits.map(p => p.categorie).filter(Boolean))), [produits])
-  const tvaRates = useMemo(() => Array.from(new Set(
+  const tvaVenteRates = useMemo(() => Array.from(new Set(
     [0, 7, 13, 19, ...produits
       .map(p => Number(p.tva_taux ?? 0))
+      .filter(rate => Number.isFinite(rate))],
+  )).sort((a, b) => a - b), [produits])
+  const tvaAchatRates = useMemo(() => Array.from(new Set(
+    [0, 7, 13, 19, ...produits
+      .map(p => Number(p.tva_achat_pct ?? 0))
       .filter(rate => Number.isFinite(rate))],
   )).sort((a, b) => a - b), [produits])
   const inventoryPriceMatches = useMemo(() => {
@@ -588,19 +596,32 @@ export default function InventaireTab() {
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
 
-        {/* Sales VAT filter */}
+        {/* VAT filters — both filters can be used together */}
         <select
-          value={filterTva}
-          onChange={e => setFilterTva(e.target.value)}
+          value={filterTvaVente}
+          onChange={e => setFilterTvaVente(e.target.value)}
           className={cn(
             'border rounded-lg px-2 py-1.5 text-xs bg-white transition-colors',
-            filterTva === 'all' ? 'border-border text-text-secondary' : 'border-blue-300 bg-blue-50 text-blue-800 font-semibold',
+            filterTvaVente === 'all' ? 'border-green-300 text-green-800' : 'border-green-500 bg-green-50 text-green-900 font-semibold',
           )}
           title="Filtrer par taux de TVA vente"
           aria-label="Filtrer par taux de TVA vente"
         >
-          <option value="all">Toutes TVA</option>
-          {tvaRates.map(rate => <option key={rate} value={String(rate)}>TVA {rate}%</option>)}
+          <option value="all">TVA vente · toutes</option>
+          {tvaVenteRates.map(rate => <option key={rate} value={String(rate)}>TVA vente {rate}%</option>)}
+        </select>
+        <select
+          value={filterTvaAchat}
+          onChange={e => setFilterTvaAchat(e.target.value)}
+          className={cn(
+            'border rounded-lg px-2 py-1.5 text-xs bg-white transition-colors',
+            filterTvaAchat === 'all' ? 'border-blue-300 text-blue-800' : 'border-blue-500 bg-blue-50 text-blue-900 font-semibold',
+          )}
+          title="Filtrer par taux de TVA achat"
+          aria-label="Filtrer par taux de TVA achat"
+        >
+          <option value="all">TVA achat · toutes</option>
+          {tvaAchatRates.map(rate => <option key={rate} value={String(rate)}>TVA achat {rate}%</option>)}
         </select>
 
         {/* Low stock filter */}
