@@ -797,6 +797,10 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE lignes_document ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE ventes ADD COLUMN client_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_vente ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
+  // v1.9.1016 — product-linked client advances.  The fiscal sale total remains
+  // untouched; these fields only identify the part already collected earlier.
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_dossier_id TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_utilisee REAL DEFAULT 0`) } catch { /* already exists */ }
 
   // Repair historical cancellations created before serial restoration existed.
   // Cancelled sales/invoices must never keep their serial numbers marked VENDU.
@@ -844,8 +848,28 @@ export function initDatabase() {
       note                TEXT,
       shift_id            TEXT REFERENCES shifts(id),
       operateur           TEXT,
+      type_avance         TEXT NOT NULL DEFAULT 'LIBRE',
+      dossier_id          TEXT,
+      produit_id          TEXT REFERENCES produits(id),
+      numero_serie        TEXT,
+      prix_produit        REAL,
+      statut              TEXT NOT NULL DEFAULT 'EN_COURS',
+      vente_id            TEXT,
       created_at          TEXT DEFAULT (datetime('now'))
     );
+  `)
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN type_avance TEXT NOT NULL DEFAULT 'LIBRE'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN dossier_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN produit_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN numero_serie TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN prix_produit REAL`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN statut TEXT NOT NULL DEFAULT 'EN_COURS'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN vente_id TEXT`) } catch { /* exists */ }
+  db.exec(`
+    UPDATE avances_clients SET type_avance = 'LIBRE' WHERE type_avance IS NULL OR trim(type_avance) = '';
+    UPDATE avances_clients SET dossier_id = id WHERE dossier_id IS NULL OR trim(dossier_id) = '';
+    CREATE INDEX IF NOT EXISTS idx_avances_client_date ON avances_clients(client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_avances_dossier ON avances_clients(dossier_id, statut);
   `)
 
   const legacyImportDone = db.prepare(`SELECT value FROM app_settings WHERE key = 'smlfixv2_json_import_v1'`).get() as { value?: string } | undefined

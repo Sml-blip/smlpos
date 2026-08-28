@@ -64,6 +64,8 @@ export interface Produit {
   has_serial_number?: number   // 1 = yes, 0 = no
   numero_serie?: string
   source_tag?: string          // NF products: free-text supplier/source tag
+  produit_avec_avance?: number // 1 while an active product advance reserves it
+  stock_disponible_vente?: number
   actif: number
   created_at: string
   updated_at: string
@@ -73,7 +75,7 @@ export interface SerialNumber {
   id: string
   produit_id: string
   numero_serie: string
-  statut: 'EN_STOCK' | 'VENDU' | 'DEFECTUEUX'
+  statut: 'EN_STOCK' | 'VENDU' | 'DEFECTUEUX' | 'RESERVE_AVANCE'
   vente_id?: string
   created_at: string
   updated_at: string
@@ -91,6 +93,7 @@ export interface CartItem {
   numero_serie?: string
   is_service?: boolean
   is_libre?: boolean
+  avance_dossier_id?: string
 }
 
 export interface Client {
@@ -135,6 +138,8 @@ export interface Vente {
   a_facture?: number
   fidelite_utilisee?: number
   fidelite_gagnee?: number
+  avance_dossier_id?: string
+  avance_utilisee?: number
   created_at: string
 }
 

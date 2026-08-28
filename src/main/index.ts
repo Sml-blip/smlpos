@@ -1041,7 +1041,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('shifts:getSummary', (_e, shiftId: string) => {
     const ventes = db.prepare(`
-      SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
+      SELECT COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total, COUNT(*) as count
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -1072,7 +1072,7 @@ function setupIpcHandlers() {
       FROM sorties_caisse WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
     const parMode = db.prepare(`
-      SELECT mode_paiement, COALESCE(SUM(total_ttc),0) as total
+      SELECT mode_paiement, COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -1406,7 +1406,19 @@ function setupIpcHandlers() {
 
   // ─── Produits ────────────────────────────────────────────────────────────────
   ipcMain.handle('produits:list', (_e, filters: { search?: string; type?: string; lowStock?: boolean } = {}) => {
-    let sql = 'SELECT * FROM produits WHERE actif = 1'
+    let sql = `SELECT produits.*,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM avances_clients ac
+        WHERE ac.produit_id = produits.id
+          AND ac.type_avance = 'PRODUIT'
+          AND ac.statut IN ('EN_COURS','SOLDE')
+      ) THEN 1 ELSE 0 END AS produit_avec_avance,
+      MAX(0, produits.stock_actuel - (
+        SELECT COUNT(DISTINCT ac.dossier_id) FROM avances_clients ac
+        WHERE ac.produit_id = produits.id AND ac.type_avance='PRODUIT'
+          AND ac.statut IN ('EN_COURS','SOLDE') AND COALESCE(trim(ac.numero_serie),'')=''
+      )) AS stock_disponible_vente
+      FROM produits WHERE actif = 1`
     const params: unknown[] = []
     if (filters.search) {
       sql += ` AND (nom LIKE ? OR reference LIKE ? OR code_barre LIKE ? OR categorie LIKE ?)`
@@ -1421,10 +1433,14 @@ function setupIpcHandlers() {
 
   ipcMain.handle('produits:findByBarcode', (_e, code) => {
     const scanned = String(code ?? '').trim()
-    let product = db.prepare('SELECT * FROM produits WHERE code_barre = ? AND actif = 1').get(scanned)
+    const selectProduct = `SELECT produits.*,
+      CASE WHEN EXISTS (SELECT 1 FROM avances_clients ac WHERE ac.produit_id = produits.id AND ac.type_avance = 'PRODUIT' AND ac.statut IN ('EN_COURS','SOLDE')) THEN 1 ELSE 0 END AS produit_avec_avance
+      , MAX(0, produits.stock_actuel - (SELECT COUNT(DISTINCT ac.dossier_id) FROM avances_clients ac WHERE ac.produit_id=produits.id AND ac.type_avance='PRODUIT' AND ac.statut IN ('EN_COURS','SOLDE') AND COALESCE(trim(ac.numero_serie),'')='')) AS stock_disponible_vente
+      FROM produits WHERE code_barre = ? AND actif = 1`
+    let product = db.prepare(selectProduct).get(scanned)
     if (!product && /^\d{13}$/.test(scanned)) {
       const smlCode = `SML-${scanned.slice(0, 8)}-${scanned.slice(8)}`
-      product = db.prepare('SELECT * FROM produits WHERE UPPER(code_barre) = ? AND actif = 1').get(smlCode)
+      product = db.prepare(selectProduct.replace('code_barre = ?', 'UPPER(code_barre) = ?')).get(smlCode)
     }
     return product
   })
@@ -1900,15 +1916,38 @@ function setupIpcHandlers() {
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
     const normalizedVente = normalizeMoneyFields({
       client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
-      fidelite_utilisee: 0, fidelite_gagnee: 0,
+      fidelite_utilisee: 0, fidelite_gagnee: 0, avance_dossier_id: null, avance_utilisee: 0,
       ...vente,
-    }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue', 'fidelite_utilisee', 'fidelite_gagnee'])
+    }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue', 'fidelite_utilisee', 'fidelite_gagnee', 'avance_utilisee'])
     const normalizedLignes = (lignes as Record<string, unknown>[]).map(ligne => normalizeVenteLine({ numero_serie: null, ...ligne }))
     if (normalizedVente.type === 'VENTE' && !normalizedVente.shift_id) {
       throw new Error('Ouvrez une caisse externe avant l’encaissement')
     }
     const isQuote = String(normalizedVente.type_vente ?? 'TICKET') === 'DEVIS'
     const affectsInventory = !isQuote
+    const requestedAdvanceDossier = isQuote ? '' : String(normalizedVente.avance_dossier_id ?? '').trim()
+    const advanceRows = requestedAdvanceDossier
+      ? db.prepare(`SELECT * FROM avances_clients WHERE dossier_id=? ORDER BY created_at`).all(requestedAdvanceDossier) as Record<string, unknown>[]
+      : []
+    const advanceRoot = advanceRows[0]
+    let advanceUsed = 0
+    if (requestedAdvanceDossier) {
+      if (!advanceRoot || advanceRoot.type_avance !== 'PRODUIT' || advanceRoot.statut === 'CONVERTI') throw new Error('Dossier d’avance produit invalide ou déjà encaissé')
+      if (!normalizedVente.client_id || normalizedVente.client_id !== advanceRoot.client_id) throw new Error('Le client de la vente ne correspond pas au dossier d’avance')
+      const productLine = normalizedLignes.find(line => line.produit_id === advanceRoot.produit_id)
+      if (!productLine) throw new Error('Le produit réservé par l’avance doit être présent dans le panier')
+      const reservedSerial = String(advanceRoot.numero_serie ?? '').trim()
+      if (reservedSerial && !parseLineSerials(productLine.numero_serie).some(sn => sn.toLocaleLowerCase('fr') === reservedSerial.toLocaleLowerCase('fr'))) {
+        throw new Error(`Le S/N réservé ${reservedSerial} doit être utilisé dans la vente`)
+      }
+      advanceUsed = money3(advanceRows.reduce((sum, row) => sum + Number(row.montant || 0), 0))
+      if (advanceUsed > Number(normalizedVente.total_ttc) + 0.0001) throw new Error('Le total de la vente ne peut pas être inférieur aux avances déjà versées')
+      normalizedVente.avance_dossier_id = requestedAdvanceDossier
+      normalizedVente.avance_utilisee = advanceUsed
+    } else {
+      normalizedVente.avance_dossier_id = null
+      normalizedVente.avance_utilisee = 0
+    }
     const loyaltyUsed = isQuote ? 0 : Math.max(0, money3(normalizedVente.fidelite_utilisee))
     normalizedVente.fidelite_utilisee = loyaltyUsed
     const loyaltyClient = normalizedVente.client_id
@@ -1935,16 +1974,39 @@ function setupIpcHandlers() {
     const insertVente = db.prepare(`
       INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_id, client_nom, client_tel, client_adresse, client_matricule,
         sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture,
-        fidelite_utilisee, fidelite_gagnee, created_at)
+        fidelite_utilisee, fidelite_gagnee, avance_dossier_id, avance_utilisee, created_at)
       VALUES (@id, @numero, @shift_id, @operateur_nom, @client_id, @client_nom, @client_tel, @client_adresse, @client_matricule,
         @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture,
-        @fidelite_utilisee, @fidelite_gagnee, @created_at)
+        @fidelite_utilisee, @fidelite_gagnee, @avance_dossier_id, @avance_utilisee, @created_at)
     `)
     const insertLigne = db.prepare(`
       INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit, numero_serie)
       VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit, @numero_serie)
     `)
     const transaction = db.transaction(() => {
+      if (affectsInventory) {
+        const requestedByProduct = new Map<string, number>()
+        for (const line of normalizedLignes) {
+          const productId = String(line.produit_id ?? '').trim()
+          if (productId) requestedByProduct.set(productId, (requestedByProduct.get(productId) ?? 0) + Number(line.quantite || 0))
+        }
+        for (const [productId, quantity] of requestedByProduct) {
+          const product = db.prepare(`SELECT type, stock_actuel FROM produits WHERE id=?`).get(productId) as { type?: string; stock_actuel?: number } | undefined
+          if (!product || product.type !== 'F') continue
+          const reserved = db.prepare(`SELECT COUNT(DISTINCT dossier_id) AS count FROM avances_clients
+            WHERE produit_id=? AND type_avance='PRODUIT' AND statut IN ('EN_COURS','SOLDE')
+              AND COALESCE(trim(numero_serie),'')=''
+              AND (?='' OR dossier_id!=?)`).get(productId, requestedAdvanceDossier, requestedAdvanceDossier) as { count?: number }
+          if (Number(product.stock_actuel || 0) - Number(reserved.count || 0) < quantity) {
+            throw new Error(`Stock disponible insuffisant : des unités sont réservées par une avance client`)
+          }
+        }
+      }
+      if (advanceRoot && String(advanceRoot.numero_serie ?? '').trim()) {
+        const released = db.prepare(`UPDATE serial_numbers SET statut='EN_STOCK', vente_id=NULL, updated_at=? WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?)) AND statut='RESERVE_AVANCE' AND vente_id=?`)
+          .run(new Date().toISOString(), advanceRoot.produit_id, advanceRoot.numero_serie, requestedAdvanceDossier)
+        if (released.changes !== 1) throw new Error(`La réservation S/N ${advanceRoot.numero_serie} n’est plus disponible`)
+      }
       const claimedSerials = new Set<string>()
       for (const ligne of normalizedLignes) validateLineSerials(ligne, claimedSerials)
       insertVente.run(normalizedVente)
@@ -1987,10 +2049,17 @@ function setupIpcHandlers() {
         }
         db.prepare(`UPDATE clients SET solde_fidelite = ? WHERE id = ?`).run(runningBalance, loyaltyClient.id)
       }
+      if (requestedAdvanceDossier) {
+        db.prepare(`UPDATE avances_clients SET statut='CONVERTI', vente_id=? WHERE dossier_id=? AND statut IN ('EN_COURS','SOLDE')`)
+          .run(normalizedVente.id, requestedAdvanceDossier)
+      }
     })
     transaction()
     addActivityLog({ shift_id: normalizedVente.shift_id as string, operateur: normalizedVente.operateur_nom as string, action: isQuote ? 'QUOTE_CREATED' : 'SALE_CREATED', montant: isQuote ? null : normalizedVente.total_ttc as number, details: { numero: normalizedVente.numero, mode: normalizedVente.mode_paiement, type_vente: normalizedVente.type_vente, inventory_applied: affectsInventory } })
-    enqueueSync('ventes', 'INSERT', normalizedVente)
+    const syncVente = { ...normalizedVente }
+    delete syncVente.avance_dossier_id
+    delete syncVente.avance_utilisee
+    enqueueSync('ventes', 'INSERT', syncVente)
     for (const ligne of normalizedLignes) enqueueSync('lignes_vente', 'INSERT', ligne)
     if (affectsInventory) {
       for (const ligne of normalizedLignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
@@ -2002,7 +2071,7 @@ function setupIpcHandlers() {
       const clientSnapshot = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(loyaltyClient.id) as Record<string, unknown>
       enqueueSync('clients', 'UPDATE', clientSnapshot)
     }
-    return { success: true, fidelite_utilisee: loyaltyUsed, fidelite_gagnee: loyaltyEarned, solde_fidelite: loyaltyAfter?.solde_fidelite ?? 0 }
+    return { success: true, fidelite_utilisee: loyaltyUsed, fidelite_gagnee: loyaltyEarned, solde_fidelite: loyaltyAfter?.solde_fidelite ?? 0, avance_utilisee: advanceUsed }
   })
 
   ipcMain.handle('ventes:list', (_e, filters: { shiftId?: string; dateFrom?: string; dateTo?: string; limit?: number; search?: string } = {}) => {
@@ -3302,7 +3371,7 @@ function setupIpcHandlers() {
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
     const ventesTotal = db.prepare(`
-      SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes
+      SELECT COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
       WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -3623,22 +3692,101 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('avancesClients:create', (_e, advance: Record<string, unknown>) => {
-    const advancePayload = { ...advance, note: [String(advance.note ?? '').trim(), '[CAISSE:EXTERNE] Avance client'].filter(Boolean).join('\n') }
-    const row = bindRow({ id: '', numero: '', client_id: '', client_nom: '', client_tel: null, client_adresse: null, produit_description: '', montant: 0, mode_paiement: 'ESPECES', reference: null, note: null, shift_id: null, operateur: 'superadmin', created_at: new Date().toISOString() }, advancePayload)
+    const typeAvance = String(advance.type_avance ?? 'LIBRE').toUpperCase() === 'PRODUIT' ? 'PRODUIT' : 'LIBRE'
+    const now = String(advance.created_at ?? new Date().toISOString())
+    const advancePayload = {
+      ...advance,
+      type_avance: typeAvance,
+      note: [String(advance.note ?? '').trim(), `[AVANCE:${typeAvance}]`, '[CAISSE:EXTERNE] Avance client'].filter(Boolean).join('\n'),
+      created_at: now,
+    }
+    const row = bindRow({
+      id: '', numero: '', client_id: '', client_nom: '', client_tel: null, client_adresse: null,
+      produit_description: typeAvance === 'LIBRE' ? 'Avance libre' : '', montant: 0,
+      mode_paiement: 'ESPECES', reference: null, note: null, shift_id: null,
+      operateur: 'superadmin', type_avance: typeAvance, dossier_id: null, produit_id: null,
+      numero_serie: null, prix_produit: null, statut: 'EN_COURS', vente_id: null, created_at: now,
+    }, advancePayload) as Record<string, unknown>
     const client = db.prepare(`SELECT * FROM clients WHERE id=? AND actif=1`).get(row.client_id) as Record<string, unknown> | undefined
     if (!client) throw new Error('Veuillez sélectionner un client valide')
-    if (!String(row.produit_description).trim()) throw new Error('La description du produit est obligatoire')
     if (!(Number(row.montant) > 0)) throw new Error('Le montant doit être supérieur à zéro')
     if (!row.shift_id) throw new Error('Ouvrez une caisse externe avant d’enregistrer une avance')
-    db.prepare(`INSERT INTO avances_clients (id,numero,client_id,client_nom,client_tel,client_adresse,produit_description,montant,mode_paiement,reference,note,shift_id,operateur,created_at) VALUES (@id,@numero,@client_id,@client_nom,@client_tel,@client_adresse,@produit_description,@montant,@mode_paiement,@reference,@note,@shift_id,@operateur,@created_at)`).run(row)
-    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: 'CLIENT_ADVANCE_RECEIVED', montant: Number(row.montant), details: { numero: row.numero, client_nom: row.client_nom, produit: row.produit_description } })
-    enqueueSync('avances_clients', 'INSERT', row)
-    return { success: true, advance: row }
+
+    const existingDossierId = String(row.dossier_id ?? '').trim()
+    const dossierRows = existingDossierId
+      ? db.prepare(`SELECT * FROM avances_clients WHERE dossier_id=? ORDER BY created_at`).all(existingDossierId) as Record<string, unknown>[]
+      : []
+    const root = dossierRows[0]
+    if (root) {
+      if (root.client_id !== row.client_id) throw new Error('Ce dossier d’avance appartient à un autre client')
+      if (root.type_avance !== 'PRODUIT' || root.statut === 'CONVERTI') throw new Error('Ce dossier d’avance ne peut plus recevoir de paiement')
+      row.type_avance = 'PRODUIT'
+      row.produit_id = root.produit_id
+      row.produit_description = root.produit_description
+      row.numero_serie = root.numero_serie
+      row.prix_produit = root.prix_produit
+    }
+    row.dossier_id = existingDossierId || String(row.id)
+
+    let product: Record<string, unknown> | undefined
+    let paidBefore = 0
+    let nextStatus = 'EN_COURS'
+    if (row.type_avance === 'PRODUIT') {
+      product = db.prepare(`SELECT * FROM produits WHERE id=? AND actif=1`).get(row.produit_id) as Record<string, unknown> | undefined
+      if (!product) throw new Error('Veuillez sélectionner un produit valide')
+      const price = money3(Number(row.prix_produit) || Number(product.prix_vente) || 0)
+      if (price <= 0) throw new Error('Le prix du produit doit être supérieur à zéro')
+      row.prix_produit = price
+      row.produit_description = String(product.nom ?? row.produit_description).trim()
+      paidBefore = dossierRows.reduce((sum, item) => sum + Number(item.montant || 0), 0)
+      if (money3(paidBefore + Number(row.montant)) > price + 0.0001) {
+        throw new Error(`Le versement dépasse le solde restant de ${money3(Math.max(0, price - paidBefore)).toFixed(3)} DT`)
+      }
+      nextStatus = money3(paidBefore + Number(row.montant)) >= price - 0.0001 ? 'SOLDE' : 'EN_COURS'
+      row.statut = nextStatus
+      const serial = String(row.numero_serie ?? '').trim()
+      if (serial && !root) {
+        const sn = db.prepare(`SELECT id, statut FROM serial_numbers WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?))`).get(row.produit_id, serial) as { id: string; statut: string } | undefined
+        if (!sn || sn.statut !== 'EN_STOCK') throw new Error(`S/N indisponible ou déjà réservé : ${serial}`)
+      } else if (!serial && !root && product.type === 'F') {
+        const reserved = db.prepare(`SELECT COUNT(DISTINCT dossier_id) AS count FROM avances_clients WHERE produit_id=? AND type_avance='PRODUIT' AND statut IN ('EN_COURS','SOLDE') AND COALESCE(trim(numero_serie),'')=''`).get(row.produit_id) as { count?: number }
+        if (Number(product.stock_actuel || 0) - Number(reserved.count || 0) <= 0) throw new Error('Aucune unité disponible à réserver pour ce produit')
+      }
+    } else {
+      row.produit_id = null
+      row.numero_serie = null
+      row.prix_produit = null
+      row.produit_description = String(row.produit_description ?? '').trim() || 'Avance libre'
+      row.statut = 'EN_COURS'
+    }
+
+    db.transaction(() => {
+      if (row.type_avance === 'PRODUIT' && String(row.numero_serie ?? '').trim() && !root) {
+        const reserved = db.prepare(`UPDATE serial_numbers SET statut='RESERVE_AVANCE', vente_id=?, updated_at=? WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?)) AND statut='EN_STOCK'`)
+          .run(row.dossier_id, now, row.produit_id, row.numero_serie)
+        if (reserved.changes !== 1) throw new Error(`Impossible de réserver le S/N ${row.numero_serie}`)
+      }
+      db.prepare(`INSERT INTO avances_clients
+        (id,numero,client_id,client_nom,client_tel,client_adresse,produit_description,montant,mode_paiement,reference,note,shift_id,operateur,type_avance,dossier_id,produit_id,numero_serie,prix_produit,statut,vente_id,created_at)
+        VALUES (@id,@numero,@client_id,@client_nom,@client_tel,@client_adresse,@produit_description,@montant,@mode_paiement,@reference,@note,@shift_id,@operateur,@type_avance,@dossier_id,@produit_id,@numero_serie,@prix_produit,@statut,@vente_id,@created_at)`).run(row)
+      if (row.type_avance === 'PRODUIT') db.prepare(`UPDATE avances_clients SET statut=? WHERE dossier_id=? AND statut!='CONVERTI'`).run(nextStatus, row.dossier_id)
+    })()
+    addActivityLog({ shift_id: row.shift_id as string, operateur: row.operateur as string, action: 'CLIENT_ADVANCE_RECEIVED', montant: Number(row.montant), details: { numero: row.numero, client_nom: row.client_nom, produit: row.produit_description, type_avance: row.type_avance, dossier_id: row.dossier_id } })
+    // Keep remote compatibility: the metadata is also encoded in note, while
+    // the local database owns the richer reservation state.
+    const syncRow = { ...row }
+    for (const key of ['type_avance','dossier_id','produit_id','numero_serie','prix_produit','statut','vente_id']) delete syncRow[key]
+    enqueueSync('avances_clients', 'INSERT', syncRow)
+    return { success: true, advance: row, total_verse: money3(paidBefore + Number(row.montant)), solde_restant: row.type_avance === 'PRODUIT' ? money3(Number(row.prix_produit) - paidBefore - Number(row.montant)) : null }
   })
 
   ipcMain.handle('avancesClients:list', (_e, clientId?: string) => clientId
-    ? db.prepare(`SELECT * FROM avances_clients WHERE client_id=? ORDER BY created_at DESC`).all(clientId)
-    : db.prepare(`SELECT * FROM avances_clients ORDER BY created_at DESC LIMIT 200`).all())
+    ? db.prepare(`SELECT ac.*, p.reference AS produit_reference, p.code_barre AS produit_code_barre
+        FROM avances_clients ac LEFT JOIN produits p ON p.id=ac.produit_id
+        WHERE ac.client_id=? ORDER BY ac.created_at DESC`).all(clientId)
+    : db.prepare(`SELECT ac.*, p.reference AS produit_reference, p.code_barre AS produit_code_barre
+        FROM avances_clients ac LEFT JOIN produits p ON p.id=ac.produit_id
+        ORDER BY ac.created_at DESC LIMIT 500`).all())
 
   // ── Paramètres App ─────────────────────────────────────────────────────────
   ipcMain.handle('settings:getAll', () => {
@@ -3765,6 +3913,21 @@ function setupIpcHandlers() {
         for (const l of lignes) {
           // Restore stock and the exact serial(s) selected for this sale.
           revertVenteLineInventory(id, l, now)
+        }
+      }
+      const advanceDossierId = String(vente.avance_dossier_id ?? '').trim()
+      if (advanceDossierId) {
+        const advanceRows = db.prepare(`SELECT * FROM avances_clients WHERE dossier_id=? ORDER BY created_at`).all(advanceDossierId) as Record<string, unknown>[]
+        const root = advanceRows[0]
+        if (root) {
+          const paid = money3(advanceRows.reduce((sum, row) => sum + Number(row.montant || 0), 0))
+          const status = paid >= Number(root.prix_produit || 0) - 0.0001 ? 'SOLDE' : 'EN_COURS'
+          db.prepare(`UPDATE avances_clients SET statut=?, vente_id=NULL WHERE dossier_id=?`).run(status, advanceDossierId)
+          const serial = String(root.numero_serie ?? '').trim()
+          if (serial) {
+            db.prepare(`UPDATE serial_numbers SET statut='RESERVE_AVANCE', vente_id=?, updated_at=? WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?)) AND statut='EN_STOCK'`)
+              .run(advanceDossierId, now, root.produit_id, serial)
+          }
         }
       }
       if (activeInvoice) {
@@ -4338,7 +4501,7 @@ function setupIpcHandlers() {
       // movement. Cancelling it with an avoir returns those items, including the
       // exact serial numbers, and prevents the original sale from keeping them sold.
       if (linkedVenteId) {
-        const vente = db.prepare(`SELECT statut FROM ventes WHERE id = ?`).get(linkedVenteId) as { statut?: string } | undefined
+        const vente = db.prepare(`SELECT * FROM ventes WHERE id = ?`).get(linkedVenteId) as Record<string, unknown> | undefined
         if (vente && vente.statut !== 'ANNULEE') {
           const venteLignes = db.prepare(`SELECT produit_id, quantite, numero_serie FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(linkedVenteId) as Record<string, unknown>[]
           for (const ligne of venteLignes) {
@@ -4347,6 +4510,19 @@ function setupIpcHandlers() {
           }
           db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par='FACTURE_AVOIR', annule_at=?, annule_motif=? WHERE id=?`)
             .run(now, motif?.trim() || `Facture ${doc.numero} annulée avec avoir`, linkedVenteId)
+          const advanceDossierId = String(vente.avance_dossier_id ?? '').trim()
+          if (advanceDossierId) {
+            const advanceRows = db.prepare(`SELECT * FROM avances_clients WHERE dossier_id=? ORDER BY created_at`).all(advanceDossierId) as Record<string, unknown>[]
+            const root = advanceRows[0]
+            if (root) {
+              const paid = money3(advanceRows.reduce((sum, row) => sum + Number(row.montant || 0), 0))
+              const status = paid >= Number(root.prix_produit || 0) - 0.0001 ? 'SOLDE' : 'EN_COURS'
+              db.prepare(`UPDATE avances_clients SET statut=?, vente_id=NULL WHERE dossier_id=?`).run(status, advanceDossierId)
+              const serial = String(root.numero_serie ?? '').trim()
+              if (serial) db.prepare(`UPDATE serial_numbers SET statut='RESERVE_AVANCE', vente_id=?, updated_at=? WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?)) AND statut='EN_STOCK'`)
+                .run(advanceDossierId, now, root.produit_id, serial)
+            }
+          }
           cancelledLinkedSale = true
         }
       }

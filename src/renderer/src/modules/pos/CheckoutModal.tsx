@@ -13,6 +13,20 @@ const api = window.api
 
 type TypeVente = 'TICKET' | 'FACTURE' | 'BL_VENTE' | 'DEVIS'
 
+interface ProductAdvanceRow {
+  id: string
+  dossier_id?: string
+  client_id: string
+  type_avance?: 'LIBRE' | 'PRODUIT'
+  produit_id?: string
+  produit_description: string
+  numero_serie?: string
+  prix_produit?: number
+  montant: number
+  statut?: 'EN_COURS' | 'SOLDE' | 'CONVERTI'
+  created_at: string
+}
+
 interface Props {
   items: CartItem[]
   total: number
@@ -45,6 +59,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const [loyaltyGainPct, setLoyaltyGainPct] = useState(1)
   const [loyaltyMinPurchase, setLoyaltyMinPurchase] = useState(0)
   const [loyaltyMaxUsePct, setLoyaltyMaxUsePct] = useState(100)
+  const [productAdvances, setProductAdvances] = useState<ProductAdvanceRow[]>([])
+  const [selectedAdvanceDossier, setSelectedAdvanceDossier] = useState('')
 
   const montantRecuNum = round3(parseFloat(montantRecu.replace(',', '.')) || 0)
   const cleanTotal = round3(total)
@@ -55,8 +71,22 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const maxLoyaltyUse = round3(cleanTotal * loyaltyMaxUsePct / 100)
   const loyaltyRedeemed = Math.min(requestedLoyalty, availableLoyalty, maxLoyaltyUse)
   const payableTotal = round3(Math.max(0, cleanTotal - loyaltyRedeemed))
+  const groupedProductAdvances = Array.from(productAdvances.reduce((map, row) => {
+    if (row.type_avance !== 'PRODUIT' || row.statut === 'CONVERTI' || !row.produit_id) return map
+    const dossierId = row.dossier_id || row.id
+    const current = map.get(dossierId)
+    if (current) current.total = round3(current.total + Number(row.montant || 0))
+    else map.set(dossierId, { dossierId, root: row, total: round3(Number(row.montant || 0)) })
+    return map
+  }, new Map<string, { dossierId: string; root: ProductAdvanceRow; total: number }>()).values())
+    .filter(group => items.some(item => item.produit_id === group.root.produit_id
+      && (!group.root.numero_serie || String(item.numero_serie ?? '').split(',').map(sn => sn.trim().toLowerCase()).includes(group.root.numero_serie.trim().toLowerCase()))))
+  const selectedAdvance = groupedProductAdvances.find(group => group.dossierId === selectedAdvanceDossier)
+  const advanceUsed = typeVente === 'DEVIS' ? 0 : round3(selectedAdvance?.total ?? 0)
+  const advanceExceedsTotal = advanceUsed > payableTotal + 0.0001
+  const cashDue = round3(Math.max(0, payableTotal - advanceUsed))
   const loyaltyEarnPreview = loyaltyClient && payableTotal >= loyaltyMinPurchase ? round3(payableTotal * loyaltyGainPct / 100) : 0
-  const monnaieRendue = mode === 'ESPECES' ? round3(Math.max(0, montantRecuNum - payableTotal)) : 0
+  const monnaieRendue = mode === 'ESPECES' ? round3(Math.max(0, montantRecuNum - cashDue)) : 0
   const hasItemsF = items.some(i => i.type_produit === 'F' && !i.is_service)
 
   useEffect(() => {
@@ -66,6 +96,27 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
       setLoyaltyMaxUsePct(Math.min(100, Math.max(0, Number(settings.fidelite_max_utilisation_pct) || 0)))
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!clientForm.clientId) {
+      setProductAdvances([])
+      setSelectedAdvanceDossier('')
+      return
+    }
+    api.avancesClientsList(clientForm.clientId).then(rows => {
+      setProductAdvances(rows as ProductAdvanceRow[])
+    }).catch(() => setProductAdvances([]))
+  }, [clientForm.clientId, items])
+
+  useEffect(() => {
+    if (typeVente === 'DEVIS' || !groupedProductAdvances.length) {
+      setSelectedAdvanceDossier('')
+      return
+    }
+    if (!groupedProductAdvances.some(group => group.dossierId === selectedAdvanceDossier)) {
+      setSelectedAdvanceDossier(groupedProductAdvances[0].dossierId)
+    }
+  }, [typeVente, selectedAdvanceDossier, groupedProductAdvances.map(group => `${group.dossierId}:${group.total}`).join('|')])
 
   const lookupLoyaltyCard = async () => {
     const code = loyaltyCode.trim()
@@ -115,7 +166,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   ]
 
   const handleConfirm = async () => {
-    if (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < payableTotal) return
+    if (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < cashDue) return
+    if (advanceExceedsTotal) {
+      setErrorMsg('Le total de la vente est inférieur aux avances déjà versées. Retirez la remise ou corrigez le panier.')
+      return
+    }
     if (typeVente === 'BL_VENTE' && items.length === 0) return
     if ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF) {
       setErrorMsg(`${typeVente === 'DEVIS' ? 'Devis' : 'Facture'} : au moins un produit F requis dans le panier.`)
@@ -138,7 +193,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         total_remises: round3(cleanTotalRemises + loyaltyRedeemed),
         total_ttc: payableTotal,
         mode_paiement: mode,
-        montant_recu: typeVente === 'DEVIS' ? 0 : mode === 'ESPECES' ? montantRecuNum : payableTotal,
+        montant_recu: typeVente === 'DEVIS' ? 0 : mode === 'ESPECES' ? montantRecuNum : cashDue,
         monnaie_rendue: typeVente === 'DEVIS' ? 0 : monnaieRendue,
         type: 'VENTE',
         type_vente: typeVente,
@@ -150,6 +205,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         a_facture: typeVente !== 'TICKET' ? 1 : 0,
         fidelite_utilisee: typeVente === 'DEVIS' ? 0 : loyaltyRedeemed,
         fidelite_gagnee: typeVente === 'DEVIS' ? 0 : loyaltyEarnPreview,
+        avance_dossier_id: typeVente === 'DEVIS' ? undefined : selectedAdvance?.dossierId,
+        avance_utilisee: typeVente === 'DEVIS' ? 0 : advanceUsed,
         created_at: now,
       }
 
@@ -170,11 +227,13 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         fidelite_utilisee?: number
         fidelite_gagnee?: number
         solde_fidelite?: number
+        avance_utilisee?: number
       }
       setVenteEnregistree({
         ...vente,
         fidelite_utilisee: saved?.fidelite_utilisee ?? loyaltyRedeemed,
         fidelite_gagnee: saved?.fidelite_gagnee ?? loyaltyEarnPreview,
+        avance_utilisee: saved?.avance_utilisee ?? advanceUsed,
       })
       if (typeVente === 'FACTURE' || typeVente === 'BL_VENTE' || typeVente === 'DEVIS') {
         setShowFacture(true)
@@ -288,6 +347,22 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
             </div>
           </div>
 
+          {typeVente !== 'DEVIS' && groupedProductAdvances.length > 0 && (
+            <div className="mb-5 rounded-xl border-2 border-violet-300 bg-violet-50 p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm font-bold text-violet-900"><WalletCards size={16} /> Avance sur produit détectée</div>
+              <select value={selectedAdvanceDossier} onChange={event => setSelectedAdvanceDossier(event.target.value)} className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-xs font-semibold outline-none">
+                {groupedProductAdvances.map(group => <option key={group.dossierId} value={group.dossierId}>{group.root.produit_description}{group.root.numero_serie ? ` · S/N ${group.root.numero_serie}` : ''} — {formatPrice(group.total)} DT versés</option>)}
+              </select>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
+                <div className="rounded-lg bg-white p-2"><div className="text-text-muted">Total document</div><b className="font-price">{formatPrice(payableTotal)}</b></div>
+                <div className="rounded-lg bg-violet-100 p-2"><div className="text-violet-700">Déjà versé</div><b className="font-price text-violet-800">{formatPrice(advanceUsed)}</b></div>
+                <div className="rounded-lg bg-green-100 p-2"><div className="text-green-700">À encaisser</div><b className="font-price text-green-800">{formatPrice(cashDue)}</b></div>
+              </div>
+              <p className="mt-2 text-[10px] text-violet-700">La facture conserve son total TTC complet. Seul le solde est ajouté à la caisse aujourd’hui.</p>
+              {advanceExceedsTotal && <p className="mt-2 rounded-lg bg-red-50 p-2 text-xs font-semibold text-red-700">Les avances dépassent le total actuel. Corrigez le panier ou la remise.</p>}
+            </div>
+          )}
+
           {/* Carte de fidélité */}
           {typeVente !== 'DEVIS' && <div className="mb-5">
             <button
@@ -397,7 +472,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           </div>}
 
           {/* Cash amount */}
-          {typeVente !== 'DEVIS' && mode === 'ESPECES' && (
+          {typeVente !== 'DEVIS' && mode === 'ESPECES' && cashDue > 0 && (
             <div className="mb-5">
               <label className="block text-sm font-semibold mb-2">Montant reçu (DT)</label>
               <input
@@ -405,21 +480,21 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 inputMode="decimal"
                 value={montantRecu}
                 onChange={e => setMontantRecu(e.target.value.replace(/[^0-9.,]/g, ''))}
-                onKeyDown={e => { if (e.key === 'Enter' && montantRecuNum >= payableTotal) handleConfirm() }}
+                onKeyDown={e => { if (e.key === 'Enter' && montantRecuNum >= cashDue) handleConfirm() }}
                 className="w-full border border-border rounded-xl px-4 py-3 font-price text-lg font-semibold outline-none focus:border-accent-500"
-                placeholder={payableTotal.toFixed(3)}
+                placeholder={cashDue.toFixed(3)}
                 autoFocus
               />
-              {montantRecuNum >= payableTotal && (
+              {montantRecuNum >= cashDue && (
                 <div className="mt-2 flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                   <span className="text-sm font-medium text-green-700">Monnaie à rendre</span>
                   <span className="font-price font-bold text-green-700">{formatPrice(monnaieRendue)}</span>
                 </div>
               )}
-              {montantRecuNum > 0 && montantRecuNum < payableTotal && (
+              {montantRecuNum > 0 && montantRecuNum < cashDue && (
                 <div className="mt-2 flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                   <span className="text-sm font-medium text-danger">Manquant</span>
-                  <span className="font-price font-bold text-danger">{formatPrice(payableTotal - montantRecuNum)}</span>
+                  <span className="font-price font-bold text-danger">{formatPrice(cashDue - montantRecuNum)}</span>
                 </div>
               )}
             </div>
@@ -505,7 +580,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={loading || (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < payableTotal) || ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF)}
+            disabled={loading || advanceExceedsTotal || (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < cashDue) || ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF)}
             className="w-full bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors"
           >
             {loading ? 'Traitement...' : typeVente === 'DEVIS' ? 'Créer le devis' : 'Confirmer le paiement'}
