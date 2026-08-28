@@ -362,6 +362,84 @@ function repairStoredMoneyPrecision() {
   }
 }
 
+/**
+ * Versions before 1.9.1015 treated an active quote like a completed sale and
+ * removed its stock/S/N. Record every inspected quote locally so the repair is
+ * safe to run at every boot and can never increase stock twice.
+ */
+function repairLegacyQuoteInventory() {
+  const repairKey = 'legacy_devis_inventory_v1'
+  try {
+    const quotes = db.prepare(`
+      SELECT v.id, v.numero, COALESCE(v.statut, 'ACTIVE') AS statut
+      FROM ventes v
+      LEFT JOIN inventory_repair_ledger ledger
+        ON ledger.repair_key = ? AND ledger.operation_id = v.id
+      WHERE COALESCE(v.type_vente, 'TICKET') = 'DEVIS'
+        AND ledger.operation_id IS NULL
+      ORDER BY v.created_at ASC
+    `).all(repairKey) as Array<{ id: string; numero: string; statut: string }>
+    const now = new Date().toISOString()
+    const insertLedger = db.prepare(`
+      INSERT OR IGNORE INTO inventory_repair_ledger
+        (repair_key, operation_id, repaired_at, details)
+      VALUES (?, ?, ?, ?)
+    `)
+    const lines = db.prepare(`
+      SELECT produit_id, quantite, numero_serie
+      FROM lignes_vente
+      WHERE vente_id = ? AND produit_id IS NOT NULL
+    `)
+    const restoreLinkedSerials = db.prepare(`
+      UPDATE serial_numbers
+      SET statut = 'EN_STOCK', vente_id = NULL, updated_at = ?
+      WHERE vente_id = ? AND statut = 'VENDU'
+    `)
+
+    db.transaction(() => {
+      for (const quote of quotes) {
+        let restoredUnits = 0
+        if (quote.statut !== 'ANNULEE') {
+          const quoteLines = lines.all(quote.id) as Array<{ produit_id: string; quantite: number }>
+          for (const line of quoteLines) {
+            const qty = Math.max(0, Number(line.quantite) || 0)
+            if (!qty) continue
+            db.prepare(`UPDATE produits SET stock_actuel = stock_actuel + ? WHERE id = ?`).run(qty, line.produit_id)
+            restoredUnits += qty
+          }
+          restoreLinkedSerials.run(now, quote.id)
+        }
+        insertLedger.run(repairKey, quote.id, now, JSON.stringify({
+          numero: quote.numero,
+          status: quote.statut,
+          restored_units: restoredUnits,
+        }))
+      }
+
+      // A serial marked sold must always be backed by an active, inventory-
+      // affecting sale. This also fixes old edited/added S/N rows that became
+      // orphaned or were attached to a quote/cancelled operation.
+      db.prepare(`
+        UPDATE serial_numbers
+        SET statut = 'EN_STOCK', vente_id = NULL, updated_at = ?
+        WHERE statut = 'VENDU'
+          AND (
+            vente_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM ventes v
+              WHERE v.id = serial_numbers.vente_id
+                AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
+                AND COALESCE(v.type_vente, 'TICKET') != 'DEVIS'
+            )
+          )
+      `).run(now)
+    })()
+    if (quotes.length) console.log(`[inventory] Repaired/registered ${quotes.length} legacy quote(s)`)
+  } catch (e) {
+    console.warn('[inventory] Legacy quote repair skipped:', e)
+  }
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 function resolveAppIcon(): NativeImage | undefined {
@@ -467,6 +545,7 @@ app.whenReady().then(() => {
     }
     initDatabase()
     repairStoredMoneyPrecision()
+    repairLegacyQuoteInventory()
   } catch (err) {
     console.error('DB init error:', err)
   }
@@ -964,6 +1043,8 @@ function setupIpcHandlers() {
     const ventes = db.prepare(`
       SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
     `).get(shiftId) as { total: number; count: number }
     const repairFinalPayments = db.prepare(`
       SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total, COUNT(*) as count
@@ -993,6 +1074,8 @@ function setupIpcHandlers() {
     const parMode = db.prepare(`
       SELECT mode_paiement, COALESCE(SUM(total_ttc),0) as total
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
       GROUP BY mode_paiement
     `).all(shiftId) as Array<{ mode_paiement: string; total: number }>
     const creditsPercus = db.prepare(`
@@ -1046,6 +1129,8 @@ function setupIpcHandlers() {
         LEFT JOIN produits p ON p.id = lv.produit_id
         WHERE lv.type_produit = 'F'
         AND v.type = 'VENTE'
+        AND COALESCE(v.type_vente, 'TICKET') = 'TICKET'
+        AND COALESCE(v.a_facture, 0) = 0
         AND date(v.created_at, 'localtime') = date(?)
         AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
         AND NOT EXISTS (
@@ -1259,6 +1344,8 @@ function setupIpcHandlers() {
                ROUND(SUM(COALESCE(total_ttc, 0)), 3) AS day_total_ttc
         FROM ventes
         WHERE type = 'VENTE'
+          AND COALESCE(type_vente, 'TICKET') = 'TICKET'
+          AND COALESCE(a_facture, 0) = 0
           AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
           AND date(created_at, 'localtime') BETWEEN date(?) AND date(?)
         GROUP BY date(created_at, 'localtime')
@@ -1276,6 +1363,8 @@ function setupIpcHandlers() {
         INNER JOIN lignes_vente lv ON lv.vente_id = v.id AND lv.type_produit = 'F'
         LEFT JOIN sale_line_totals slt ON slt.vente_id = v.id
         WHERE v.type = 'VENTE'
+          AND COALESCE(v.type_vente, 'TICKET') = 'TICKET'
+          AND COALESCE(v.a_facture, 0) = 0
           AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
           AND date(v.created_at, 'localtime') BETWEEN date(?) AND date(?)
           AND date(v.created_at, 'localtime') < date('now', 'localtime')
@@ -1535,23 +1624,78 @@ function setupIpcHandlers() {
     }
   }
 
+  function venteAffectsInventory(vente: Record<string, unknown>): boolean {
+    return String(vente.type_vente ?? 'TICKET') !== 'DEVIS'
+  }
+
+  function parseLineSerials(value: unknown): string[] {
+    return String(value ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  }
+
+  function validateLineSerials(
+    ligne: Record<string, unknown>,
+    claimedSerials: Set<string>,
+    alreadySoldByVenteId?: string,
+  ): Array<{ id: string; numero_serie: string }> {
+    const produitId = String(ligne.produit_id ?? '').trim()
+    if (!produitId) return []
+    const product = db.prepare(`
+      SELECT nom, has_serial_number, numero_serie
+      FROM produits WHERE id = ?
+    `).get(produitId) as { nom?: string; has_serial_number?: number; numero_serie?: string | null } | undefined
+    if (!product) throw new Error(`Produit introuvable : ${ligne.designation ?? produitId}`)
+    if (!product.has_serial_number && !String(product.numero_serie ?? '').trim()) return []
+
+    const qty = Number(ligne.quantite) || 0
+    if (!Number.isInteger(qty) || qty <= 0) {
+      throw new Error(`Quantité S/N invalide pour ${product.nom ?? ligne.designation}`)
+    }
+    const serials = parseLineSerials(ligne.numero_serie)
+    if (serials.length !== qty) {
+      throw new Error(`${product.nom ?? ligne.designation} : sélectionnez ${qty} numéro${qty > 1 ? 's' : ''} de série (${serials.length}/${qty})`)
+    }
+
+    const found: Array<{ id: string; numero_serie: string }> = []
+    const lookup = db.prepare(`
+      SELECT id, numero_serie, statut, vente_id FROM serial_numbers
+      WHERE produit_id = ? AND lower(trim(numero_serie)) = lower(trim(?))
+      LIMIT 1
+    `)
+    for (const serial of serials) {
+      const key = `${produitId}:${serial.toLocaleLowerCase('fr')}`
+      if (claimedSerials.has(key)) throw new Error(`Numéro de série utilisé plusieurs fois : ${serial}`)
+      const row = lookup.get(produitId, serial) as { id: string; numero_serie: string; statut: string; vente_id?: string | null } | undefined
+      const available = row?.statut === 'EN_STOCK'
+        || (!!alreadySoldByVenteId && row?.statut === 'VENDU' && row.vente_id === alreadySoldByVenteId)
+      if (!row || !available) throw new Error(`S/N indisponible ou déjà vendu pour ${product.nom ?? ligne.designation} : ${serial}`)
+      claimedSerials.add(key)
+      found.push(row)
+    }
+    return found
+  }
+
   function applyVenteLineInventory(venteId: string, ligne: Record<string, unknown>, now: string) {
     const produitId = ligne.produit_id as string | null | undefined
     const quantite = Number(ligne.quantite) || 0
     if (!produitId || quantite <= 0) return
-    db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?').run(quantite, produitId)
-    const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(produitId) as { has_serial_number?: number } | undefined
-    if (!prod?.has_serial_number) return
-    const serials = String(ligne.numero_serie ?? '').split(',').map(s => s.trim()).filter(Boolean)
-    const toMark = serials.length ? serials : Array.from({ length: quantite }, () => null as string | null)
-    const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`)
-    const nextSn = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1`)
-    const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?`)
-    for (const snVal of toMark) {
-      const sn = snVal
-        ? snByValue.get(produitId, snVal) as { id: string } | undefined
-        : nextSn.get(produitId) as { id: string } | undefined
-      if (sn) markSnSold.run(venteId, now, sn.id)
+    const prod = db.prepare('SELECT type, has_serial_number, numero_serie FROM produits WHERE id = ?').get(produitId) as { type?: string; has_serial_number?: number; numero_serie?: string | null } | undefined
+    const tracksSerial = !!prod?.has_serial_number || !!String(prod?.numero_serie ?? '').trim()
+    const stockResult = tracksSerial || prod?.type === 'F'
+      ? db.prepare(`UPDATE produits SET stock_actuel = stock_actuel - ? WHERE id = ? AND stock_actuel >= ?`).run(quantite, produitId, quantite)
+      : db.prepare(`UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?`).run(quantite, produitId)
+    if ((tracksSerial || prod?.type === 'F') && stockResult.changes !== 1) {
+      throw new Error(`Stock insuffisant : ${ligne.designation ?? produitId}`)
+    }
+    if (!tracksSerial) return
+    const serials = parseLineSerials(ligne.numero_serie)
+    if (serials.length !== quantite) throw new Error(`S/N incomplet : ${ligne.designation ?? produitId}`)
+    const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND lower(trim(numero_serie)) = lower(trim(?)) AND statut = 'EN_STOCK'`)
+    const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ? AND statut = 'EN_STOCK'`)
+    for (const snVal of serials) {
+      const sn = snByValue.get(produitId, snVal) as { id: string } | undefined
+      if (!sn || markSnSold.run(venteId, now, sn.id).changes !== 1) {
+        throw new Error(`S/N indisponible ou déjà vendu : ${snVal}`)
+      }
     }
   }
 
@@ -1611,33 +1755,36 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('serialNumbers:bulkSet', (_e, produitId: string, snList: string[]) => {
-    // Replace all S/N for this product (only EN_STOCK — don't touch VENDU)
+    // Replace available S/N only. Actual sold rows are immutable from the
+    // product editor and can only become available through a cancellation.
     const now = new Date().toISOString()
+    const normalized = snList.map(sn => String(sn).trim()).filter(Boolean)
+    const unique = new Map(normalized.map(sn => [sn.toLocaleLowerCase('fr'), sn]))
+    if (unique.size !== normalized.length) throw new Error('Un numéro de série est saisi plusieurs fois')
     db.transaction(() => {
+      const sold = db.prepare(`
+        SELECT numero_serie FROM serial_numbers
+        WHERE produit_id = ? AND statut = 'VENDU'
+      `).all(produitId) as Array<{ numero_serie: string }>
+      const soldSet = new Set(sold.map(row => row.numero_serie.trim().toLocaleLowerCase('fr')))
+      const conflict = [...unique.entries()].find(([key]) => soldSet.has(key))
+      if (conflict) throw new Error(`S/N déjà vendu et non modifiable : ${conflict[1]}`)
       db.prepare("DELETE FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK'").run(produitId)
       const insert = db.prepare(`
         INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
         VALUES (?, ?, ?, 'EN_STOCK', ?, ?)
       `)
-      for (const sn of snList) {
-        if (sn.trim()) {
-          const { randomUUID } = require('crypto') as typeof import('crypto')
-          insert.run(randomUUID(), produitId, sn.trim(), now, now)
-        }
+      for (const sn of unique.values()) {
+        insert.run(randomUUID(), produitId, sn, now, now)
       }
     })()
     return { success: true }
   })
 
   ipcMain.handle('serialNumbers:markSold', (_e, produitId: string, venteId: string) => {
-    // Mark the first available EN_STOCK S/N as VENDU
-    const now = new Date().toISOString()
-    const sn = db.prepare("SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1").get(produitId) as { id: string } | undefined
-    if (sn) {
-      db.prepare("UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?").run(venteId, now, sn.id)
-      return { success: true, id: sn.id }
-    }
-    return { success: false }
+    // Deliberately refuse the legacy "pick the first serial" behavior. Every
+    // sale/document must carry the exact user-selected S/N through ventes:create.
+    return { success: false, error: `S/N explicite obligatoire (${produitId}, ${venteId})` }
   })
 
   ipcMain.handle('produits:bulkInsert', (_e, produits) => {
@@ -1760,7 +1907,10 @@ function setupIpcHandlers() {
     if (normalizedVente.type === 'VENTE' && !normalizedVente.shift_id) {
       throw new Error('Ouvrez une caisse externe avant l’encaissement')
     }
-    const loyaltyUsed = Math.max(0, money3(normalizedVente.fidelite_utilisee))
+    const isQuote = String(normalizedVente.type_vente ?? 'TICKET') === 'DEVIS'
+    const affectsInventory = !isQuote
+    const loyaltyUsed = isQuote ? 0 : Math.max(0, money3(normalizedVente.fidelite_utilisee))
+    normalizedVente.fidelite_utilisee = loyaltyUsed
     const loyaltyClient = normalizedVente.client_id
       ? db.prepare(`SELECT * FROM clients WHERE id = ? AND actif = 1`).get(normalizedVente.client_id) as Record<string, unknown> | undefined
       : undefined
@@ -1778,7 +1928,7 @@ function setupIpcHandlers() {
     const maxUsePct = Math.min(100, Math.max(0, Number(maxUsePctRow?.value) || 0))
     const maxAllowedUse = money3(grossAfterOtherDiscounts * maxUsePct / 100)
     if (loyaltyUsed > maxAllowedUse + 0.0001) throw new Error(`Utilisation fidélité limitée à ${maxUsePct}% du total`)
-    const loyaltyEarned = hasLoyaltyCard && Number(normalizedVente.total_ttc) >= minPurchase
+    const loyaltyEarned = !isQuote && hasLoyaltyCard && Number(normalizedVente.total_ttc) >= minPurchase
       ? money3(Number(normalizedVente.total_ttc) * gainPct / 100)
       : 0
     normalizedVente.fidelite_gagnee = loyaltyEarned
@@ -1794,33 +1944,21 @@ function setupIpcHandlers() {
       INSERT INTO lignes_vente (id, vente_id, produit_id, designation, quantite, prix_unitaire, remise_pct, total_ligne, type_produit, numero_serie)
       VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit, @numero_serie)
     `)
-    const updateStock = db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?')
-    const markSnSold = db.prepare(`UPDATE serial_numbers SET statut = 'VENDU', vente_id = ?, updated_at = ? WHERE id = ?`)
-    const nextSn = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK' ORDER BY created_at ASC LIMIT 1`)
-    const snByValue = db.prepare(`SELECT id FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`)
-
     const transaction = db.transaction(() => {
+      const claimedSerials = new Set<string>()
+      for (const ligne of normalizedLignes) validateLineSerials(ligne, claimedSerials)
       insertVente.run(normalizedVente)
       const now = new Date().toISOString()
       for (const ligne of normalizedLignes) {
         insertLigne.run(ligne)
-        if (ligne.produit_id) {
-          updateStock.run(Number(ligne.quantite ?? 0), ligne.produit_id)
-          const prod = db.prepare('SELECT has_serial_number FROM produits WHERE id = ?').get(ligne.produit_id) as { has_serial_number?: number } | undefined
-          if (prod?.has_serial_number) {
-            const serials = String(ligne.numero_serie ?? '')
-              .split(',')
-              .map((s: string) => s.trim())
-              .filter(Boolean)
-            const toMark = serials.length ? serials : Array.from({ length: Number(ligne.quantite ?? 0) }, () => null)
-            for (const snVal of toMark) {
-              const sn = snVal
-                ? snByValue.get(ligne.produit_id, snVal) as { id: string } | undefined
-                : nextSn.get(ligne.produit_id) as { id: string } | undefined
-              if (sn) markSnSold.run(vente.id, now, sn.id)
-            }
-          }
-        }
+        if (affectsInventory) applyVenteLineInventory(String(normalizedVente.id), ligne, now)
+      }
+      if (isQuote) {
+        db.prepare(`
+          INSERT OR IGNORE INTO inventory_repair_ledger
+            (repair_key, operation_id, repaired_at, details)
+          VALUES ('legacy_devis_inventory_v1', ?, ?, ?)
+        `).run(normalizedVente.id, now, JSON.stringify({ future_safe_quote: true }))
       }
       if (loyaltyClient && hasLoyaltyCard && (loyaltyUsed > 0 || loyaltyEarned > 0)) {
         let runningBalance = balanceBefore
@@ -1851,10 +1989,12 @@ function setupIpcHandlers() {
       }
     })
     transaction()
-    addActivityLog({ shift_id: normalizedVente.shift_id as string, operateur: normalizedVente.operateur_nom as string, action: 'SALE_CREATED', montant: normalizedVente.total_ttc as number, details: { numero: normalizedVente.numero, mode: normalizedVente.mode_paiement, type_vente: normalizedVente.type_vente } })
+    addActivityLog({ shift_id: normalizedVente.shift_id as string, operateur: normalizedVente.operateur_nom as string, action: isQuote ? 'QUOTE_CREATED' : 'SALE_CREATED', montant: isQuote ? null : normalizedVente.total_ttc as number, details: { numero: normalizedVente.numero, mode: normalizedVente.mode_paiement, type_vente: normalizedVente.type_vente, inventory_applied: affectsInventory } })
     enqueueSync('ventes', 'INSERT', normalizedVente)
     for (const ligne of normalizedLignes) enqueueSync('lignes_vente', 'INSERT', ligne)
-    for (const ligne of normalizedLignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
+    if (affectsInventory) {
+      for (const ligne of normalizedLignes) if (ligne.produit_id) enqueueProductSnapshot(ligne.produit_id)
+    }
     const loyaltyAfter = loyaltyClient
       ? db.prepare(`SELECT solde_fidelite FROM clients WHERE id = ?`).get(loyaltyClient.id) as { solde_fidelite?: number } | undefined
       : undefined
@@ -2208,6 +2348,8 @@ function setupIpcHandlers() {
     const ventes = db.prepare(`
       SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
     `).get(today) as { total: number; count: number }
     const reparations = db.prepare(`
       SELECT COALESCE(SUM(total_estime),0) as total, COUNT(*) as count
@@ -2223,6 +2365,8 @@ function setupIpcHandlers() {
     const ventes = db.prepare(`
       SELECT date(created_at) as date, SUM(total_ttc) as total, COUNT(*) as count
       FROM ventes WHERE created_at >= ? AND created_at <= ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
       GROUP BY date(created_at) ORDER BY date
     `).all(dateFrom, dateTo)
     return { ventes }
@@ -2242,17 +2386,23 @@ function setupIpcHandlers() {
     const dailyVentes = db.prepare(`
       SELECT date(created_at) as date, COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
       GROUP BY date(created_at) ORDER BY date
     `).all(d30Str) as Array<{ date: string; total: number; count: number }>
 
     const todayVentes = db.prepare(`
       SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
     `).get(todayStr) as { total: number; count: number }
 
     const yestVentes = db.prepare(`
       SELECT COALESCE(SUM(total_ttc),0) as total, COUNT(*) as count
       FROM ventes WHERE created_at >= ? AND created_at < ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
     `).get(yesterdayStr, todayStr) as { total: number; count: number }
 
     const repsEnCours = db.prepare(`
@@ -2262,6 +2412,8 @@ function setupIpcHandlers() {
     const parMode = db.prepare(`
       SELECT mode_paiement, COUNT(*) as count, COALESCE(SUM(total_ttc),0) as total
       FROM ventes WHERE created_at >= ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
       GROUP BY mode_paiement ORDER BY total DESC
     `).all(d30Str) as Array<{ mode_paiement: string; count: number; total: number }>
 
@@ -2276,6 +2428,8 @@ function setupIpcHandlers() {
       FROM lignes_vente lv
       JOIN ventes v ON lv.vente_id = v.id
       WHERE v.created_at >= ? AND v.type = 'VENTE'
+        AND COALESCE(v.type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(v.statut, 'ACTIVE') != 'ANNULEE'
       GROUP BY lv.designation ORDER BY revenue DESC LIMIT 5
     `).all(d30Str) as Array<{ designation: string; revenue: number; qty: number }>
 
@@ -3147,7 +3301,12 @@ function setupIpcHandlers() {
     if (!shift) return { error: 'Shift not found' }
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
-    const ventesTotal = db.prepare(`SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes WHERE shift_id = ? AND type = 'VENTE'`).get(shiftId) as { total: number }
+    const ventesTotal = db.prepare(`
+      SELECT COALESCE(SUM(total_ttc),0) as total FROM ventes
+      WHERE shift_id = ? AND type = 'VENTE'
+        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
+    `).get(shiftId) as { total: number }
     const repairFinalTotal = db.prepare(`
       SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total FROM reparations
       WHERE statut IN ('TERMINE', 'RENDU') AND (
@@ -3583,14 +3742,37 @@ function setupIpcHandlers() {
     const vente = db.prepare(`SELECT * FROM ventes WHERE id = ?`).get(id) as Record<string, unknown> | undefined
     if (!vente) throw new Error('Vente introuvable')
     if (vente.statut === 'ANNULEE') return { success: true }
+    const activeInvoice = db.prepare(`
+      SELECT id, numero FROM documents
+      WHERE vente_id = ? AND type_document = 'FACTURE_VENTE'
+        AND statut NOT IN ('ANNULE', 'REVOQUE')
+      ORDER BY created_at DESC LIMIT 1
+    `).get(id) as { id: string; numero: string } | undefined
+    const isInvoiceSale = String(vente.type_vente ?? 'TICKET') === 'FACTURE' || !!activeInvoice
+    if (isInvoiceSale && typeof data.creer_avoir !== 'boolean') {
+      throw new Error('Choisissez obligatoirement : annuler avec avoir ou sans avoir')
+    }
+    if (isInvoiceSale && data.creer_avoir === true) {
+      throw new Error('Utilisez l’annulation avec avoir pour cette facture')
+    }
+    const affectsInventory = venteAffectsInventory(vente)
     let loyaltyClientId: string | null = null
     db.transaction(() => {
       db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par=@annule_par, annule_at=@annule_at, annule_motif=@annule_motif WHERE id=@id`)
         .run({ id, annule_par: data.annule_par, annule_at: now, annule_motif: data.annule_motif })
       const lignes = db.prepare(`SELECT produit_id, quantite, numero_serie FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as Record<string, unknown>[]
-      for (const l of lignes) {
-        // Restore stock and the exact serial(s) selected for this sale.
-        revertVenteLineInventory(id, l, now)
+      if (affectsInventory) {
+        for (const l of lignes) {
+          // Restore stock and the exact serial(s) selected for this sale.
+          revertVenteLineInventory(id, l, now)
+        }
+      }
+      if (activeInvoice) {
+        db.prepare(`
+          UPDATE documents
+          SET statut='REVOQUE', revoque_par=?, revoque_at=?, revoque_motif=?, updated_at=?
+          WHERE id=?
+        `).run(data.annule_par ?? 'superadmin', now, data.annule_motif ?? 'Vente annulée sans avoir', now, activeInvoice.id)
       }
       loyaltyClientId = String(vente.client_id ?? '') || null
       if (loyaltyClientId) {
@@ -3622,8 +3804,20 @@ function setupIpcHandlers() {
     })()
     addActivityLog({ action: 'SALE_CANCELLED', details: { id, ...data } })
     enqueueSync('ventes', 'UPDATE', { id, statut: 'ANNULEE', annule_at: now, ...data })
+    if (activeInvoice) {
+      enqueueSync('documents', 'UPDATE', {
+        id: activeInvoice.id,
+        statut: 'REVOQUE',
+        revoque_par: data.annule_par ?? 'superadmin',
+        revoque_at: now,
+        revoque_motif: data.annule_motif ?? 'Vente annulée sans avoir',
+        updated_at: now,
+      })
+    }
     const lignes = db.prepare(`SELECT produit_id FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as { produit_id: string }[]
-    for (const l of lignes) enqueueProductSnapshot(l.produit_id)
+    if (affectsInventory) {
+      for (const l of lignes) enqueueProductSnapshot(l.produit_id)
+    }
     if (loyaltyClientId) {
       const clientSnapshot = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(loyaltyClientId) as Record<string, unknown> | undefined
       if (clientSnapshot) enqueueSync('clients', 'UPDATE', clientSnapshot)
@@ -3837,6 +4031,12 @@ function setupIpcHandlers() {
     }, ['total_ht', 'total_tva', 'total_ttc', 'montant_paye', 'exo', 'timbre', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'tva_taux_principal'])
     let docLignes = (lignes as Record<string, unknown>[]).map(l => normalizeDocumentLine(l))
     const typeDocStr = String(normalizedDoc.type_document ?? '')
+    if (typeDocStr === 'DEVIS' && normalizedDoc.vente_id) {
+      const sourceSale = db.prepare(`SELECT type_vente FROM ventes WHERE id = ?`).get(normalizedDoc.vente_id) as { type_vente?: string } | undefined
+      if (sourceSale && String(sourceSale.type_vente ?? 'TICKET') !== 'DEVIS') {
+        return { success: false, error: 'Une vente encaissée ne peut pas être convertie en devis. Créez le devis avant la vente.' }
+      }
+    }
     const nfAllowed = typeDocStr === 'BON_LIVRAISON'
     if (normalizedDoc.vente_id && !nfAllowed) {
       docLignes = docLignes.filter(l => (l.type_produit as string | undefined) !== 'NF')
@@ -3854,6 +4054,14 @@ function setupIpcHandlers() {
         markVenteConverted(normalizedDoc.vente_id, normalizedDoc.type_document)
         return { success: true, id: existing.id, numero: existing.numero, alreadyExists: true }
       }
+    }
+    try {
+      const claimedSerials = new Set<string>()
+      for (const line of docLignes) {
+        validateLineSerials(line, claimedSerials, String(normalizedDoc.vente_id ?? '') || undefined)
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Numéro de série invalide' }
     }
     db.transaction(() => {
       db.prepare(`
@@ -3967,12 +4175,17 @@ function setupIpcHandlers() {
       VALUES (@id, @vente_id, @produit_id, @designation, @quantite, @prix_unitaire, @remise_pct, @total_ligne, @type_produit, @numero_serie)
     `)
     const now = new Date().toISOString()
+    const affectsInventory = doc.type_document !== 'DEVIS'
     try {
       db.transaction(() => {
         if (doc.vente_id) {
-          for (const vl of oldVenteLines) revertVenteLineInventory(doc.vente_id!, vl, now)
+          if (affectsInventory) {
+            for (const vl of oldVenteLines) revertVenteLineInventory(doc.vente_id!, vl, now)
+          }
           db.prepare(`DELETE FROM lignes_vente WHERE vente_id = ?`).run(doc.vente_id)
         }
+        const claimedSerials = new Set<string>()
+        for (const line of normalizedLignes) validateLineSerials(line, claimedSerials)
         db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
         for (const l of normalizedLignes) {
           const nl = { ...l, document_id: documentId }
@@ -3992,7 +4205,7 @@ function setupIpcHandlers() {
             })
           }
         }
-        if (doc.vente_id) {
+        if (doc.vente_id && affectsInventory) {
           const newVenteLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id = ?`).all(doc.vente_id) as Record<string, unknown>[]
           for (const vl of newVenteLines) applyVenteLineInventory(doc.vente_id!, vl, now)
         }
@@ -4015,7 +4228,9 @@ function setupIpcHandlers() {
       for (const vl of syncedVenteLines) enqueueSync('lignes_vente', 'INSERT', vl)
       const touched = new Set<string>()
       for (const vl of [...oldVenteLines, ...syncedVenteLines]) if (vl.produit_id) touched.add(String(vl.produit_id))
-      for (const pid of touched) enqueueProductSnapshot(pid)
+      if (affectsInventory) {
+        for (const pid of touched) enqueueProductSnapshot(pid)
+      }
     }
     enqueueSync('documents', 'UPDATE', { id: documentId, ...normalizedTotals, updated_at: now })
     addActivityLog({ action: 'DOCUMENT_LINES_EDITED', details: { documentId, lineCount: normalizedLignes.length } })

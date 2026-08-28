@@ -18,7 +18,7 @@ export const SYNC_REMOTE_COLUMNS: Record<string, ReadonlySet<string>> = {
   ventes: new Set([
     'id', 'numero', 'shift_id', 'operateur_nom', 'client_nom', 'client_tel', 'client_adresse', 'client_matricule',
     'sous_total', 'total_remises', 'total_ttc', 'mode_paiement', 'montant_recu', 'monnaie_rendue', 'type',
-    'a_facture', 'fidelite_utilisee', 'fidelite_gagnee', 'statut', 'annule_par', 'annule_at', 'annule_motif', 'created_at',
+    'type_vente', 'a_facture', 'fidelite_utilisee', 'fidelite_gagnee', 'statut', 'annule_par', 'annule_at', 'annule_motif', 'created_at',
   ]),
   lignes_vente: new Set(['id', 'vente_id', 'produit_id', 'designation', 'quantite', 'prix_unitaire', 'remise_pct', 'total_ligne', 'type_produit']),
   factures_clients: new Set(['id', 'numero', 'shift_id', 'vente_id', 'type_facture', 'client_nom', 'client_tel', 'client_adresse', 'client_matricule', 'total_ht', 'total_tva', 'total_ttc', 'imprimee', 'tva_taux_principal', 'exo', 'created_at']),
@@ -40,7 +40,7 @@ export const SYNC_REMOTE_COLUMNS: Record<string, ReadonlySet<string>> = {
     'statut_paiement', 'montant_paye', 'date_echeance', 'imprimee', 'layout_snapshot', 'contenu_json',
     'exo', 'timbre', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'tva_taux_principal', 'created_at', 'updated_at',
   ]),
-  lignes_document: new Set(['id', 'document_id', 'produit_id', 'designation', 'quantite', 'prix_unitaire', 'remise_pct', 'tva_taux', 'total_ht', 'total_tva', 'total_ttc', 'type_produit']),
+  lignes_document: new Set(['id', 'document_id', 'produit_id', 'designation', 'quantite', 'prix_unitaire', 'remise_pct', 'tva_taux', 'total_ht', 'total_tva', 'total_ttc', 'type_produit', 'numero_serie']),
   transactions_services: new Set(['id', 'shift_id', 'service_id', 'service_nom', 'montant_frais', 'note', 'operateur', 'created_at']),
   activity_logs: new Set(['id', 'shift_id', 'operateur', 'action', 'details', 'montant', 'created_at']),
 }

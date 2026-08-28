@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.3'
+export const SCHEMA_VERSION = '1.10.4'
 
 export function initDatabase() {
   const db = getDb()
@@ -537,6 +537,16 @@ export function initDatabase() {
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL DEFAULT '',
       updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Local, idempotent repair ledger. It prevents legacy inventory repairs
+    -- from ever being applied twice, including after a restart.
+    CREATE TABLE IF NOT EXISTS inventory_repair_ledger (
+      repair_key   TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      repaired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      details      TEXT,
+      PRIMARY KEY (repair_key, operation_id)
     );
 
     -- ── Retours (Returns) ──────────────────────────────────────────────────

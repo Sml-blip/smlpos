@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import DocumentPrintModal from './DocumentPrintModal'
-import { ConvertVenteDocModal, printVenteTicketQuick } from './VenteHistoriqueActions'
+import { ConvertVenteDocModal, VenteTicketPrintModal } from './VenteHistoriqueActions'
 import { ACTIVITY_LABELS, formatActivityDetails } from '../../lib/activityLabels'
 
 const api = window.api
@@ -74,6 +74,13 @@ const MODE_LABELS: Record<string, string> = {
   CARTE: 'Carte',
   CHEQUE: 'Chèque',
   MIXTE: 'Mixte',
+}
+
+const SALE_TYPE_CONFIG: Record<NonNullable<Vente['type_vente']>, { label: string; color: string }> = {
+  TICKET: { label: 'Ticket', color: 'border-slate-200 bg-slate-50 text-slate-700' },
+  FACTURE: { label: 'Facture', color: 'border-blue-200 bg-blue-50 text-blue-700' },
+  BL_VENTE: { label: 'BL', color: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  DEVIS: { label: 'Devis', color: 'border-amber-200 bg-amber-50 text-amber-800' },
 }
 
 function getDateRange(preset: string): { from: string; to: string } {
@@ -140,6 +147,7 @@ export default function HistoriqueTab() {
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
+  const [printVente, setPrintVente] = useState<Vente | null>(null)
   const [convertVente, setConvertVente] = useState<Vente | null>(null)
   const [missingDailyInvoiceDays, setMissingDailyInvoiceDays] = useState<MissingDailyInvoiceDay[]>([])
   const [creatingDailyInvoiceDate, setCreatingDailyInvoiceDate] = useState<string | null>(null)
@@ -213,12 +221,29 @@ export default function HistoriqueTab() {
     }
   }
 
-  const handleCancelVente = async (vente: Vente, motif: string) => {
+  const handleCancelVente = async (vente: Vente, motif: string, creerAvoir: boolean) => {
     await runAction('Annulation vente', async () => {
-      await api.ventesAnnuler(vente.id, { annule_par: currentOperateur?.nom ?? 'superadmin', annule_motif: motif })
+      if (vente.type_vente === 'FACTURE' && creerAvoir) {
+        const linkedInvoice = (items: DocType[]) => items.find(doc =>
+          doc.vente_id === vente.id
+          && doc.type_document === 'FACTURE_VENTE'
+          && !['ANNULE', 'REVOQUE'].includes(doc.statut),
+        )
+        const invoice = linkedInvoice(documents)
+          ?? linkedInvoice(await api.documentsList({}) as DocType[])
+        if (!invoice) throw new Error('Facture active liée introuvable — annulation avec avoir impossible')
+        const result = await api.documentsAnnulerAvecAvoir?.(invoice.id, motif)
+        if (!result?.success) throw new Error(result?.error || 'Création de l’avoir impossible')
+      } else {
+        await api.ventesAnnuler(vente.id, {
+          annule_par: currentOperateur?.nom ?? 'superadmin',
+          annule_motif: motif,
+          ...(vente.type_vente === 'FACTURE' ? { creer_avoir: false } : {}),
+        })
+      }
       setCancelTarget(null)
       load()
-    }, { successMessage: 'Vente annulée' })
+    }, { successMessage: vente.type_vente === 'FACTURE' && creerAvoir ? 'Facture annulée et avoir créé' : 'Vente annulée' })
   }
 
   const handleConvertVente = async (vente: Vente) => {
@@ -269,7 +294,7 @@ export default function HistoriqueTab() {
     setUpdatingStatut(null)
   }
 
-  const activeVentes = ventes.filter(v => v.type === 'VENTE' && v.statut !== 'ANNULEE')
+  const activeVentes = ventes.filter(v => v.type === 'VENTE' && v.statut !== 'ANNULEE' && v.type_vente !== 'DEVIS')
   const totalVentes = activeVentes.reduce((s, v) => s + v.total_ttc, 0)
   const totalReparations = reparations.filter(r => r.statut !== 'ANNULE').reduce((s, r) => s + r.total_estime, 0)
 
@@ -278,6 +303,7 @@ export default function HistoriqueTab() {
       'N°': v.numero,
       'Date': formatDate(v.created_at),
       'Opérateur': v.operateur_nom || '',
+      'Type': SALE_TYPE_CONFIG[v.type_vente ?? 'TICKET'].label,
       'Mode': MODE_LABELS[v.mode_paiement] || v.mode_paiement,
       'Remises': v.total_remises,
       'Total TTC': v.total_ttc,
@@ -465,7 +491,7 @@ export default function HistoriqueTab() {
               venteLignes={venteLignes}
               onToggle={toggleVente}
               onCancel={setCancelTarget}
-              onPrintTicket={(v) => void printVenteTicketQuick(v)}
+              onPrintTicket={setPrintVente}
               onConvert={(v) => void handleConvertVente(v)}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
             />
@@ -616,7 +642,7 @@ export default function HistoriqueTab() {
         <CancelVenteModal
           vente={cancelTarget}
           onClose={() => setCancelTarget(null)}
-          onConfirm={(motif) => handleCancelVente(cancelTarget, motif)}
+          onConfirm={(motif, creerAvoir) => handleCancelVente(cancelTarget, motif, creerAvoir)}
         />
       )}
       {paymentRepair && (
@@ -639,6 +665,9 @@ export default function HistoriqueTab() {
       {/* Document Print Modal */}
       {printDoc && (
         <DocumentPrintModal doc={printDoc} onClose={() => setPrintDoc(null)} />
+      )}
+      {printVente && (
+        <VenteTicketPrintModal vente={printVente} onClose={() => setPrintVente(null)} />
       )}
       {convertVente && (
         <ConvertVenteDocModal
@@ -743,6 +772,7 @@ function VentesTable({
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-text-secondary">N°</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-text-secondary">Date</th>
           <th className="text-left px-4 py-2.5 text-xs font-semibold text-text-secondary">Opérateur</th>
+          <th className="text-center px-4 py-2.5 text-xs font-semibold text-text-secondary">Type</th>
           <th className="text-center px-4 py-2.5 text-xs font-semibold text-text-secondary">Mode</th>
           <th className="text-right px-4 py-2.5 text-xs font-semibold text-text-secondary">Remises</th>
           <th className="text-right px-4 py-2.5 text-xs font-semibold text-text-secondary">Total TTC</th>
@@ -754,6 +784,7 @@ function VentesTable({
       <tbody>
         {ventes.map(v => {
           const annulee = v.statut === 'ANNULEE'
+          const saleType = SALE_TYPE_CONFIG[v.type_vente ?? 'TICKET']
           return (
             <Fragment key={v.id}>
               <tr
@@ -763,6 +794,11 @@ function VentesTable({
                 <td className={cn('px-4 py-2.5 font-mono text-xs font-semibold text-text-secondary', annulee && 'line-through')}>{v.numero}</td>
                 <td className="px-4 py-2.5 text-xs text-text-secondary">{formatDate(v.created_at)}</td>
                 <td className="px-4 py-2.5 text-xs font-medium">{v.operateur_nom || '—'}</td>
+                <td className="px-4 py-2.5 text-center">
+                  <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide', saleType.color)}>
+                    {saleType.label}
+                  </span>
+                </td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center justify-center gap-1 text-xs text-text-secondary">
                     {MODE_ICONS[v.mode_paiement]}
@@ -790,14 +826,16 @@ function VentesTable({
                 <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
                   {!annulee && (
                     <div className="flex items-center justify-center gap-1 flex-wrap">
-                      <button type="button" onClick={() => onPrintTicket(v)} title="Imprimer ticket"
-                        className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary">
-                        <Printer size={12} />
+                      <button type="button" onClick={() => onPrintTicket(v)} title="Imprimer le ticket de cette opération (sans conversion)"
+                        className="inline-flex items-center gap-1.5 p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary text-[10px] font-bold px-2">
+                        <Printer size={12} /> Ticket
                       </button>
-                      <button type="button" onClick={() => onConvert(v)} title="Facture / BL / Devis"
-                        className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary text-[10px] font-bold px-2">
-                        Doc
-                      </button>
+                      {(v.type_vente ?? 'TICKET') === 'TICKET' && (
+                        <button type="button" onClick={() => onConvert(v)} title="Créer une facture, un BL ou un devis"
+                          className="p-1.5 border border-border rounded-lg hover:bg-muted text-text-secondary text-[10px] font-bold px-2">
+                          Doc
+                        </button>
+                      )}
                     </div>
                   )}
                 </td>
@@ -807,7 +845,7 @@ function VentesTable({
               </tr>
               {expandedVente === v.id && (
                 <tr className="bg-accent-50">
-                  <td colSpan={9} className="px-6 py-3">
+                  <td colSpan={10} className="px-6 py-3">
                     <div className="text-xs font-semibold text-text-secondary mb-2 flex items-center gap-1">
                       <Eye size={12} /> Détail de la vente
                       {annulee && v.annule_motif && <span className="ml-2 text-red-600">— Motif: {v.annule_motif}</span>}
@@ -1238,13 +1276,14 @@ function DocumentsTable({ documents, onPrint }: { documents: DocType[]; onRefres
 // ─── Cancel Vente Modal ────────────────────────────────────────────────────────
 
 function CancelVenteModal({ vente, onClose, onConfirm }: {
-  vente: Vente; onClose: () => void; onConfirm: (motif: string) => void
+  vente: Vente; onClose: () => void; onConfirm: (motif: string, creerAvoir: boolean) => void
 }) {
   const [motif, setMotif] = useState('')
   const [error, setError] = useState('')
-  const handleConfirm = () => {
+  const isInvoice = vente.type_vente === 'FACTURE'
+  const handleConfirm = (creerAvoir: boolean) => {
     if (!motif.trim()) { setError('Le motif est obligatoire'); return }
-    onConfirm(motif)
+    onConfirm(motif, creerAvoir)
   }
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1255,7 +1294,9 @@ function CancelVenteModal({ vente, onClose, onConfirm }: {
         </div>
         <p className="text-sm text-text-secondary">
           Confirmer l'annulation de <strong>{vente.numero}</strong> ({formatPrice(vente.total_ttc)}) ?<br />
-          <span className="text-xs text-text-muted">Le stock sera automatiquement restauré.</span>
+          <span className="text-xs text-text-muted">
+            {vente.type_vente === 'DEVIS' ? 'Le devis n’a aucun stock à restaurer.' : 'Le stock et les S/N seront automatiquement restaurés.'}
+          </span>
         </p>
         {error && <p className="text-xs text-red-600">{error}</p>}
         <div className="flex flex-col gap-1">
@@ -1266,10 +1307,23 @@ function CancelVenteModal({ vente, onClose, onConfirm }: {
         </div>
         <div className="flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-border rounded-lg text-text-secondary">Fermer</button>
-          <button type="button" onClick={handleConfirm}
-            className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg">
-            Confirmer l'annulation
-          </button>
+          {isInvoice ? (
+            <>
+              <button type="button" onClick={() => handleConfirm(false)}
+                className="px-3 py-2 text-sm border border-red-300 bg-red-50 text-red-700 font-semibold rounded-lg">
+                Sans avoir
+              </button>
+              <button type="button" onClick={() => handleConfirm(true)}
+                className="px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg">
+                Avec avoir
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => handleConfirm(false)}
+              className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg">
+              Confirmer l'annulation
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1296,7 +1350,7 @@ function NewDocumentModal({
   const [produits, setProduits] = useState<Produit[]>([])
   const [clientSearch, setClientSearch] = useState('')
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
-  const [lignes, setLignes] = useState([{ id: generateId(), produit_id: '', designation: '', quantite: 1, prix_unitaire: 0, remise_pct: 0, tva_taux: 0 }])
+  const [lignes, setLignes] = useState([{ id: generateId(), produit_id: '', designation: '', quantite: 1, prix_unitaire: 0, remise_pct: 0, tva_taux: 0, numero_serie: '' }])
   const [notes, setNotes] = useState('')
   const [dateEcheance, setDateEcheance] = useState('')
   const [saving, setSaving] = useState(false)
@@ -1324,7 +1378,7 @@ function NewDocumentModal({
     ? clients.filter(c => c.nom.toLowerCase().includes(clientSearch.toLowerCase()) || (c.telephone ?? '').includes(clientSearch))
     : clients
 
-  const addLigne = () => setLignes(prev => [...prev, { id: generateId(), produit_id: '', designation: '', quantite: 1, prix_unitaire: 0, remise_pct: 0, tva_taux: 0 }])
+  const addLigne = () => setLignes(prev => [...prev, { id: generateId(), produit_id: '', designation: '', quantite: 1, prix_unitaire: 0, remise_pct: 0, tva_taux: 0, numero_serie: '' }])
   const removeLigne = (id: string) => setLignes(prev => prev.filter(l => l.id !== id))
   const updateLigne = (id: string, field: string, value: unknown) => {
     setLignes(prev => prev.map(l => {
@@ -1336,6 +1390,7 @@ function NewDocumentModal({
           updated.designation = p.nom
           updated.prix_unitaire = p.prix_vente
           updated.tva_taux = p.tva_taux ?? 19
+          updated.numero_serie = ''
         }
       }
       return updated
@@ -1398,6 +1453,7 @@ function NewDocumentModal({
           total_tva: Math.round(tva * 1000) / 1000,
           total_ttc: Math.round(ttc * 1000) / 1000,
           type_produit: typeProduit,
+          numero_serie: l.numero_serie.trim() || null,
         }
       })
 
@@ -1524,17 +1580,28 @@ function NewDocumentModal({
               {lignes.map((l, i) => (
                 <div key={l.id} className="grid grid-cols-12 gap-1.5 items-center bg-muted rounded-xl p-2">
                   <div className="col-span-1 text-xs text-text-muted text-center font-bold">{i + 1}</div>
-                  <div className="col-span-3">
+                  <div className="col-span-2">
                     <select value={l.produit_id} onChange={e => updateLigne(l.id, 'produit_id', e.target.value)}
                       className="w-full border border-border rounded-lg px-2 py-1.5 text-xs bg-white outline-none">
                       <option value="">Produit (optionnel)</option>
                       {availableProduits.map(p => <option key={p.id} value={p.id}>{p.type === 'NF' ? `[NF] ${p.nom}` : p.nom}</option>)}
                     </select>
                   </div>
-                  <div className="col-span-3">
+                  <div className="col-span-2">
                     <input value={l.designation} onChange={e => updateLigne(l.id, 'designation', e.target.value)}
                       placeholder="Désignation *"
                       className="w-full border border-border rounded-lg px-2 py-1.5 text-xs bg-white outline-none" />
+                  </div>
+                  <div className="col-span-2">
+                    {(() => {
+                      const product = produits.find(p => p.id === l.produit_id)
+                      const tracksSerial = !!product?.has_serial_number || !!product?.numero_serie?.trim()
+                      return tracksSerial ? (
+                        <input value={l.numero_serie} onChange={e => updateLigne(l.id, 'numero_serie', e.target.value)}
+                          placeholder={l.quantite > 1 ? 'S/N séparés par ,' : 'S/N obligatoire'}
+                          className="w-full border border-amber-300 rounded-lg px-2 py-1.5 text-xs font-mono bg-amber-50 outline-none" />
+                      ) : <span className="block text-center text-[10px] text-text-muted">Sans S/N</span>
+                    })()}
                   </div>
                   <div className="col-span-1">
                     <input type="text" inputMode="decimal" value={l.quantite} onChange={e => updateLigne(l.id, 'quantite', parseFloat(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 1)}

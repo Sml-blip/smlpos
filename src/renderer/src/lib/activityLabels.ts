@@ -2,6 +2,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   SHIFT_OPENED: 'Ouverture caisse',
   SHIFT_CLOSED: 'Fermeture caisse',
   SALE_CREATED: 'Vente créée',
+  QUOTE_CREATED: 'Devis créé',
   SALE_CANCELLED: 'Vente annulée',
   REPAIR_CREATED: 'Réparation créée',
   REPAIR_STATUS_UPDATED: 'Statut réparation',

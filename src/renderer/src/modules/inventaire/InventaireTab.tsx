@@ -338,7 +338,10 @@ export default function InventaireTab() {
         const list = sns as SerialNumber[]
         setExistingSerials(list)
         const count = p.stock_actuel
-        const filled = Array.from({ length: count }, (_, i) => list[i]?.numero_serie || '')
+        // The editable inputs represent available stock only. Including sold
+        // rows here caused a normal product edit to re-submit an old sold S/N.
+        const available = list.filter(sn => sn.statut === 'EN_STOCK')
+        const filled = Array.from({ length: count }, (_, i) => available[i]?.numero_serie || '')
         setSerialNums(filled)
       })
     } else {

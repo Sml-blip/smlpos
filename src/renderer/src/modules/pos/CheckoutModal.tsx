@@ -115,7 +115,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   ]
 
   const handleConfirm = async () => {
-    if (mode === 'ESPECES' && montantRecuNum < payableTotal) return
+    if (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < payableTotal) return
     if (typeVente === 'BL_VENTE' && items.length === 0) return
     if ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF) {
       setErrorMsg(`${typeVente === 'DEVIS' ? 'Devis' : 'Facture'} : au moins un produit F requis dans le panier.`)
@@ -138,8 +138,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         total_remises: round3(cleanTotalRemises + loyaltyRedeemed),
         total_ttc: payableTotal,
         mode_paiement: mode,
-        montant_recu: mode === 'ESPECES' ? montantRecuNum : payableTotal,
-        monnaie_rendue: monnaieRendue,
+        montant_recu: typeVente === 'DEVIS' ? 0 : mode === 'ESPECES' ? montantRecuNum : payableTotal,
+        monnaie_rendue: typeVente === 'DEVIS' ? 0 : monnaieRendue,
         type: 'VENTE',
         type_vente: typeVente,
         client_id: clientForm.clientId,
@@ -148,8 +148,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         client_adresse: clientForm.adresse.trim() || undefined,
         client_matricule: clientForm.matricule.trim() || undefined,
         a_facture: typeVente !== 'TICKET' ? 1 : 0,
-        fidelite_utilisee: loyaltyRedeemed,
-        fidelite_gagnee: loyaltyEarnPreview,
+        fidelite_utilisee: typeVente === 'DEVIS' ? 0 : loyaltyRedeemed,
+        fidelite_gagnee: typeVente === 'DEVIS' ? 0 : loyaltyEarnPreview,
         created_at: now,
       }
 
@@ -289,7 +289,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           </div>
 
           {/* Carte de fidélité */}
-          <div className="mb-5">
+          {typeVente !== 'DEVIS' && <div className="mb-5">
             <button
               type="button"
               onClick={() => setShowLoyalty(v => !v)}
@@ -375,10 +375,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 {loyaltyError && <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{loyaltyError}</p>}
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Payment mode */}
-          <div className="mb-5">
+          {typeVente !== 'DEVIS' && <div className="mb-5">
             <label className="block text-sm font-semibold mb-2">Mode de paiement</label>
             <div className="grid grid-cols-4 gap-2">
               {modes.map(m => (
@@ -394,10 +394,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Cash amount */}
-          {mode === 'ESPECES' && (
+          {typeVente !== 'DEVIS' && mode === 'ESPECES' && (
             <div className="mb-5">
               <label className="block text-sm font-semibold mb-2">Montant reçu (DT)</label>
               <input
@@ -461,6 +461,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 Devis : au moins un produit F requis (NF exclus).
               </p>
             )}
+            {typeVente === 'DEVIS' && hasItemsF && (
+              <p className="text-[10px] text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg px-2 py-1.5 mt-2">
+                Devis uniquement : aucun paiement, aucun mouvement de stock et aucun S/N marqué vendu.
+              </p>
+            )}
           </div>
 
           {/* Optional client info */}
@@ -500,10 +505,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={loading || (mode === 'ESPECES' && montantRecuNum < payableTotal) || ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF)}
+            disabled={loading || (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < payableTotal) || ((typeVente === 'FACTURE' || typeVente === 'DEVIS') && !hasItemsF)}
             className="w-full bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors"
           >
-            {loading ? 'Traitement...' : 'Confirmer le Paiement'}
+            {loading ? 'Traitement...' : typeVente === 'DEVIS' ? 'Créer le devis' : 'Confirmer le paiement'}
           </button>
         </div>
       </div>
