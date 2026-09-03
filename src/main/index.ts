@@ -1540,6 +1540,8 @@ function setupIpcHandlers() {
       source_tag: null,
       ...p
     }
+    const hasSerialHistory = !!db.prepare('SELECT 1 FROM serial_numbers WHERE produit_id = ? LIMIT 1').get(id)
+    if (hasSerialHistory) normalized.has_serial_number = 1
     const stmt = db.prepare(`
       UPDATE produits SET
         code_barre=@code_barre, reference=@reference, nom=@nom, description=@description, categorie=@categorie,
@@ -1594,14 +1596,31 @@ function setupIpcHandlers() {
     return facture.statut_paiement !== 'BROUILLON' && facture.statut_paiement !== 'ANNULE'
   }
 
+  function validateCanRevertAchatLineInventory(line: Record<string, unknown>) {
+    const produitId = String(line.produit_id ?? '').trim()
+    const quantite = Number(line.quantite) || 0
+    if (!produitId || quantite <= 0) return
+    const product = db.prepare(`SELECT stock_actuel FROM produits WHERE id=?`).get(produitId) as { stock_actuel?: number } | undefined
+    if (!product || Number(product.stock_actuel || 0) < quantite) {
+      throw new Error(`Stock insuffisant pour annuler/modifier l’achat : ${line.designation ?? produitId}`)
+    }
+    for (const sn of parseSerialJson(line.numeros_serie_json)) {
+      const row = db.prepare(`SELECT statut FROM serial_numbers WHERE produit_id=? AND lower(trim(numero_serie))=lower(trim(?)) LIMIT 1`).get(produitId, sn) as { statut?: string } | undefined
+      if (!row) throw new Error(`S/N d’achat introuvable : ${sn}`)
+      if (row.statut !== 'EN_STOCK') throw new Error(`Impossible de modifier cet achat : le S/N ${sn} est ${row.statut === 'VENDU' ? 'déjà vendu' : 'réservé ou indisponible'}`)
+    }
+  }
+
   function revertAchatLineInventory(line: Record<string, unknown>) {
     const produitId = line.produit_id as string | null | undefined
     const quantite = Number(line.quantite) || 0
     if (!produitId || quantite <= 0) return
-    db.prepare('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?').run(quantite, produitId)
-    for (const sn of parseSerialJson(line.numeros_serie_json)) {
-      db.prepare(`DELETE FROM serial_numbers WHERE produit_id = ? AND numero_serie = ? AND statut = 'EN_STOCK'`).run(produitId, sn)
+    const serials = parseSerialJson(line.numeros_serie_json)
+    for (const sn of serials) {
+      const deleted = db.prepare(`DELETE FROM serial_numbers WHERE produit_id = ? AND lower(trim(numero_serie))=lower(trim(?)) AND statut = 'EN_STOCK'`).run(produitId, sn)
+      if (deleted.changes !== 1) throw new Error(`Impossible de retirer le S/N d’achat : ${sn}`)
     }
+    db.prepare('UPDATE produits SET stock_actuel = stock_actuel - ? WHERE id = ? AND stock_actuel >= ?').run(quantite, produitId, quantite)
   }
 
   function applyAchatLineInventory(line: Record<string, unknown>) {
@@ -1726,9 +1745,9 @@ function setupIpcHandlers() {
     try {
       sns = typeof numerosSerieJson === 'string' ? JSON.parse(numerosSerieJson) : numerosSerieJson as string[]
     } catch {
-      return { inserted: 0, skipped: [] }
+      throw new Error('Format des numéros de série invalide')
     }
-    if (!Array.isArray(sns)) return { inserted: 0, skipped: [] }
+    if (!Array.isArray(sns)) throw new Error('Format des numéros de série invalide')
     const filled = sns.map(s => String(s).trim()).filter(Boolean)
     const seenInPayload = new Set<string>()
     for (const sn of filled) {
@@ -1763,6 +1782,9 @@ function setupIpcHandlers() {
     for (const sn of toInsert) {
       insert.run(randomUUID(), produitId, sn, now, now)
     }
+    if (toInsert.length > 0 || filled.length > 0) {
+      db.prepare(`UPDATE produits SET has_serial_number=1, updated_at=? WHERE id=?`).run(now, produitId)
+    }
     return { inserted: toInsert.length, skipped: filled.filter(sn => existingEnStockSet.has(sn.toLowerCase())) }
   }
 
@@ -1778,13 +1800,13 @@ function setupIpcHandlers() {
     const unique = new Map(normalized.map(sn => [sn.toLocaleLowerCase('fr'), sn]))
     if (unique.size !== normalized.length) throw new Error('Un numéro de série est saisi plusieurs fois')
     db.transaction(() => {
-      const sold = db.prepare(`
+      const locked = db.prepare(`
         SELECT numero_serie FROM serial_numbers
-        WHERE produit_id = ? AND statut = 'VENDU'
+        WHERE produit_id = ? AND statut != 'EN_STOCK'
       `).all(produitId) as Array<{ numero_serie: string }>
-      const soldSet = new Set(sold.map(row => row.numero_serie.trim().toLocaleLowerCase('fr')))
-      const conflict = [...unique.entries()].find(([key]) => soldSet.has(key))
-      if (conflict) throw new Error(`S/N déjà vendu et non modifiable : ${conflict[1]}`)
+      const lockedSet = new Set(locked.map(row => row.numero_serie.trim().toLocaleLowerCase('fr')))
+      const conflict = [...unique.entries()].find(([key]) => lockedSet.has(key))
+      if (conflict) throw new Error(`S/N vendu, réservé ou indisponible et non modifiable : ${conflict[1]}`)
       db.prepare("DELETE FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK'").run(produitId)
       const insert = db.prepare(`
         INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
@@ -1793,6 +1815,7 @@ function setupIpcHandlers() {
       for (const sn of unique.values()) {
         insert.run(randomUUID(), produitId, sn, now, now)
       }
+      if (unique.size > 0) db.prepare(`UPDATE produits SET has_serial_number=1, updated_at=? WHERE id=?`).run(now, produitId)
     })()
     return { success: true }
   })
@@ -2851,8 +2874,9 @@ function setupIpcHandlers() {
       ...factureData,
       type: f.type ?? 'FACTURE_ACHAT',
       statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
-      stock_applied: f.stock_applied ?? 1,
+      stock_applied: f.stock_applied ?? (isBL ? 0 : 1),
     }
+    const affectsInventory = achatLineAffectsInventory(factureWithDefaults)
     const transaction = db.transaction(() => {
       if (draftId) {
         db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(draftId)
@@ -2861,7 +2885,7 @@ function setupIpcHandlers() {
       insertFacture.run(factureWithDefaults)
       for (const l of lignes) {
         insertLigne.run(l)
-        if (l.produit_id) {
+        if (l.produit_id && affectsInventory) {
           const now = new Date().toISOString()
           updatePrixAchat.run(l.nouveau_prix_achat, now, l.produit_id)
           // prix_vente_suggere is informational only. Never let a purchase price or
@@ -2889,9 +2913,27 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('facturesFournisseurs:annuler', (_e, factureId: string) => {
-    db.prepare(`UPDATE factures_fournisseurs SET statut_paiement='ANNULE' WHERE id=?`).run(factureId)
+    const facture = db.prepare(`SELECT * FROM factures_fournisseurs WHERE id=?`).get(factureId) as Record<string, unknown> | undefined
+    if (!facture) return { success: false, error: 'Facture fournisseur introuvable' }
+    if (facture.statut_paiement === 'ANNULE') return { success: true }
+    if (Number(facture.montant_paye || 0) > 0.0001) return { success: false, error: 'Annulez ou régularisez les paiements fournisseur avant d’annuler cette facture' }
+    const lignes = db.prepare(`SELECT * FROM lignes_facture_fournisseur WHERE facture_id=?`).all(factureId) as Record<string, unknown>[]
+    const affectsInventory = achatLineAffectsInventory(facture) && Number(facture.stock_applied ?? 1) === 1
+    try {
+      db.transaction(() => {
+        if (affectsInventory) {
+          for (const line of lignes) validateCanRevertAchatLineInventory(line)
+          for (const line of lignes) revertAchatLineInventory(line)
+        }
+        db.prepare(`UPDATE factures_fournisseurs SET statut_paiement='ANNULE', stock_applied=0, updated_at=? WHERE id=?`).run(new Date().toISOString(), factureId)
+        db.prepare(`UPDATE fournisseurs SET solde_du=MAX(0, solde_du-?) WHERE id=?`).run(Number(facture.montant_ttc || 0), facture.fournisseur_id)
+      })()
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Annulation impossible' }
+    }
     addActivityLog({ action: 'SUPPLIER_INVOICE_CANCELLED', details: { factureId } })
-    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_paiement: 'ANNULE' })
+    enqueueSync('factures_fournisseurs', 'UPDATE', { id: factureId, statut_paiement: 'ANNULE', stock_applied: 0 })
+    for (const line of lignes) if (line.produit_id) enqueueProductSnapshot(String(line.produit_id))
     return { success: true }
   })
 
@@ -2937,6 +2979,7 @@ function setupIpcHandlers() {
     try {
       db.transaction(() => {
         if (affectsInventory) {
+          for (const ol of oldLines) validateCanRevertAchatLineInventory(ol)
           for (const ol of oldLines) revertAchatLineInventory(ol)
         }
         db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(factureId)

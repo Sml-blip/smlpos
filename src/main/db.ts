@@ -936,6 +936,14 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN numeros_serie_json TEXT`) } catch { /* already exists */ }
 
+  // Repair products whose S/N rows were imported through a purchase invoice
+  // before the catalogue tracking flag was synchronized.
+  db.prepare(`
+    UPDATE produits SET has_serial_number = 1, updated_at = datetime('now')
+    WHERE COALESCE(has_serial_number, 0) = 0
+      AND EXISTS (SELECT 1 FROM serial_numbers sn WHERE sn.produit_id = produits.id)
+  `).run()
+
   db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES ('cat-reparation', 'Réparation', '🔧')`).run()
 
   // Default settings — keys must match SettingsTab DEFAULTS
