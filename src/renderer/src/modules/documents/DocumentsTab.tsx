@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createElement, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Fuse from 'fuse.js'
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { format } from 'date-fns'
 import { cn, formatPrice } from '../../lib/utils'
 import { usePrint } from '../../lib/usePrint'
@@ -11,6 +13,10 @@ import FactureAchatPrintModal from '../achats/FactureAchatPrintModal'
 import PinUnlockModal from '../../components/PinUnlockModal'
 import InvoiceEditModal from '../../components/InvoiceEditModal'
 import type { Document } from '../../lib/types'
+import InvoicePrintTemplate, { type InvoiceCompanySettings, type InvoiceDocData, type InvoiceLineData } from '../../components/InvoicePrintTemplate'
+import { normalizeInvoiceLine, applyTotalsToDoc } from '../../lib/invoiceLineCalc'
+import { mapDbFactureAchatToInvoice } from '../../lib/invoiceAchatMapper'
+import { wrapPrintHtml } from '../../lib/printHtml'
 import {
   FileText, FileDown, Search, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
@@ -66,6 +72,59 @@ function buildDocumentsPdf(title: string, columns: string[], rows: Record<string
   </style></head><body><header><h1>${escapeHtml(title)}</h1><div class="meta">SML Informatique · Document généré le ${escapeHtml(format(new Date(), 'dd/MM/yyyy HH:mm'))}</div></header>
   <table><thead><tr>${header}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length}">Aucune donnée</td></tr>`}</tbody></table>
   <footer>${rows.length} ligne(s)</footer></body></html>`
+}
+
+function renderInvoiceMarkup(doc: InvoiceDocData, lignes: InvoiceLineData[], settings: InvoiceCompanySettings): string {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    flushSync(() => root.render(createElement(InvoicePrintTemplate, { doc, lignes, settings })))
+    return host.innerHTML
+  } finally {
+    root.unmount()
+  }
+}
+
+async function loadFullInvoiceMarkup(row: DocRow): Promise<string> {
+  if (row._source === 'ff') {
+    const [facture, lignes, settings] = await Promise.all([
+      api.facturesFournisseursGet(row.id) as Promise<Record<string, unknown> | null>,
+      api.facturesFournisseursGetLignes(row.id) as Promise<Record<string, unknown>[]>,
+      api.settingsGetAll() as Promise<InvoiceCompanySettings>,
+    ])
+    if (!facture) throw new Error(`Document introuvable : ${row.numero}`)
+    const mapped = mapDbFactureAchatToInvoice(facture, lignes || [])
+    return renderInvoiceMarkup(mapped.doc, mapped.lignes, settings || {})
+  }
+
+  const fresh = await api.documentsGet(row.id) as Document | null
+  if (!fresh) throw new Error(`Document introuvable : ${row.numero}`)
+  const settings = fresh.layout_snapshot
+    ? (() => { try { return JSON.parse(fresh.layout_snapshot) as InvoiceCompanySettings } catch { return null } })()
+    : null
+  const [lignes, liveSettings] = await Promise.all([
+    api.documentsGetLignes(fresh.id) as Promise<Array<Record<string, unknown>>>,
+    settings ? Promise.resolve(settings) : api.settingsGetAll() as Promise<InvoiceCompanySettings>,
+  ])
+  const mappedLignes = (lignes || []).map(l => normalizeInvoiceLine({
+    id: String(l.id), designation: String(l.designation ?? ''), quantite: Number(l.quantite) || 0,
+    prix_unitaire: Number(l.prix_unitaire) || 0, remise_pct: Number(l.remise_pct) || 0,
+    tva_taux: Number(l.tva_taux) || 0, total_ht: Number(l.total_ht) || 0,
+    total_tva: Number(l.total_tva) || 0, total_ttc: Number(l.total_ttc) || 0,
+    reference: l.reference as string | null ?? null, numero_serie: l.numero_serie as string | null ?? null,
+  }))
+  const printDoc = applyTotalsToDoc({
+    numero: fresh.numero, type_document: fresh.type_document, client_nom: fresh.client_nom,
+    client_tel: fresh.client_tel, client_adresse: fresh.client_adresse, client_matricule: fresh.client_matricule,
+    total_ht: fresh.total_ht, total_tva: fresh.total_tva, total_ttc: fresh.total_ttc,
+    statut_paiement: fresh.statut_paiement, date_echeance: fresh.date_echeance, created_at: fresh.created_at,
+    timbre: (fresh as Document & { timbre?: number }).timbre,
+    total_remise: (fresh as Document & { total_remise?: number }).total_remise,
+    exo: (fresh as Document & { exo?: string | null }).exo,
+    net_a_payer: (fresh as Document & { net_a_payer?: number }).net_a_payer,
+    facture_origine_numero: fresh.facture_origine_numero ?? undefined,
+  }, mappedLignes)
+  return renderInvoiceMarkup(printDoc, mappedLignes, liveSettings || {})
 }
 
 const STATUT_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -379,37 +438,29 @@ export default function DocumentsTab() {
   }
 
   const exportSingleDoc = async (d: DocRow) => {
-    const isAchat = d._source === 'ff'
-    const row = isAchat
-      ? {
-          'N° FACTURE': d.numero,
-          'DATE DE FACTURE': d.created_at ? format(new Date(d.created_at), 'dd/MM/yyyy') : '',
-          'SOCIETE': d.fournisseur_nom ?? '',
-          'EXO': d.exo ?? null,
-          'HT': +(d.total_ht ?? 0).toFixed(3),
-          'TVA': +(d.total_tva ?? 0).toFixed(3),
-          'TTC': +(d.total_ttc ?? 0).toFixed(3),
-          'TIMBRE': d.timbre ?? 1,
-          'TOT GENERAL': +((d.total_ttc ?? 0) + (d.timbre ?? 1)).toFixed(3),
-          'HT 7%': d.ht_7 ?? null, 'TVA 7%': d.tva_7 ?? null,
-          'HT 19%': d.ht_19 ?? null, 'TVA 19%': d.tva_19 ?? null,
-          'TOTAL REMISE': d.total_remise ?? null,
-        }
-      : {
-          'DOCUMENT': d.numero, 'CLIENT': d.client_nom ?? '',
-          'DATE': d.created_at ? format(new Date(d.created_at), 'dd/MM/yyyy') : '',
-          'EXO': d.exo ?? null, 'TVA': null, 'BASE': +(d.total_ht ?? 0).toFixed(3),
-          'MONTANT': +(d.total_ht ?? 0).toFixed(3), 'TAXE': null,
-          'MT TAXE': +(d.total_tva ?? 0).toFixed(3),
-          'TOTAL TVA': +(d.total_tva ?? 0).toFixed(3), 'TOTAL HT': +(d.total_ht ?? 0).toFixed(3),
-          'TOTAL TTC': +(d.total_ttc ?? 0).toFixed(3),
-        }
     try {
-      const columns = Object.keys(row)
-      const result = await api.reportsSavePdf(buildDocumentsPdf(`${d.type_document?.replace(/_/g, ' ')} ${d.numero}`, columns, [row]), `${d.numero}.pdf`)
+      const markup = await loadFullInvoiceMarkup(d)
+      const result = await api.reportsSavePdf(wrapPrintHtml(markup, 'A4'), `${d.numero}.pdf`)
       if (result?.canceled) return
       if (!result?.success) throw new Error(result?.error || 'Échec enregistrement PDF')
       showToast('success', `${d.numero} téléchargé en PDF`)
+    } catch (error) {
+      showToast('error', `Export PDF: ${error instanceof Error ? error.message : 'échec'}`)
+    }
+  }
+
+  const exportFullInvoicesPdf = async (documents: DocRow[], fileName: string, label: string) => {
+    if (!documents.length) {
+      showToast('error', `Aucun document ${label.toLowerCase()} à exporter`)
+      return
+    }
+    try {
+      const markups: string[] = []
+      for (const doc of documents) markups.push(await loadFullInvoiceMarkup(doc))
+      const result = await api.reportsSavePdf(wrapPrintHtml(markups.join(''), 'A4'), fileName)
+      if (result?.canceled) return
+      if (!result?.success) throw new Error(result?.error || 'Échec enregistrement PDF')
+      showToast('success', `${documents.length} ${label.toLowerCase()} exporté(s) en PDF`)
     } catch (error) {
       showToast('error', `Export PDF: ${error instanceof Error ? error.message : 'échec'}`)
     }
@@ -458,33 +509,8 @@ export default function DocumentsTab() {
   // ── Export Format A — Bilan Factures Achat ──
   const exportAchats = () => {
     const achats = tabFiltered.filter(d => d.type_document === 'FACTURE_ACHAT' || d.type_document === 'FACTURE_ACHAT_BL')
-    const rows = achats.map(f => ({
-      'N° FACTURE':    f.numero,
-      'DATE DE FACTURE': format(new Date(f.created_at), 'dd/MM/yyyy'),
-      'SOCIETE':       f.fournisseur_nom ?? '',
-      'EXO':           f.exo ?? null,
-      'HT':            +(f.total_ht ?? 0).toFixed(3),
-      'TVA':           +(f.total_tva ?? 0).toFixed(3),
-      'TTC':           +(f.total_ttc ?? 0).toFixed(3),
-      'TIMBRE':        +(f.timbre ?? 1).toFixed(3),
-      'TOT GENERAL':   +((f.total_ttc ?? 0) + (f.timbre ?? 1)).toFixed(3),
-      'HT 7%':         f.ht_7 != null ? +f.ht_7.toFixed(3) : null,
-      'TVA 7%':        f.tva_7 != null ? +f.tva_7.toFixed(3) : null,
-      'HT 19%':        f.ht_19 != null ? +f.ht_19.toFixed(3) : null,
-      'TVA 19%':       f.tva_19 != null ? +f.tva_19.toFixed(3) : null,
-      'TOTAL REMISE':  f.total_remise != null ? +f.total_remise.toFixed(3) : null,
-      __exportDate:   f.created_at,
-    }))
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
-    setPdfModal({
-      rows: rows as Record<string, unknown>[],
-      columns: ['N° FACTURE','DATE DE FACTURE','SOCIETE','EXO','HT','TVA','TTC','TIMBRE','TOT GENERAL','HT 7%','TVA 7%','HT 19%','TVA 19%','TOTAL REMISE'],
-      title: `Bilan Factures Achat ${periode}`,
-      fileName: `FACTURES_ACHAT_${periode.replace('/', '_')}.pdf`,
-      isAchats: true,
-      totalColumns: ['HT','TVA','TTC','TIMBRE','TOT GENERAL','HT 7%','TVA 7%','HT 19%','TVA 19%','TOTAL REMISE'],
-      totalLabelColumn: 'N° FACTURE',
-    })
+    void exportFullInvoicesPdf(achats, `FACTURES_ACHAT_${periode.replace('/', '_')}.pdf`, 'facture(s) achat')
   }
 
   // ── Export Format B — État TVA Vente (accountant invoice-block template) ──
@@ -492,30 +518,11 @@ export default function DocumentsTab() {
     const exportFilters: Record<string, unknown> = {}
     if (dateFrom) exportFilters.dateFrom = dateFrom
     if (dateTo) exportFilters.dateTo = dateTo
-    const result = await loadData('Préparation état TVA vente', () => api.documentsExportSalesTva(exportFilters) as Promise<DocRow[]>)
+    const result = await loadData('Préparation factures vente', () => api.documentsListAll(exportFilters) as Promise<DocRow[]>)
     if (!result) return
-    const rows = result.map(f => ({
-      'DOCUMENT':  f.numero,
-      'TYPE':      f.type_document === 'FACTURE_JOURNALIERE_F' ? 'Facture journalière' : 'Facture vente',
-      'CLIENT':    f.client_nom ?? '',
-      'DATE':      format(new Date(f.created_at), 'dd/MM/yyyy'),
-      'EXO':       f.exo ? 'Oui' : '',
-      'TVA':       +(f.total_tva ?? 0).toFixed(3),
-      'BASE':      +(f.total_ht ?? 0).toFixed(3),
-      'TOTAL TVA': +(f.total_tva ?? 0).toFixed(3),
-      'TOTAL HT':  +(f.total_ht ?? 0).toFixed(3),
-      'TOTAL TTC': +((f.total_ttc ?? 0) + (f.timbre ?? 0)).toFixed(3),
-      __exportDate: f.created_at,
-    }))
+    const ventes = result.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F'))
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
-    setPdfModal({
-      rows: rows as Record<string, unknown>[],
-      columns: ['DOCUMENT','TYPE','CLIENT','DATE','EXO','TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
-      title: `État TVA Vente ${periode}`,
-      fileName: `ETAT_TVA_VENTE_${periode.replace('/', '_')}.pdf`,
-      totalColumns: ['TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'],
-      totalLabelColumn: 'DOCUMENT',
-    })
+    await exportFullInvoicesPdf(ventes, `FACTURES_VENTE_${periode.replace('/', '_')}.pdf`, 'facture(s) vente')
   }
 
   const { printRef: printTableRef, handlePrint: handlePrintTable } = usePrint('Documents')
