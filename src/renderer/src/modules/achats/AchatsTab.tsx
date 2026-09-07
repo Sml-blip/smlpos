@@ -7,11 +7,13 @@ import { generateInternalEan13 } from '../../lib/ean13'
 import { runAction, loadData } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
 import { saveBalanceReport } from '../../lib/reportPdf'
+import { useAppStore } from '../../store/appStore'
 import BarcodeLabelPrintDialog from '../../components/BarcodeLabelPrintDialog'
 import FactureAchatPrintModal from './FactureAchatPrintModal'
 import FactureSerialModal from './FactureSerialModal'
 import InvoiceScanModal from './InvoiceScanModal'
 import { buildAchatInvoiceDoc, mapFactureAchatLignes } from '../../lib/invoiceAchatMapper'
+import { pricingFromPrixAchatTtc } from '../../lib/productPricing'
 import type { InvoiceDocData, InvoiceLineData } from '../../components/InvoicePrintTemplate'
 import {
   emptyFactureLigne,
@@ -201,6 +203,11 @@ export default function AchatsTab() {
               )}
             >
               <Icon size={14} /> {t.label}
+              {t.id === 'echeancier' && factures.filter(f => f.statut_paiement !== 'PAYE').length > 0 && (
+                <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                  {factures.filter(f => f.statut_paiement !== 'PAYE').length}
+                </span>
+              )}
             </button>
           )
         })}
@@ -414,7 +421,7 @@ function FournisseursTable({ fournisseurs, factures, onEdit, onAdjust, onExport 
               <td className="px-4 py-3 text-text-secondary">{f.telephone || '—'}</td>
               <td className="px-4 py-3 text-right">
                 <span className={cn('font-price font-bold', f.solde_du > 0 ? 'text-danger' : 'text-success')}>{formatPrice(f.solde_du)}</span>
-                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <div className="mt-1 ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div> })()}
+                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <><div className="mt-1 text-[10px] text-text-muted">Factures {formatPrice(total)} · Payé {formatPrice(paid)}</div><div className="mt-1 ml-auto h-1.5 w-32 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div></> })()}
               </td>
               <td className="px-4 py-3 text-right">
                 <div className="flex items-center justify-end gap-1">
@@ -605,6 +612,7 @@ function FournisseurModal({ fournisseur, onClose, onSaved }: { fournisseur: Four
       }
     )
     if (ok) {
+      window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
       onSaved()
       onClose()
     }
@@ -675,6 +683,7 @@ interface FullProductFormData {
   prix_achat: string
   cout_supplementaire: string
   tva_achat_pct: string
+  prix_achat_ttc: string
   marge_pct: string
   coef_av: string
   prix_vente: string
@@ -695,6 +704,7 @@ const emptyFullForm = (): FullProductFormData => ({
   prix_achat: '',
   cout_supplementaire: '0',
   tva_achat_pct: '0',
+  prix_achat_ttc: '',
   marge_pct: '',
   coef_av: '',
   prix_vente: '',
@@ -705,34 +715,39 @@ const emptyFullForm = (): FullProductFormData => ({
   numero_serie: '',
 })
 
-function NewProductModal({ onClose, onCreated, deferCreate = false, initialProduct, onUpdated }: {
+function NewProductModal({ onClose, onCreated, deferCreate = false, initialProduct, initialPending, onUpdated, onPendingUpdated }: {
   onClose: () => void
   onCreated: (p: Produit | PendingProduct) => Promise<void>
   deferCreate?: boolean
   initialProduct?: Produit
+  initialPending?: PendingProduct
   onUpdated?: (p: Produit) => void
+  onPendingUpdated?: (p: PendingProduct) => void
 }) {
   const isEdit = !!initialProduct
+  const isPendingEdit = !initialProduct && !!initialPending
   const [formData, setFormData] = useState<FullProductFormData>(() => {
-    if (!initialProduct) return emptyFullForm()
+    const source = initialProduct ?? initialPending
+    if (!source) return emptyFullForm()
     return {
-      code_barre: initialProduct.code_barre ?? '',
-      reference: initialProduct.reference ?? '',
-      nom: initialProduct.nom ?? '',
-      description: initialProduct.description ?? '',
-      categorie: initialProduct.categorie ?? 'Général',
-      type: initialProduct.type ?? 'F',
-      prix_achat: initialProduct.prix_achat != null ? String(initialProduct.prix_achat) : '',
-      cout_supplementaire: String(initialProduct.cout_supplementaire ?? 0),
-      tva_achat_pct: String(initialProduct.tva_achat_pct ?? 0),
-      marge_pct: initialProduct.marge_pct != null ? String(initialProduct.marge_pct) : '',
-      coef_av: initialProduct.coef_av != null ? String(initialProduct.coef_av) : '',
-      prix_vente: String(initialProduct.prix_vente ?? ''),
-      tva_taux: String(initialProduct.tva_taux ?? 0),
-      stock_actuel: String(initialProduct.stock_actuel ?? 0),
-      stock_minimum: String(initialProduct.stock_minimum ?? 5),
-      fournisseur: initialProduct.fournisseur ?? '',
-      numero_serie: initialProduct.numero_serie ?? '',
+      code_barre: source.code_barre ?? '',
+      reference: source.reference ?? '',
+      nom: source.nom ?? '',
+      description: source.description ?? '',
+      categorie: source.categorie ?? 'Général',
+      type: source.type ?? 'F',
+      prix_achat: source.prix_achat != null ? String(source.prix_achat) : '',
+      cout_supplementaire: String(source.cout_supplementaire ?? 0),
+      tva_achat_pct: String(source.tva_achat_pct ?? 0),
+      prix_achat_ttc: source.prix_achat_ttc != null ? String(source.prix_achat_ttc) : '',
+      marge_pct: source.marge_pct != null ? String(source.marge_pct) : '',
+      coef_av: source.coef_av != null ? String(source.coef_av) : '',
+      prix_vente: String(source.prix_vente ?? ''),
+      tva_taux: String(source.tva_taux ?? 0),
+      stock_actuel: String('stock_actuel' in source ? (source.stock_actuel ?? 0) : 0),
+      stock_minimum: String(source.stock_minimum ?? 5),
+      fournisseur: source.fournisseur ?? '',
+      numero_serie: source.numero_serie ?? '',
     }
   })
   const [formErrors, setFormErrors] = useState<Partial<FullProductFormData>>({})
@@ -768,6 +783,10 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
     const marge = (coef - 1) * 100
     const isBelowCost = coutRevient > 0 && prixVente < prixAchatTTC
     return { coutRevient, prixAchatTTC, prixVenteHT, coef, marge, isBelowCost }
+  }
+
+  const onPrixAchatTtcChange = (val: string) => {
+    setFormData(prev => ({ ...prev, ...pricingFromPrixAchatTtc(prev, val) }))
   }
 
   const onMargePctChange = (val: string) => {
@@ -848,7 +867,8 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
     setFormErrors(errors)
     if (Object.keys(errors).length > 0) return
 
-    const ok = await runAction(isEdit ? 'Modification produit' : 'Création produit', async () => {
+    const editing = isEdit || isPendingEdit
+    const ok = await runAction(editing ? 'Modification produit' : 'Création produit', async () => {
       const now = new Date().toISOString()
       const prixAchatHT = parseFloat(formData.prix_achat) || 0
       const coutSupp = parseFloat(formData.cout_supplementaire) || 0
@@ -886,37 +906,39 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
         created_at: initialProduct?.created_at ?? now,
         updated_at: now,
       }
+      const pending: PendingProduct = {
+        nom: p.nom,
+        reference: p.reference,
+        code_barre: p.code_barre,
+        prix_achat: p.prix_achat,
+        prix_vente: p.prix_vente,
+        categorie: p.categorie,
+        type: p.type,
+        tva_taux: p.tva_taux,
+        description: p.description,
+        cout_supplementaire: p.cout_supplementaire,
+        tva_achat_pct: p.tva_achat_pct,
+        marge_pct: p.marge_pct,
+        coef_av: p.coef_av,
+        cout_de_revient: p.cout_de_revient,
+        prix_vente_ht: p.prix_vente_ht,
+        prix_achat_ttc: p.prix_achat_ttc,
+        stock_minimum: p.stock_minimum,
+        fournisseur: p.fournisseur,
+        numero_serie: p.numero_serie,
+      }
       if (isEdit) {
         await api.produitsUpdate(p.id, p)
         onUpdated?.(p as Produit)
+      } else if (isPendingEdit) {
+        onPendingUpdated?.(pending)
       } else if (deferCreate) {
-        const pending: PendingProduct = {
-          nom: p.nom,
-          reference: p.reference,
-          code_barre: p.code_barre,
-          prix_achat: p.prix_achat,
-          prix_vente: p.prix_vente,
-          categorie: p.categorie,
-          type: p.type,
-          tva_taux: p.tva_taux,
-          description: p.description,
-          cout_supplementaire: p.cout_supplementaire,
-          tva_achat_pct: p.tva_achat_pct,
-          marge_pct: p.marge_pct,
-          coef_av: p.coef_av,
-          cout_de_revient: p.cout_de_revient,
-          prix_vente_ht: p.prix_vente_ht,
-          prix_achat_ttc: p.prix_achat_ttc,
-          stock_minimum: p.stock_minimum,
-          fournisseur: p.fournisseur,
-          numero_serie: p.numero_serie,
-        }
         await onCreated(pending)
       } else {
         await api.produitsCreate(p)
         await onCreated(p as Produit)
       }
-    }, { setSaving, successMessage: isEdit ? 'Produit modifié' : 'Produit créé' })
+    }, { setSaving, successMessage: editing ? 'Produit modifié' : 'Produit créé' })
     if (ok) onClose()
   }
 
@@ -927,7 +949,7 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white z-10">
           <h2 className="font-bold flex items-center gap-2">
-            <Package size={16} /> {isEdit ? 'Modifier le produit' : 'Nouveau produit'}
+            <Package size={16} /> {isEdit || isPendingEdit ? 'Modifier le produit' : 'Nouveau produit'}
           </h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
             <X size={18} />
@@ -1050,11 +1072,16 @@ function NewProductModal({ onClose, onCreated, deferCreate = false, initialProdu
             </div>
             <div className="grid grid-cols-2 gap-3 px-4 pb-3 pt-1 border-b border-border">
               <div>
-                <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT) ✅</label>
-                <div className="border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800">
-                  {formatPrice(pricing.prixAchatTTC)}
-                </div>
-                <p className="text-[10px] text-text-muted mt-0.5">= HT × (1 + TVA Achat)</p>
+                <label className="block text-xs font-semibold text-blue-700 mb-1">Prix Achat TTC (DT)</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={formData.prix_achat_ttc}
+                  placeholder={pricing.prixAchatTTC.toFixed(3)}
+                  onChange={e => onPrixAchatTtcChange(e.target.value.replace(/[^0-9.,]/g, ''))}
+                  className="w-full border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800 outline-none focus:ring-2 focus:ring-blue-200"
+                />
+                <p className="text-[10px] text-text-muted mt-0.5">Saisie directe → recalcule HT</p>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-green-700 mb-1">Prix Vente HT (DT) ✅</label>
@@ -1369,6 +1396,7 @@ function FactureFournisseurModal({
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
   const [savingDraft, setSavingDraft] = useState(false)
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveInFlight = useRef(false)
   const [fournisseurId, setFournisseurId] = useState('')
   const [fournisseurs, setFournisseurs] = useState(initialFournisseurs)
   const [numeroFacture, setNumeroFacture] = useState('')
@@ -1388,6 +1416,7 @@ function FactureFournisseurModal({
   // Product search popup
   const [showProductPopup, setShowProductPopup] = useState(false)
   const [popupLineId, setPopupLineId] = useState<string | null>(null)
+  const [editLineId, setEditLineId] = useState<string | null>(null)
   // Fiscal fields
   const [exoFlag, setExoFlag] = useState(false)
   const [exoText, setExoText] = useState('')
@@ -1431,7 +1460,11 @@ function FactureFournisseurModal({
       if (l.produit_id) {
         const p = produits.find(x => x.id === l.produit_id)
         if (p) {
-          const merged = mergeProductIntoLine(l, p)
+          const merged = {
+            ...mergeProductIntoLine(l, p),
+            // The catalog may change later; never rewrite the price recorded on this invoice line.
+            nouveau_prix_achat: l.nouveau_prix_achat,
+          }
           if (l.numeros_serie?.length) {
             return {
               ...merged,
@@ -1445,10 +1478,13 @@ function FactureFournisseurModal({
       if (!l.produit_id && l.numeros_serie?.length && l.designation.trim()) {
         const match = produits.find(p => p.nom.trim() === l.designation.trim())
         if (match) {
-          return mergeProductIntoLine(
-            { ...l, tracks_serial: true, numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite) },
-            match,
-          )
+          return {
+            ...mergeProductIntoLine(
+              { ...l, tracks_serial: true, numeros_serie: syncSerialNumsForQty(l.numeros_serie, l.quantite) },
+              match,
+            ),
+            nouveau_prix_achat: l.nouveau_prix_achat,
+          }
         }
       }
       if (l.numeros_serie?.length && (l.produit_id || l.pendingProduct)) {
@@ -1547,6 +1583,7 @@ function FactureFournisseurModal({
   }, [draftId, fournisseurId, numeroFacture, dateFacture, dateEcheance, notes, isBL, lignes, exoFlag, exoText, timbre, remiseGlobale])
 
   const persistDraft = useCallback(async () => {
+    if (saveInFlight.current) return
     if (!api.facturesFournisseursSaveDraft) return
     const payload = buildDraftPayload()
     if (payload.lignes.length === 0 && !fournisseurId && !numeroFacture) return
@@ -1607,9 +1644,10 @@ function FactureFournisseurModal({
       actif: 1,
       created_at: now,
       updated_at: now,
+      idempotent_create: true,
     }
-    await api.produitsCreate(p)
-    return p as Produit
+    const result = await api.produitsCreate(p) as { product?: Produit }
+    return result?.product ?? p as Produit
   }
 
   const handleClose = () => {
@@ -1688,6 +1726,21 @@ function FactureFournisseurModal({
     setLignes(prev => prev.map(l => l.id === lineId ? mergeProductIntoLine(l, p) : l))
     setLineSearches(prev => ({ ...prev, [lineId]: '' }))
     setLineResults(prev => ({ ...prev, [lineId]: [] }))
+  }
+
+  const applyEditedProductToLines = (updated: Produit) => {
+    setProduits(prev => prev.map(p => p.id === updated.id ? updated : p))
+    setLignes(prev => prev.map(l => {
+      if (l.produit_id !== updated.id) return l
+      const tracksSerial = productTracksSerial(updated)
+      return {
+        ...l,
+        designation: updated.nom,
+        tva_taux: updated.tva_taux ?? l.tva_taux,
+        tracks_serial: tracksSerial,
+        numeros_serie: tracksSerial ? syncSerialNumsForQty(l.numeros_serie, l.quantite) : undefined,
+      }
+    }))
   }
 
   const printBarcodeLabel = (code: string, nom: string, prix: number, ref: string) => {
@@ -1787,10 +1840,14 @@ function FactureFournisseurModal({
   const montantTTC = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
 
   const handleSave = async () => {
+    if (saveInFlight.current) return
     if (!fournisseurId || !numeroFacture) return
     const filledLignes = lignes.filter(l => l.designation.trim())
     if (filledLignes.length === 0) return
-    const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
+    saveInFlight.current = true
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    try {
+      const ok = await runAction(isBL ? 'Enregistrement bon de livraison' : 'Enregistrement facture fournisseur', async () => {
       const resolvedLignes: FactureLigneState[] = []
       let produitsSnapshot = [...produits]
       for (const l of filledLignes) {
@@ -1807,7 +1864,8 @@ function FactureFournisseurModal({
       const serialErr = validateSerialLines(resolvedLignes, produitsSnapshot)
       if (serialErr) throw new Error(serialErr)
 
-      const factureId = generateId()
+      // Reuse the draft id so conversion is retry-safe and cannot create two finals.
+      const factureId = draftId || generateId()
       const now = new Date().toISOString()
       const mHT = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
       const mTTC = resolvedLignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
@@ -1822,6 +1880,7 @@ function FactureFournisseurModal({
       const tva19 = ht19 * 0.19
       const facture = {
         id: factureId, numero_facture: numeroFacture, fournisseur_id: fournisseurId,
+        draft_id: draftId,
         date_facture: dateFacture, date_echeance: dateEcheance || null,
         statut_paiement: 'EN_ATTENTE', montant_ht: mHT, montant_tva: tvaAmount,
         montant_ttc: totalGeneral, notes: notes || null, created_at: now,
@@ -1848,15 +1907,18 @@ function FactureFournisseurModal({
         }
       })
       await api.facturesFournisseursCreate(facture, lignesData)
-      if (draftId) await api.facturesFournisseursDeleteDraft?.(draftId)
     }, {
       setLoading,
       successMessage: isBL ? 'Bon de livraison enregistré' : 'Facture fournisseur enregistrée',
       feedback: isBL ? 'success' : 'invoice',
     })
-    if (ok) {
-      onSaved()
-      onClose()
+      if (ok) {
+        window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
+        onSaved()
+        onClose()
+      }
+    } finally {
+      saveInFlight.current = false
     }
   }
 
@@ -2050,6 +2112,16 @@ function FactureFournisseurModal({
                       </div>
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0 pt-1">
+                      {(l.produit_id || l.pendingProduct) && (
+                        <button
+                          type="button"
+                          onClick={() => setEditLineId(l.id)}
+                          title="Modifier la fiche produit complète"
+                          className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-accent-300 bg-accent-50 text-accent-800 hover:bg-accent-100 transition-colors text-[9px] font-bold"
+                        >
+                          <Edit2 size={11} /> Modifier
+                        </button>
+                      )}
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -2254,6 +2326,37 @@ function FactureFournisseurModal({
           />
         )
       })()}
+      {editLineId && (() => {
+        const line = lignes.find(l => l.id === editLineId)
+        if (!line) return null
+        const existingProduct = line.produit_id
+          ? produits.find(p => p.id === line.produit_id)
+          : undefined
+        if (!existingProduct && !line.pendingProduct) return null
+        return (
+          <NewProductModal
+            initialProduct={existingProduct}
+            initialPending={line.pendingProduct}
+            deferCreate={!!line.pendingProduct}
+            onClose={() => setEditLineId(null)}
+            onCreated={async () => {}}
+            onUpdated={applyEditedProductToLines}
+            onPendingUpdated={(updated) => {
+              setLignes(prev => prev.map(l => l.id === line.id ? {
+                ...l,
+                designation: updated.nom,
+                tva_taux: updated.tva_taux ?? l.tva_taux,
+                pendingProduct: updated,
+                tracks_serial: !!updated.numero_serie?.trim(),
+                numeros_serie: updated.numero_serie?.trim()
+                  ? syncSerialNumsForQty(l.numeros_serie, l.quantite)
+                  : undefined,
+              } : l))
+              setEditLineId(null)
+            }}
+          />
+        )
+      })()}
       {/* Product Search Popup — multi-add mode (stays open until user closes) */}
       {showProductPopup && (
         <ProductSearchPopup
@@ -2277,12 +2380,7 @@ function FactureFournisseurModal({
             setPopupLineId(newId)
           }}
           onProductUpdated={(updated) => {
-            setProduits(prev => prev.map(p => p.id === updated.id ? updated : p))
-            setLignes(prev => prev.map(l =>
-              l.produit_id === updated.id
-                ? mergeProductIntoLine(l, updated)
-                : l
-            ))
+            applyEditedProductToLines(updated)
           }}
           onClose={() => { setShowProductPopup(false); setPopupLineId(null) }}
         />
@@ -2383,11 +2481,14 @@ function SupplierBalanceModal({ target, onClose, onSaved }: { target: { fourniss
 }
 
 function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFournisseur; onClose: () => void; onSaved: () => void }) {
+  const { currentShift } = useAppStore()
   const restant = facture.montant_restant ?? (facture.montant_ttc - facture.montant_paye)
   const [montant, setMontant] = useState(restant.toFixed(3))
   const [mode, setMode] = useState<'ESPECES' | 'CHEQUE' | 'VIREMENT' | 'AUTRE'>('ESPECES')
   const [refCheque, setRefCheque] = useState('')
   const [notes, setNotes] = useState('')
+  const [caisseSource, setCaisseSource] = useState<'INTERNE' | 'EXTERNE'>('INTERNE')
+  const [paymentType, setPaymentType] = useState<'INSTANT' | 'TRANCHE'>('INSTANT')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -2406,6 +2507,10 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
         reference_cheque: refCheque || null,
         date_paiement: new Date().toISOString().slice(0, 10),
         notes: notes || null,
+        caisse_source: caisseSource,
+        paiement_type: paymentType,
+        shift_id: currentShift?.id ?? null,
+        operateur: currentShift?.operateur_nom ?? 'superadmin',
         created_at: new Date().toISOString(),
       })
     }, {
@@ -2414,6 +2519,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
       onError: msg => setError(msg),
     })
     if (ok) {
+      window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
       onSaved()
       onClose()
     }
@@ -2421,7 +2527,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[420px] animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[420px] max-h-[calc(100vh-2rem)] overflow-y-auto animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="font-bold text-base flex items-center gap-2"><DollarSign size={15} /> Enregistrer un paiement</h2>
           <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
@@ -2434,6 +2540,16 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
             <div className="flex justify-between mt-2 text-sm">
               <span className="text-text-secondary">Restant dû</span>
               <span className="font-price font-bold text-danger">{formatPrice(restant)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { setPaymentType('INSTANT'); setMontant(restant.toFixed(3)) }} className={cn('rounded-xl border-2 py-2 text-xs font-bold', paymentType === 'INSTANT' ? 'border-accent-500 bg-accent-50' : 'border-border')}>Paiement total</button>
+            <button type="button" onClick={() => setPaymentType('TRANCHE')} className={cn('rounded-xl border-2 py-2 text-xs font-bold', paymentType === 'TRANCHE' ? 'border-accent-500 bg-accent-50' : 'border-border')}>Paiement par tranche</button>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Caisse débitée</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['INTERNE', 'EXTERNE'] as const).map(source => <button key={source} type="button" onClick={() => setCaisseSource(source)} className={cn('rounded-xl border-2 py-2 text-xs font-bold', caisseSource === source ? 'border-accent-500 bg-accent-50' : 'border-border')}>Caisse {source === 'INTERNE' ? 'interne' : 'externe'}</button>)}
             </div>
           </div>
           <div>
@@ -2466,7 +2582,7 @@ function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFourniss
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl text-sm transition-colors">Annuler</button>
-          <button type="button" onClick={handlePayer} disabled={loading || montantNum <= 0} className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl text-sm transition-colors">
+          <button type="button" onClick={handlePayer} disabled={loading || montantNum <= 0 || montantNum > restant || (caisseSource === 'EXTERNE' && !currentShift?.id)} className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl text-sm transition-colors">
             {loading ? 'Enregistrement...' : `Payer ${formatPrice(montantNum)}`}
           </button>
         </div>

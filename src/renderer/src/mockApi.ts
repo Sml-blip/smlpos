@@ -211,8 +211,10 @@ const mockApi = {
   shiftsGetSummary: async () => ({
     ventes: { total: 338, count: 2 },
     reparations: { total: 75, count: 1 },
+    services: { total: 0, count: 0 },
     sorties: { total: 50, count: 1 },
     creditsPercus: { total: 85, count: 1 },
+    avancesClients: { total: 0, count: 0 },
     parMode: [
       { mode_paiement: 'ESPECES', total: 284 },
       { mode_paiement: 'CARTE', total: 143 },
@@ -336,6 +338,7 @@ const mockApi = {
   reparationsList: async () => REPARATIONS,
   reparationsUpdateStatut: async (id: string, statut: string) => { const r = REPARATIONS.find(x => x.id === id); if (r) r.statut = statut as typeof r.statut; return r; },
   reparationsFinalize: async (_id: string, totalFinal: number) => ({ success: true, benefice: totalFinal }),
+  reparationsMarkPayment: async (_id: string, data: { paid: boolean; totalFinal?: number; technicianSpent?: number }) => ({ success: true, benefice: (data.totalFinal ?? 0) - (data.technicianSpent ?? 0) }),
   reparationsGetPieces: async () => [],
   reparationsGetLastNumber: async () => nextRepSeq,
   reparationsGetBeneficeStats: async () => ({
@@ -489,6 +492,8 @@ const mockApi = {
   // Crédits clients
   creditsList: async () => [],
   creditsCreate: async (credit: unknown) => ({ ...(credit as object), success: true }),
+  avancesClientsCreate: async (advance: unknown) => ({ ...(advance as object), success: true }),
+  avancesClientsList: async () => [],
 
   // Ventes: annulation
   ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...data }),
@@ -551,7 +556,8 @@ const mockApi = {
     facture_layout: 'professionnel', invoice_prefix_facture: 'FAC', invoice_prefix_vente: 'VTE',
     invoice_footer: 'Merci pour votre confiance !', invoice_show_tva: 'true', invoice_timbre_fiscal: 'true', tva_defaut_pct: '19',
     fond_de_caisse_defaut: '100', frais_retour_colis: '4', credit_max_client: '500',
-    shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
+    shift_close_reminder_enabled: 'true', shift_close_alarm_enabled: 'true',
+    shift_morning_close_time: '14:00', shift_close_reminder_time: '21:00', shift_close_snooze_minutes: '10',
     marge_defaut_pct: '30', pos_show_calculator: 'true', pos_confirm_sortie: 'true',
     impression_largeur: '80', impression_copies: '1', impression_auto_print: 'false',
     caisse_interne_pin: 'sml2023', securite_require_shift: 'true', currency: 'DT', currency_decimals: '3',
@@ -561,7 +567,8 @@ const mockApi = {
   settingsGet: async (key: string) => {
     const defaults: Record<string, string> = {
       caisse_interne_pin: 'sml2023', frais_retour_colis: '4', fond_de_caisse_defaut: '100',
-      shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
+      shift_close_reminder_enabled: 'true', shift_close_alarm_enabled: 'true',
+      shift_morning_close_time: '14:00', shift_close_reminder_time: '21:00', shift_close_snooze_minutes: '10',
     }
     return defaults[key] ?? null
   },

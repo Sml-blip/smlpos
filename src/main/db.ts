@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.2'
+export const SCHEMA_VERSION = '1.10.4'
 
 export function initDatabase() {
   const db = getDb()
@@ -183,6 +183,7 @@ export function initDatabase() {
       montant_recu     REAL,
       monnaie_rendue   REAL DEFAULT 0,
       type             TEXT DEFAULT 'VENTE',
+      note_vente       TEXT,
       a_facture        INTEGER DEFAULT 0,
       created_at       TEXT DEFAULT (datetime('now'))
     );
@@ -539,6 +540,16 @@ export function initDatabase() {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Local, idempotent repair ledger. It prevents legacy inventory repairs
+    -- from ever being applied twice, including after a restart.
+    CREATE TABLE IF NOT EXISTS inventory_repair_ledger (
+      repair_key   TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      repaired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      details      TEXT,
+      PRIMARY KEY (repair_key, operation_id)
+    );
+
     -- ── Retours (Returns) ──────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS retours (
       id                TEXT PRIMARY KEY,
@@ -787,6 +798,25 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE lignes_document ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE ventes ADD COLUMN client_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_vente ADD COLUMN numero_serie TEXT`) } catch { /* already exists */ }
+  // v1.9.1016 — product-linked client advances.  The fiscal sale total remains
+  // untouched; these fields only identify the part already collected earlier.
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_dossier_id TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_utilisee REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN note_vente TEXT`) } catch { /* already exists */ }
+
+  // Repair historical cancellations created before serial restoration existed.
+  // Cancelled sales/invoices must never keep their serial numbers marked VENDU.
+  db.prepare(`
+    UPDATE serial_numbers
+    SET statut = 'EN_STOCK', vente_id = NULL, updated_at = datetime('now')
+    WHERE statut = 'VENDU'
+      AND vente_id IN (
+        SELECT id FROM ventes WHERE statut = 'ANNULEE'
+        UNION
+        SELECT vente_id FROM documents
+        WHERE statut IN ('ANNULE', 'REVOQUE') AND vente_id IS NOT NULL
+      )
+  `).run()
 
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN prix_achat REAL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE pieces_reparation ADD COLUMN destock_stock INTEGER DEFAULT 0`) } catch { /* exists */ }
@@ -820,8 +850,28 @@ export function initDatabase() {
       note                TEXT,
       shift_id            TEXT REFERENCES shifts(id),
       operateur           TEXT,
+      type_avance         TEXT NOT NULL DEFAULT 'LIBRE',
+      dossier_id          TEXT,
+      produit_id          TEXT REFERENCES produits(id),
+      numero_serie        TEXT,
+      prix_produit        REAL,
+      statut              TEXT NOT NULL DEFAULT 'EN_COURS',
+      vente_id            TEXT,
       created_at          TEXT DEFAULT (datetime('now'))
     );
+  `)
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN type_avance TEXT NOT NULL DEFAULT 'LIBRE'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN dossier_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN produit_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN numero_serie TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN prix_produit REAL`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN statut TEXT NOT NULL DEFAULT 'EN_COURS'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN vente_id TEXT`) } catch { /* exists */ }
+  db.exec(`
+    UPDATE avances_clients SET type_avance = 'LIBRE' WHERE type_avance IS NULL OR trim(type_avance) = '';
+    UPDATE avances_clients SET dossier_id = id WHERE dossier_id IS NULL OR trim(dossier_id) = '';
+    CREATE INDEX IF NOT EXISTS idx_avances_client_date ON avances_clients(client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_avances_dossier ON avances_clients(dossier_id, statut);
   `)
 
   const legacyImportDone = db.prepare(`SELECT value FROM app_settings WHERE key = 'smlfixv2_json_import_v1'`).get() as { value?: string } | undefined
@@ -888,6 +938,14 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN numeros_serie_json TEXT`) } catch { /* already exists */ }
 
+  // Repair products whose S/N rows were imported through a purchase invoice
+  // before the catalogue tracking flag was synchronized.
+  db.prepare(`
+    UPDATE produits SET has_serial_number = 1, updated_at = datetime('now')
+    WHERE COALESCE(has_serial_number, 0) = 0
+      AND EXISTS (SELECT 1 FROM serial_numbers sn WHERE sn.produit_id = produits.id)
+  `).run()
+
   db.prepare(`INSERT OR IGNORE INTO categories (id, nom, icone) VALUES ('cat-reparation', 'Réparation', '🔧')`).run()
 
   // Default settings — keys must match SettingsTab DEFAULTS
@@ -921,7 +979,10 @@ export function initDatabase() {
     fidelite_min_achat:      '0',
     fidelite_max_utilisation_pct: '100',
     shift_close_reminder_enabled: 'true',
+    shift_morning_close_time:     '14:00',
     shift_close_reminder_time:    '21:00',
+    shift_close_snooze_minutes:   '10',
+    shift_close_alarm_enabled:    'true',
     // Impression
     impression_largeur:      '80',
     impression_copies:       '1',

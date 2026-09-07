@@ -59,7 +59,10 @@ const DEFAULTS: Record<string, string> = {
   pos_show_calculator:   'true',
   pos_confirm_sortie:    'true',
   shift_close_reminder_enabled: 'true',
+  shift_morning_close_time: '14:00',
   shift_close_reminder_time: '21:00',
+  shift_close_snooze_minutes: '10',
+  shift_close_alarm_enabled: 'true',
   // Impression
   impression_largeur:    '80',
   impression_copies:     '1',
@@ -129,6 +132,7 @@ export default function SettingsTab({ onCheckForUpdates, updateChecking }: { onC
   const handleSave = async () => {
     const ok = await runAction('Enregistrement paramètres', async () => {
       await api.settingsSetMany(values)
+      window.dispatchEvent(new CustomEvent('smlpos:settings-changed'))
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     }, { setLoading, successMessage: 'Paramètres sauvegardés' })
@@ -375,34 +379,23 @@ function POSSection({ values, set, toggle }: { values: Record<string, string>; s
         </Section>
       </Card>
       <Card>
-        <Section title="End-of-day closing">
+        <Section title="Caisses matin et soir">
           <div className="space-y-3">
-            <Toggle checked={values['shift_close_reminder_enabled'] !== 'false'} onChange={() => toggle('shift_close_reminder_enabled')} label="Afficher le rappel de clôture pour la facture journalière F" />
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Heure d’alerte" hint="Le rappel reste épinglé en bas à gauche à partir de 30 minutes avant cette heure.">
+            <Toggle checked={values['shift_close_reminder_enabled'] !== 'false'} onChange={() => toggle('shift_close_reminder_enabled')} label="Afficher les rappels de clôture matin et soir" />
+            <Toggle checked={values['shift_close_alarm_enabled'] !== 'false'} onChange={() => toggle('shift_close_alarm_enabled')} label="Jouer une alarme forte à l’heure de clôture" />
+            <div className="grid grid-cols-3 gap-4">
+              <Field label="Fin caisse matin" hint="La première clôture ne crée aucune facture.">
+                <TextInput value={values['shift_morning_close_time']} onChange={v => set('shift_morning_close_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="14:00" />
+              </Field>
+              <Field label="Fin caisse soir" hint="La clôture du soir facture toute la journée.">
                 <TextInput value={values['shift_close_reminder_time']} onChange={v => set('shift_close_reminder_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="21:00" />
+              </Field>
+              <Field label="Snooze (minutes)" hint="Durée du rappel différé.">
+                <TextInput type="number" value={values['shift_close_snooze_minutes']} onChange={v => set('shift_close_snooze_minutes', v)} placeholder="10" />
               </Field>
             </div>
             <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-xs text-teal-900">
-              Chaque clôture crée ou actualise une seule facture Client Passager avec les ventes F du jour non encore facturées. Les lignes NF et les ventes déjà facturées manuellement sont exclues automatiquement.
-            </div>
-          </div>
-        </Section>
-      </Card>
-      <Card>
-        <Section title="Second shift agent change">
-          <div className="space-y-3">
-            <Toggle checked={values['shift_agent_change_enabled'] !== 'false'} onChange={() => toggle('shift_agent_change_enabled')} label="Show the second-shift agent popup" />
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Change time" hint="Default: 03:00">
-                <TextInput value={values['shift_agent_change_time'] ?? '03:00'} onChange={v => set('shift_agent_change_time', v.replace(/[^0-9:]/g, '').slice(0, 5))} placeholder="03:00" />
-              </Field>
-              <Field label="Reminder mode" hint="The popup is shown once per day">
-                <select value={values['shift_agent_change_repeat'] ?? 'once'} onChange={e => set('shift_agent_change_repeat', e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5 text-sm outline-none focus:border-accent-500 bg-white">
-                  <option value="once">Once per day</option>
-                  <option value="always">Until changed</option>
-                </select>
-              </Field>
+              La première clôture du jour ferme la caisse du matin sans facture. La clôture suivante ferme la caisse du soir et crée une facture Client Passager avec toutes les ventes F éligibles de la journée. Les lignes NF et les ventes déjà facturées sont exclues.
             </div>
           </div>
         </Section>

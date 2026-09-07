@@ -7,8 +7,9 @@ import { cn, formatPrice } from '../../lib/utils'
 import { loadData, runAction } from '../../lib/apiCall'
 import { loadAvailableSerials, productTracksSerial } from '../../lib/productSerial'
 import { printAdvanceReceipt, printCreditReceipt } from '../../lib/clientPaymentReceipt'
+import { parseInstallmentPlan, upcomingInstallments } from '../../lib/creditInstallments'
 import ClientPicker, { clientFromRecord, emptyClientForm, type ClientFormValue } from '../../components/ClientPicker'
-import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Percent, Save, Clock, ClipboardList } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ShoppingBag, Wrench, ArrowDownCircle, AlertCircle, CheckCircle, Zap, FileText, LogOut, ScanLine, CreditCard, DollarSign, User, X as XIcon, RotateCcw, Tag, Save, Clock, ClipboardList, History, PackageCheck } from 'lucide-react'
 import ReparationModal from './ReparationModal'
 import RetourModal from './RetourModal'
 import SortieCaisseModal from './SortieCaisseModal'
@@ -29,6 +30,7 @@ import {
 } from '../../lib/panierHold'
 
 const api = window.api
+const saleStock = (product: Produit) => product.stock_disponible_vente ?? product.stock_actuel
 
 export default function POSTab() {
   const { currentShift, showShiftModal, sessionClient, setSessionClient } = useAppStore()
@@ -38,9 +40,7 @@ export default function POSTab() {
   const [scannedProduct, setScannedProduct] = useState<Produit | null>(null)
   const [qty, setQty] = useState(1)
   const [remise, setRemise] = useState(0)
-  const [remiseMode, setRemiseMode] = useState<'%' | 'DT'>('%')
   const [remiseTotaleInput, setRemiseTotaleInput] = useState('')
-  const [remiseTotaleMode, setRemiseTotaleMode] = useState<'%' | 'DT'>('DT')
   const [searchResults, setSearchResults] = useState<Produit[]>([])
   const [showSearch, setShowSearch] = useState(false)
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null)
@@ -280,7 +280,7 @@ export default function POSTab() {
     const product = await loadData('Recherche produit', () => api.produitsFindByBarcode(trimmed) as Promise<Produit | null>, { silent: true })
     if (product) {
       if (fromScanner && !productTracksSerial(product)) {
-        if (product.type === 'F' && product.stock_actuel <= 0) {
+        if (product.type === 'F' && saleStock(product) <= 0) {
           showNotif(`Stock épuisé — ${product.nom} ne peut pas être ajouté`, 'error')
           return
         }
@@ -305,7 +305,7 @@ export default function POSTab() {
         return
       }
       if (fromScanner && productTracksSerial(product)) {
-        if (product.type === 'F' && product.stock_actuel <= 0) {
+        if (product.type === 'F' && saleStock(product) <= 0) {
           showNotif(`Stock épuisé — ${product.nom} ne peut pas être ajouté`, 'error')
           return
         }
@@ -321,7 +321,7 @@ export default function POSTab() {
     const results = await loadData('Recherche produits', () => api.produitsList({ search: trimmed }) as Promise<Produit[]>, { silent: true }) ?? []
     if (results.length === 1) {
       if (fromScanner && !productTracksSerial(results[0])) {
-        if (results[0].type === 'F' && results[0].stock_actuel <= 0) {
+        if (results[0].type === 'F' && saleStock(results[0]) <= 0) {
           showNotif(`Stock épuisé — ${results[0].nom} ne peut pas être ajouté`, 'error')
           return
         }
@@ -366,13 +366,13 @@ export default function POSTab() {
 
   const handleAddToCart = () => {
     if (!scannedProduct) return
-    if (scannedProduct.type === 'F' && scannedProduct.stock_actuel <= 0) {
+    if (scannedProduct.type === 'F' && saleStock(scannedProduct) <= 0) {
       showNotif(`Stock épuisé — ${scannedProduct.nom} ne peut pas être ajouté`, 'error')
       return
     }
-    const effectivePct = remiseMode === 'DT'
+    const effectivePct = scannedProduct.prix_vente > 0
       ? Math.min(100, (remise / scannedProduct.prix_vente) * 100)
-      : remise
+      : 0
     const needsSerial = productTracksSerial(scannedProduct)
     if (needsSerial) {
       if (!availableSerials.length) {
@@ -426,11 +426,7 @@ export default function POSTab() {
   const handleRemiseTotaleChange = (val: string) => {
     setRemiseTotaleInput(val)
     const num = parseFloat(val.replace(',', '.')) || 0
-    if (remiseTotaleMode === '%') {
-      setRemiseTotale((cartTotal * num) / 100)
-    } else {
-      setRemiseTotale(Math.min(cartTotal, num))
-    }
+    setRemiseTotale(Math.min(cartTotal, num))
   }
 
   const refreshSavedPanierCount = () => setSavedPanierCount(listSavedPaniers().length)
@@ -619,7 +615,7 @@ export default function POSTab() {
                   <span className={p.type === 'F' ? 'badge-F' : 'badge-NF'}>{p.type}</span>
                   <span className="flex-1 text-sm font-medium">{p.nom}</span>
                   <span className="text-sm font-price text-text-secondary">{formatPrice(p.prix_vente)}</span>
-                  <span className="text-xs text-text-muted">Stock: {p.stock_actuel}</span>
+                  <span className="text-xs text-text-muted">Stock dispo: {saleStock(p)}{saleStock(p)!==p.stock_actuel?` / ${p.stock_actuel}`:''}</span>
                 </button>
               ))}
             </div>
@@ -640,9 +636,9 @@ export default function POSTab() {
               </div>
               <div className="text-right">
                 <div className="text-lg font-bold font-price text-text-primary">{formatPrice(scannedProduct.prix_vente)}</div>
-                {scannedProduct.stock_actuel <= scannedProduct.stock_minimum && (
+                {saleStock(scannedProduct) <= scannedProduct.stock_minimum && (
                   <div className="flex items-center gap-1 text-xs text-warning">
-                    <AlertCircle size={11} /> Stock: {scannedProduct.stock_actuel}
+                    <AlertCircle size={11} /> Stock disponible: {saleStock(scannedProduct)}
                   </div>
                 )}
               </div>
@@ -668,13 +664,7 @@ export default function POSTab() {
                 </div>
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-text-secondary">Remise</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden text-xs">
-                    <button onClick={() => { setRemiseMode('%'); setRemise(0) }} className={cn('px-2 py-0.5 font-semibold transition-colors', remiseMode === '%' ? 'bg-accent-500 text-text-primary' : 'bg-white hover:bg-muted')}>%</button>
-                    <button onClick={() => { setRemiseMode('DT'); setRemise(0) }} className={cn('px-2 py-0.5 font-semibold transition-colors', remiseMode === 'DT' ? 'bg-accent-500 text-text-primary' : 'bg-white hover:bg-muted')}>DT</button>
-                  </div>
-                </div>
+                <label className="block text-xs font-semibold text-text-secondary mb-1.5">Remise unitaire (DT)</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -683,14 +673,13 @@ export default function POSTab() {
                     onChange={e => {
                       const val = e.target.value.replace(/[^0-9.,]/g, '')
                       const v = parseFloat(val.replace(',', '.')) || 0
-                      if (remiseMode === '%') setRemise(Math.min(100, Math.max(0, v)))
-                      else setRemise(Math.min(scannedProduct?.prix_vente ?? 0, Math.max(0, v)))
+                      setRemise(Math.min(scannedProduct?.prix_vente ?? 0, Math.max(0, v)))
                     }}
                     onKeyDown={e => { if (e.key === 'Enter') handleAddToCart() }}
                     className="w-20 text-center border border-border rounded-lg py-1.5 font-price font-semibold"
-                    min={0} step={remiseMode === '%' ? 5 : 0.5}
+                    min={0} step={0.001}
                   />
-                  <span className="text-text-secondary text-sm font-medium">{remiseMode}</span>
+                  <span className="text-text-secondary text-sm font-medium">DT</span>
                 </div>
               </div>
             </div>
@@ -730,7 +719,7 @@ export default function POSTab() {
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
               <span className="text-sm text-text-secondary font-medium">Prix final :</span>
               <span className="text-lg font-bold font-price text-text-primary">
-                {formatPrice(scannedProduct.prix_vente * (1 - (remiseMode === 'DT' ? Math.min(100, (remise / (scannedProduct.prix_vente || 1)) * 100) : remise) / 100) * qty)}
+                {formatPrice(Math.max(0, scannedProduct.prix_vente - remise) * qty)}
               </span>
             </div>
 
@@ -827,7 +816,9 @@ export default function POSTab() {
                 <div key={idx} className={cn('flex items-start gap-2 p-2.5 rounded-lg group', item.is_service ? 'bg-blue-50' : 'bg-muted')}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      {item.is_service
+                      {item.avance_dossier_id
+                        ? <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-800 border border-violet-200">PRODUIT AVEC AVANCE</span>
+                        : item.is_service
                         ? <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold border border-blue-200">SVC</span>
                         : <span className={item.type_produit === 'F' ? 'badge-F' : 'badge-NF'}>{item.type_produit}</span>
                       }
@@ -842,7 +833,22 @@ export default function POSTab() {
                       {!item.numero_serie && (
                         <button onClick={() => updateItem(idx, { quantite: item.quantite + 1 })} className="w-5 h-5 rounded bg-white flex items-center justify-center hover:bg-border text-xs">+</button>
                       )}
-                      {item.remise_pct > 0 && <span className="text-xs text-danger font-medium">-{item.remise_pct}%</span>}
+                      <div className="ml-1 flex items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5" title="Remise unitaire en dinars">
+                        <Tag size={10} className="text-red-500" />
+                        <input
+                          aria-label={`Remise en dinars ${item.designation}`}
+                          inputMode="decimal"
+                          value={item.remise_pct > 0 ? Number((item.prix_unitaire * item.remise_pct / 100).toFixed(3)) : ''}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => {
+                            const discountDt = Math.min(item.prix_unitaire, Math.max(0, Number(e.target.value.replace(',', '.')) || 0))
+                            updateItem(idx, { remise_pct: item.prix_unitaire > 0 ? discountDt / item.prix_unitaire * 100 : 0 })
+                          }}
+                          className="w-12 bg-transparent text-right text-[11px] font-semibold text-red-600 outline-none"
+                          placeholder="0"
+                        />
+                        <span className="text-[10px] font-semibold text-red-500">DT</span>
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">
@@ -873,10 +879,6 @@ export default function POSTab() {
             <div className="flex items-center gap-2 mb-2">
               <Tag size={11} className="text-text-muted flex-shrink-0" />
               <span className="text-xs text-text-secondary flex-1">Remise panier</span>
-              <div className="flex rounded border border-border overflow-hidden text-[10px]">
-                <button onClick={() => { setRemiseTotaleMode('%'); setRemiseTotaleInput(''); setRemiseTotale(0) }} className={cn('px-1.5 py-0.5 font-bold', remiseTotaleMode === '%' ? 'bg-accent-500' : 'bg-white hover:bg-muted')}><Percent size={9} /></button>
-                <button onClick={() => { setRemiseTotaleMode('DT'); setRemiseTotaleInput(''); setRemiseTotale(0) }} className={cn('px-1.5 py-0.5 font-bold', remiseTotaleMode === 'DT' ? 'bg-accent-500' : 'bg-white hover:bg-muted')}>DT</button>
-              </div>
               <input
                 type="text"
                 inputMode="decimal"
@@ -885,6 +887,7 @@ export default function POSTab() {
                 className="w-16 border border-border rounded px-2 py-0.5 text-xs font-price text-center outline-none focus:border-accent-500"
                 placeholder="0"
               />
+              <span className="text-[10px] font-bold text-text-secondary">DT</span>
             </div>
             {remiseTotale > 0 && (
               <div className="flex justify-between text-sm text-danger mb-1">
@@ -997,6 +1000,26 @@ export default function POSTab() {
             setShowClientAdvance(false)
             refocusScanner()
           }}
+          onCheckoutAdvance={(client, product, dossierId, serial) => {
+            addItem({
+              produit_id: product.id,
+              designation: product.nom,
+              quantite: 1,
+              prix_unitaire: product.prix_vente,
+              remise_pct: 0,
+              total_ligne: product.prix_vente,
+              type_produit: product.type,
+              tva_taux: product.tva_taux ?? 0,
+              numero_serie: serial || undefined,
+              avance_dossier_id: dossierId,
+            })
+            const nextClient = { clientId: client.id, nom: client.nom, tel: client.telephone || '', adresse: client.adresse || '', matricule: '' }
+            setSessionClientForm(nextClient)
+            setSessionClient({ id: client.id, nom: client.nom, telephone: client.telephone, adresse: client.adresse, solde_credit: client.solde_credit || 0, created_at: new Date().toISOString() })
+            setShowClientAdvance(false)
+            setShowCheckout(true)
+            showNotif(`Produit avec avance ajouté — solde à encaisser`)
+          }}
         />
       )}
       {showProductBrowse && (
@@ -1039,13 +1062,55 @@ function SavedPaniersModal({
   onDelete: (id: string) => void | Promise<void>
 }) {
   const [paniers, setPaniers] = useState(() => listSavedPaniers())
+  const [pendingDelete, setPendingDelete] = useState<SavedPanier | null>(null)
+  const [holdProgress, setHoldProgress] = useState(0)
+  const [deleting, setDeleting] = useState(false)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const holdDuration = 1600
 
   const refresh = () => setPaniers(listSavedPaniers())
+
+  const cancelHold = useCallback(() => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    if (progressTimer.current) clearInterval(progressTimer.current)
+    holdTimer.current = null
+    progressTimer.current = null
+    if (!deleting) setHoldProgress(0)
+  }, [deleting])
+
+  const startHoldDelete = () => {
+    if (!pendingDelete || deleting || holdTimer.current) return
+    const startedAt = Date.now()
+    setHoldProgress(0)
+    progressTimer.current = setInterval(() => {
+      setHoldProgress(Math.min(100, ((Date.now() - startedAt) / holdDuration) * 100))
+    }, 30)
+    holdTimer.current = setTimeout(() => {
+      if (progressTimer.current) clearInterval(progressTimer.current)
+      holdTimer.current = null
+      progressTimer.current = null
+      setHoldProgress(100)
+      setDeleting(true)
+      void Promise.resolve(onDelete(pendingDelete.id)).then(() => {
+        refresh()
+        setPendingDelete(null)
+      }).finally(() => {
+        setDeleting(false)
+        setHoldProgress(0)
+      })
+    }, holdDuration)
+  }
 
   useEffect(() => {
     void syncSavedPaniers().then(setPaniers).catch(error => {
       console.error('[POS] Failed to load protected carts:', error)
     })
+  }, [])
+
+  useEffect(() => () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    if (progressTimer.current) clearInterval(progressTimer.current)
   }, [])
 
   return (
@@ -1084,7 +1149,7 @@ function SavedPaniersModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { void Promise.resolve(onDelete(p.id)).then(refresh) }}
+                    onClick={() => { cancelHold(); setPendingDelete(p) }}
                     className="px-3 py-1.5 bg-muted hover:bg-red-50 text-danger text-xs font-semibold rounded-lg"
                   >
                     Suppr.
@@ -1100,6 +1165,48 @@ function SavedPaniersModal({
           </button>
         </div>
       </div>
+      {pendingDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-red-200 bg-white p-5 shadow-2xl animate-slide-in">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <Trash2 size={20} />
+            </div>
+            <h3 className="text-center text-base font-bold">Supprimer ce panier ?</h3>
+            <p className="mt-1 text-center text-xs text-text-secondary">
+              « {pendingDelete.label} » sera supprimé définitivement. Oui ou non ?
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => { cancelHold(); setPendingDelete(null) }}
+                className="rounded-xl border border-border bg-muted py-3 text-sm font-bold hover:bg-border disabled:opacity-50"
+              >
+                Non, garder
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onPointerDown={startHoldDelete}
+                onPointerUp={cancelHold}
+                onPointerCancel={cancelHold}
+                onPointerLeave={cancelHold}
+                onKeyDown={event => {
+                  if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) startHoldDelete()
+                }}
+                onKeyUp={event => {
+                  if (event.key === 'Enter' || event.key === ' ') cancelHold()
+                }}
+                className="relative overflow-hidden rounded-xl border border-red-600 bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-60"
+              >
+                <span className="absolute inset-y-0 left-0 bg-red-800/45 transition-[width] duration-75" style={{ width: `${holdProgress}%` }} />
+                <span className="relative">{deleting ? 'Suppression…' : holdProgress > 0 ? 'Continuez…' : 'Maintenir Oui'}</span>
+              </button>
+            </div>
+            <p className="mt-3 text-center text-[10px] font-medium text-red-500">Maintenez le bouton rouge pendant 1,6 seconde.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1180,11 +1287,11 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
             </thead>
             <tbody>
               {results.map(p => {
-                const rupture = p.type === 'F' && p.stock_actuel <= 0
+                const rupture = p.type === 'F' && saleStock(p) <= 0
                 return (
                   <tr key={p.id} className={cn('border-b border-border last:border-0', rupture ? 'opacity-50 bg-gray-50' : 'hover:bg-accent-50')}>
                     <td className="px-4 py-2.5">
-                      <div className="font-medium text-text-primary">{p.nom}</div>
+                      <div className="flex items-center gap-2 font-medium text-text-primary">{p.nom}{p.produit_avec_avance===1&&<span className="rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[9px] font-bold text-violet-700">Produit avec avance</span>}</div>
                       <div className="text-text-muted text-[10px]">{p.reference}</div>
                     </td>
                     <td className="px-3 py-2.5 text-center">
@@ -1194,7 +1301,7 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
                     <td className="px-3 py-2.5 text-center">
                       {rupture
                         ? <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">Rupture</span>
-                        : <span className={cn('font-semibold', p.stock_actuel <= p.stock_minimum ? 'text-warning' : 'text-text-primary')}>{p.stock_actuel}</span>
+                        : <span className={cn('font-semibold', saleStock(p) <= p.stock_minimum ? 'text-warning' : 'text-text-primary')}>{saleStock(p)}{saleStock(p)!==p.stock_actuel&&<small className="ml-1 text-violet-600">({p.stock_actuel} phys.)</small>}</span>
                       }
                     </td>
                     <td className="px-3 py-2.5">
@@ -1226,6 +1333,7 @@ function ProductBrowseModal({ onClose, onSelect }: { onClose: () => void; onSele
 // ── Credit Client Paiement Modal ─────────────────────────────────────────────
 interface ClientMin { id: string; nom: string; telephone?: string; adresse?: string; solde_credit: number; organisation_id?: string }
 interface OrganisationMin { id: string; nom: string }
+interface CreditPaymentHistory { id: string; type: 'CREDIT' | 'PAIEMENT'; montant: number; note?: string; created_at: string }
 
 function CreditClientPaiementModal({
   currentShift, onClose, onSuccess,
@@ -1237,6 +1345,7 @@ function CreditClientPaiementModal({
   const [search, setSearch] = useState('')
   const [clients, setClients] = useState<ClientMin[]>([])
   const [selected, setSelected] = useState<ClientMin | null>(null)
+  const [creditHistory, setCreditHistory] = useState<CreditPaymentHistory[]>([])
   const [organisations, setOrganisations] = useState<OrganisationMin[]>([])
   const [organisationId, setOrganisationId] = useState('all')
   const [showCreateClient, setShowCreateClient] = useState(false)
@@ -1257,6 +1366,21 @@ function CreditClientPaiementModal({
   }, [search, organisationId])
 
   const montantNum = parseFloat(montant.replace(',', '.')) || 0
+  const activePlan = creditHistory
+    .filter(row => row.type === 'CREDIT')
+    .map(row => ({ row, plan: parseInstallmentPlan(row.note) }))
+    .find((item): item is { row: CreditPaymentHistory; plan: NonNullable<ReturnType<typeof parseInstallmentPlan>> } => Boolean(item.plan))
+  const planSchedule = activePlan ? upcomingInstallments(activePlan.plan) : []
+  const planPaid = activePlan ? Math.min(activePlan.plan.total, creditHistory
+    .filter(row => row.type === 'PAIEMENT' && row.created_at >= activePlan.row.created_at)
+    .reduce((sum, row) => sum + row.montant, 0)) : 0
+  const nextInstallment = activePlan ? planSchedule.find(due => due.amount > planPaid - planSchedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0)) : null
+
+  useEffect(() => {
+    if (!selected) { setCreditHistory([]); return }
+    void loadData('Chargement échéancier', () => api.creditsList(selected.id), { silent: true })
+      .then(rows => rows && setCreditHistory(rows as CreditPaymentHistory[]))
+  }, [selected])
 
   const handleSave = async () => {
     if (!selected || montantNum <= 0) return
@@ -1359,6 +1483,14 @@ function CreditClientPaiementModal({
                 </button>
               </div>
 
+              {activePlan && (
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-indigo-900">Mensualités · {activePlan.plan.months} mois</span><span className="font-price text-xs font-bold text-indigo-700">{formatPrice(activePlan.plan.monthlyAmount)} DT/mois</span></div>
+                  <div className="mt-1 text-[11px] text-indigo-800">{formatPrice(planPaid)} payé sur {formatPrice(activePlan.plan.total)}{nextInstallment && <> · prochaine échéance <strong>{new Date(`${nextInstallment.date}T12:00:00`).toLocaleDateString('fr-FR')}</strong></>}</div>
+                  <div className="mt-2 flex gap-1">{planSchedule.map(due => { const before = planSchedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0); return <span key={due.number} className={cn('h-1.5 min-w-3 flex-1 rounded-full', planPaid >= before + due.amount - 0.0001 ? 'bg-green-500' : 'bg-indigo-200')} /> })}</div>
+                </div>
+              )}
+
               {/* Amount */}
               <div>
                 <label className="block text-xs font-semibold text-text-secondary mb-1">Montant encaissé (DT) *</label>
@@ -1419,11 +1551,42 @@ function CreditClientPaiementModal({
   )
 }
 
-function ClientAdvanceModal({ currentShift, onClose, onSuccess }: { currentShift: { id?: string; operateur_nom?: string } | null; onClose: () => void; onSuccess: (clientNom: string, montant: number) => void }) {
+interface ClientAdvanceRow {
+  id: string
+  numero: string
+  client_id: string
+  client_nom: string
+  produit_description: string
+  montant: number
+  mode_paiement: string
+  note?: string
+  type_avance?: 'LIBRE' | 'PRODUIT'
+  dossier_id?: string
+  produit_id?: string
+  numero_serie?: string
+  prix_produit?: number
+  statut?: 'EN_COURS' | 'SOLDE' | 'CONVERTI'
+  vente_id?: string
+  created_at: string
+}
+
+function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvance }: {
+  currentShift: { id?: string; operateur_nom?: string } | null
+  onClose: () => void
+  onSuccess: (clientNom: string, montant: number) => void
+  onCheckoutAdvance: (client: ClientMin, product: Produit, dossierId: string, serial?: string) => void
+}) {
   const [clients, setClients] = useState<ClientMin[]>([])
   const [selected, setSelected] = useState<ClientMin | null>(null)
   const [search, setSearch] = useState('')
-  const [produit, setProduit] = useState('')
+  const [typeAvance, setTypeAvance] = useState<'LIBRE' | 'PRODUIT'>('LIBRE')
+  const [description, setDescription] = useState('')
+  const [productSearch, setProductSearch] = useState('')
+  const [products, setProducts] = useState<Produit[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<Produit | null>(null)
+  const [availableProductSerials, setAvailableProductSerials] = useState<string[]>([])
+  const [serial, setSerial] = useState('')
+  const [dossierId, setDossierId] = useState('')
   const [montant, setMontant] = useState('')
   const [mode, setMode] = useState('ESPECES')
   const [reference, setReference] = useState('')
@@ -1432,30 +1595,89 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess }: { currentShift
   const [error, setError] = useState('')
   const [showCreateClient, setShowCreateClient] = useState(false)
   const [organisations, setOrganisations] = useState<OrganisationMin[]>([])
+  const [historyClient, setHistoryClient] = useState<ClientMin | null>(null)
+  const [historyRows, setHistoryRows] = useState<ClientAdvanceRow[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   useEffect(() => { void loadData('Chargement organisations', () => api.organisationsList(), { silent: true }).then(r => r && setOrganisations(r as OrganisationMin[])) }, [])
   useEffect(() => { const timer = setTimeout(() => { void loadData('Recherche clients', () => api.clientsList(search.trim() ? { search: search.trim() } : {}), { silent: true }).then(r => r && setClients(r as ClientMin[])) }, search.length >= 2 ? 180 : 0); return () => clearTimeout(timer) }, [search])
+  useEffect(() => {
+    if (typeAvance !== 'PRODUIT' || selectedProduct || productSearch.trim().length < 2) { if (!selectedProduct) setProducts([]); return }
+    const timer = setTimeout(() => { void loadData('Recherche produit', () => api.produitsList({ search: productSearch.trim() }), { silent: true }).then(rows => rows && setProducts((rows as Produit[]).slice(0, 30))) }, 180)
+    return () => clearTimeout(timer)
+  }, [productSearch, selectedProduct, typeAvance])
+  useEffect(() => {
+    if (!selectedProduct || !productTracksSerial(selectedProduct)) { setAvailableProductSerials([]); setSerial(''); return }
+    if (dossierId) return
+    void api.serialNumbersGetByProduit(selectedProduct.id).then(rows => {
+      const values = (rows as Array<{ numero_serie: string; statut: string }>).filter(row => row.statut === 'EN_STOCK').map(row => row.numero_serie)
+      setAvailableProductSerials(values)
+      if (values.length === 1) setSerial(values[0])
+    })
+  }, [selectedProduct, dossierId])
   const amount = parseFloat(montant.replace(',', '.')) || 0
+  const price = selectedProduct?.prix_vente ?? 0
+
+  const loadHistory = async (client: ClientMin) => {
+    setHistoryClient(client)
+    setHistoryLoading(true)
+    try { setHistoryRows(await api.avancesClientsList(client.id) as ClientAdvanceRow[]) }
+    finally { setHistoryLoading(false) }
+  }
+
+  const groupedHistory = historyRows.reduce((map, row) => {
+    const key = row.dossier_id || row.id
+    const current = map.get(key)
+    if (current) { current.rows.push(row); current.total += Number(row.montant || 0) }
+    else map.set(key, { dossierId: key, root: row, rows: [row], total: Number(row.montant || 0) })
+    return map
+  }, new Map<string, { dossierId: string; root: ClientAdvanceRow; rows: ClientAdvanceRow[]; total: number }>())
+
+  const continueDossier = async (group: { dossierId: string; root: ClientAdvanceRow }) => {
+    if (!historyClient || !group.root.produit_id) return
+    const product = await api.produitsGet(group.root.produit_id) as Produit | null
+    if (!product) { setError('Produit introuvable'); return }
+    setSelected(historyClient)
+    setTypeAvance('PRODUIT')
+    setSelectedProduct(product)
+    setProductSearch(product.nom)
+    setDossierId(group.dossierId)
+    setSerial(group.root.numero_serie || '')
+    setHistoryClient(null)
+    setMontant('')
+  }
+
+  const checkoutDossier = async (group: { dossierId: string; root: ClientAdvanceRow }) => {
+    if (!historyClient || !group.root.produit_id) return
+    const product = await api.produitsGet(group.root.produit_id) as Produit | null
+    if (!product) { setError('Produit introuvable'); return }
+    onCheckoutAdvance(historyClient, { ...product, prix_vente: Number(group.root.prix_produit) || product.prix_vente }, group.dossierId, group.root.numero_serie)
+  }
+
   const save = async () => {
-    if (!selected || !produit.trim() || amount <= 0) return
+    if (!selected || amount <= 0 || (typeAvance === 'PRODUIT' && !selectedProduct)) return
     setError('')
     await runAction('Avance client', async () => {
       const now = new Date().toISOString()
       const numero = `AVC-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`
-      const payload = { id: crypto.randomUUID(), numero, client_id: selected.id, client_nom: selected.nom, client_tel: selected.telephone || null, client_adresse: selected.adresse || null, produit_description: produit.trim(), montant: amount, mode_paiement: mode, reference: reference.trim() || null, note: note.trim() || null, shift_id: currentShift?.id ?? null, operateur: currentShift?.operateur_nom ?? 'superadmin', created_at: now }
+      const id = crypto.randomUUID()
+      const productDescription = typeAvance === 'PRODUIT' ? selectedProduct!.nom : (description.trim() || 'Avance libre')
+      const payload = { id, numero, client_id: selected.id, client_nom: selected.nom, client_tel: selected.telephone || null, client_adresse: selected.adresse || null, produit_description: productDescription, montant: amount, mode_paiement: mode, reference: reference.trim() || null, note: note.trim() || null, shift_id: currentShift?.id ?? null, operateur: currentShift?.operateur_nom ?? 'superadmin', type_avance: typeAvance, dossier_id: dossierId || id, produit_id: typeAvance === 'PRODUIT' ? selectedProduct!.id : null, numero_serie: typeAvance === 'PRODUIT' ? serial || null : null, prix_produit: typeAvance === 'PRODUIT' ? price : null, created_at: now }
       await api.avancesClientsCreate(payload)
-      await printAdvanceReceipt({ numero, clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse, operateur: payload.operateur, date: now, note, produit: produit.trim(), montant: amount, modePaiement: mode, reference })
+      await printAdvanceReceipt({ numero, clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse, operateur: payload.operateur, date: now, note, produit: productDescription, montant: amount, modePaiement: mode, reference })
       onSuccess(selected.nom, amount)
     }, { setLoading, silent: true, onError: setError })
   }
-  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-slide-in">
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[94vh] flex flex-col animate-slide-in">
     <div className="flex items-center justify-between px-6 py-4 border-b border-border"><h2 className="font-bold flex items-center gap-2"><DollarSign size={17} className="text-violet-600"/>Avance client</h2><button onClick={onClose}><XIcon size={18}/></button></div>
-    <div className="p-5 space-y-3">{error && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
-      {!selected ? <><div className="flex items-center justify-between"><label className="text-xs font-semibold">Client *</label><button type="button" onClick={()=>setShowCreateClient(true)} className="text-xs font-semibold text-accent-700 flex items-center gap-1"><Plus size={13}/>Nouveau client</button></div><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-48 overflow-y-auto space-y-1">{clients.map(c=><button key={c.id} onClick={()=>setSelected(c)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button>)}{clients.length===0&&<div className="text-xs text-text-muted text-center py-3">Aucun client trouvé</div>}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><button onClick={()=>setSelected(null)}><XIcon size={15}/></button></div>}
-      {selected && <><label className="text-xs font-semibold">Produit / commande concerné(e) *</label><textarea value={produit} onChange={e=>setProduit(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Désignation, modèle, couleur, quantité..."/>
+    <div className="p-5 space-y-3 overflow-y-auto">{error && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
+      {!selected ? <><div className="flex items-center justify-between"><label className="text-xs font-semibold">Client *</label><button type="button" onClick={()=>setShowCreateClient(true)} className="text-xs font-semibold text-accent-700 flex items-center gap-1"><Plus size={13}/>Nouveau client</button></div><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-52 overflow-y-auto space-y-1">{clients.map(c=><div key={c.id} className="flex items-center gap-1 rounded-lg hover:bg-violet-50"><button onClick={()=>setSelected(c)} className="min-w-0 flex-1 text-left px-3 py-2"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button><button type="button" onClick={()=>void loadHistory(c)} title="Historique des avances" className="mr-2 rounded-lg border border-violet-200 bg-white p-2 text-violet-700 hover:bg-violet-100"><History size={15}/></button></div>)}{clients.length===0&&<div className="text-xs text-text-muted text-center py-3">Aucun client trouvé</div>}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><div className="flex gap-1"><button title="Historique" onClick={()=>void loadHistory(selected)} className="rounded-lg p-1.5 text-violet-700 hover:bg-violet-100"><History size={16}/></button><button onClick={()=>setSelected(null)}><XIcon size={15}/></button></div></div>}
+      {selected && <><div className="grid grid-cols-2 gap-2 rounded-xl bg-muted p-1"><button onClick={()=>{setTypeAvance('LIBRE');setDossierId('')}} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='LIBRE'?'bg-white shadow text-violet-800':'text-text-muted')}>Avance libre</button><button onClick={()=>setTypeAvance('PRODUIT')} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='PRODUIT'?'bg-violet-600 text-white shadow':'text-text-muted')}>Avance sur produit</button></div>
+      {typeAvance==='LIBRE' ? <><label className="text-xs font-semibold">Objet / description (optionnel)</label><textarea value={description} onChange={e=>setDescription(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Commande, réservation ou avance libre..."/></> : <div className="space-y-2"><label className="text-xs font-semibold">Produit lié *</label>{!selectedProduct ? <><input value={productSearch} onChange={e=>setProductSearch(e.target.value)} placeholder="Chercher produit, référence ou code-barres..." className="w-full border border-violet-300 rounded-xl px-3 py-2.5 outline-none"/><div className="max-h-40 overflow-y-auto rounded-xl border border-border">{products.map(product=><button key={product.id} onClick={()=>{setSelectedProduct(product);setProductSearch(product.nom)}} className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left last:border-0 hover:bg-violet-50"><span><b className="text-xs">{product.nom}</b><small className="block text-text-muted">{product.reference}</small></span><span className="font-price text-xs font-bold">{formatPrice(product.prix_vente)}</span></button>)}</div></> : <div className="rounded-xl border-2 border-violet-300 bg-violet-50 p-3"><div className="flex justify-between gap-2"><div><b>{selectedProduct.nom}</b><div className="text-xs text-text-muted">{selectedProduct.reference}</div></div>{!dossierId&&<button onClick={()=>{setSelectedProduct(null);setProductSearch('');setSerial('')}}><XIcon size={15}/></button>}</div><div className="mt-2 flex justify-between text-xs"><span>Prix client</span><b className="font-price">{formatPrice(price)}</b></div>{dossierId&&<div className="mt-2 text-[10px] font-bold text-violet-700">Nouvelle tranche sur dossier existant</div>}</div>}{selectedProduct&&productTracksSerial(selectedProduct)&&<div><label className="text-xs font-semibold">Numéro de série réservé *</label><select value={serial} disabled={!!dossierId} onChange={e=>setSerial(e.target.value)} className="mt-1 w-full rounded-xl border border-violet-300 bg-white px-3 py-2.5"><option value="">Choisir un S/N disponible</option>{availableProductSerials.map(sn=><option key={sn} value={sn}>{sn}</option>)}{dossierId&&serial&&<option value={serial}>{serial}</option>}</select></div>}</div>}
       <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-semibold">Montant (DT) *</label><input value={montant} onChange={e=>setMontant(e.target.value.replace(/[^0-9.,]/g,''))} inputMode="decimal" className="w-full border border-border rounded-xl px-3 py-2.5 font-price font-bold outline-none" placeholder="0.000"/></div><div><label className="text-xs font-semibold">Mode</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5"><option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="VIREMENT">Virement</option></select></div></div>
       <input value={reference} onChange={e=>setReference(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Référence de paiement (optionnel)"/><input value={note} onChange={e=>setNote(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Note (optionnel)"/></>}
-    </div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || !produit.trim() || amount<=0} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
+    </div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || amount<=0 || (typeAvance==='PRODUIT'&&(!selectedProduct||(productTracksSerial(selectedProduct)&&!serial)))} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
     {showCreateClient && <QuickClientCreateModal organisations={organisations} onClose={()=>setShowCreateClient(false)} onCreated={c=>{setClients(prev=>[...prev,c].sort((a,b)=>a.nom.localeCompare(b.nom)));setSelected(c);setShowCreateClient(false)}}/>}
+    {historyClient&&<div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"><div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold flex items-center gap-2"><History size={17} className="text-violet-600"/>Historique des avances</h3><p className="text-xs text-text-muted">{historyClient.nom} · timeline complète</p></div><button onClick={()=>setHistoryClient(null)}><XIcon size={18}/></button></div><div className="overflow-y-auto p-5">{historyLoading?<div className="py-8 text-center text-sm text-text-muted">Chargement...</div>:groupedHistory.size===0?<div className="py-8 text-center text-sm text-text-muted">Aucune avance</div>:<div className="relative ml-3 border-l-2 border-violet-200 pl-5 space-y-4">{Array.from(groupedHistory.values()).map(group=>{const active=group.root.type_avance==='PRODUIT'&&group.root.statut!=='CONVERTI';const price=Number(group.root.prix_produit||0);const progress=price>0?Math.min(100,(group.total/price)*100):0;return <div key={group.dossierId} className="relative rounded-xl border border-border p-3"><span className="absolute -left-[29px] top-4 h-3 w-3 rounded-full bg-violet-500 ring-4 ring-violet-100"/><div className="flex justify-between gap-3"><div><span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',group.root.type_avance==='PRODUIT'?'bg-violet-100 text-violet-800':'bg-gray-100 text-gray-700')}>{group.root.type_avance==='PRODUIT'?'SUR PRODUIT':'LIBRE'}</span><h4 className="mt-1 text-sm font-bold">{group.root.produit_description}</h4>{group.root.numero_serie&&<p className="text-[10px] text-text-muted">S/N {group.root.numero_serie}</p>}</div><div className="text-right"><b className="font-price text-violet-700">{formatPrice(group.total)}</b><div className="text-[10px] text-text-muted">{group.rows.length} versement(s)</div></div></div>{group.root.type_avance==='PRODUIT'&&<><div className="mt-3 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-violet-500" style={{width:`${progress}%`}}/></div><div className="mt-1 flex justify-between text-[10px]"><span>{Math.round(progress)}% payé</span><span>Reste {formatPrice(Math.max(0,price-group.total))}</span></div></>}<div className="mt-3 space-y-1">{[...group.rows].reverse().map(row=><div key={row.id} className="flex justify-between rounded-lg bg-muted px-2 py-1.5 text-[10px]"><span>{new Date(row.created_at).toLocaleString('fr-FR')} · {row.mode_paiement}</span><b className="font-price">+{formatPrice(row.montant)}</b></div>)}</div>{active&&<div className="mt-3 grid grid-cols-2 gap-2"><button onClick={()=>void continueDossier(group)} className="rounded-lg border border-violet-300 py-2 text-xs font-bold text-violet-800 hover:bg-violet-50">+ Nouvelle tranche</button><button onClick={()=>void checkoutDossier(group)} className="flex items-center justify-center gap-1 rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-700"><PackageCheck size={13}/>Encaisser / vendre</button></div>}{group.root.statut==='CONVERTI'&&<div className="mt-2 rounded-lg bg-green-50 px-2 py-1.5 text-[10px] font-bold text-green-700">Converti en vente · {group.root.vente_id}</div>}</div>})}</div>}</div></div></div>}
   </div></div>
 }
 

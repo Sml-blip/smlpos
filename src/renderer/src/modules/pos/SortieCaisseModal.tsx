@@ -10,6 +10,7 @@ export default function SortieCaisseModal({ onClose }: { onClose: () => void }) 
   const { currentShift } = useAppStore()
   const [montant, setMontant] = useState('')
   const [note, setNote] = useState('')
+  const [caisseSource, setCaisseSource] = useState<'EXTERNE' | 'INTERNE'>('EXTERNE')
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -32,6 +33,7 @@ export default function SortieCaisseModal({ onClose }: { onClose: () => void }) 
         shift_id: currentShift?.id,
         montant: m,
         note: note.trim(),
+        caisse_source: caisseSource,
         operateur: currentShift?.operateur_nom,
         created_at: new Date().toISOString(),
       }
@@ -49,6 +51,17 @@ export default function SortieCaisseModal({ onClose }: { onClose: () => void }) 
         </div>
 
         <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-text-secondary mb-1.5">Caisse débitée *</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['EXTERNE', 'INTERNE'] as const).map(source => (
+                <button key={source} type="button" onClick={() => setCaisseSource(source)}
+                  className={`rounded-xl border-2 px-3 py-2.5 text-xs font-bold ${caisseSource === source ? 'border-accent-500 bg-accent-50' : 'border-border bg-white hover:bg-muted'}`}>
+                  Caisse {source === 'EXTERNE' ? 'externe (shift)' : 'interne'}
+                </button>
+              ))}
+            </div>
+          </div>
           <div>
             <label className="block text-xs font-semibold text-text-secondary mb-1.5">Montant (DT) <span className="text-danger">*</span></label>
             <div className="flex items-center gap-2 border border-border rounded-xl px-4 py-3 focus-within:border-accent-500">
@@ -93,7 +106,7 @@ export default function SortieCaisseModal({ onClose }: { onClose: () => void }) 
 
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={onClose} className="flex-1 bg-muted hover:bg-border text-text-primary font-semibold py-2.5 rounded-xl transition-colors">Annuler</button>
-          <button type="button" onClick={handleConfirm} disabled={!montant || loading}
+          <button type="button" onClick={handleConfirm} disabled={!montant || !note.trim() || loading || (caisseSource === 'EXTERNE' && !currentShift?.id)}
             className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors">
             {loading ? 'Confirmation...' : 'Confirmer'}
           </button>
