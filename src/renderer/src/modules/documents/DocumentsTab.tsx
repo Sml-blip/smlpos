@@ -2,6 +2,7 @@ import { createElement, useState, useEffect, useCallback, useMemo, useRef } from
 import Fuse from 'fuse.js'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import * as XLSX from 'xlsx'
 import { format } from 'date-fns'
 import { cn, formatPrice } from '../../lib/utils'
 import { usePrint } from '../../lib/usePrint'
@@ -18,7 +19,7 @@ import { normalizeInvoiceLine, applyTotalsToDoc } from '../../lib/invoiceLineCal
 import { mapDbFactureAchatToInvoice } from '../../lib/invoiceAchatMapper'
 import { wrapPrintHtml } from '../../lib/printHtml'
 import {
-  FileText, FileDown, Search, Printer, Eye, X, CheckCircle, Clock,
+  FileText, FileDown, Download, Search, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
   Ban, PackageCheck, Edit2
 } from 'lucide-react'
@@ -53,25 +54,42 @@ interface DocRow {
   facture_origine_numero?: string | null
 }
 
-const escapeHtml = (value: unknown) => String(value ?? '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;').replace(/'/g, '&#039;')
+interface TvaBucket { taux: number; base: number; montant: number }
+interface TvaExportDoc extends DocRow {
+  client_id?: string | null
+  tax_buckets?: TvaBucket[]
+}
 
-function buildDocumentsPdf(title: string, columns: string[], rows: Record<string, unknown>[]) {
-  const header = columns.map(column => `<th>${escapeHtml(column)}</th>`).join('')
-  const body = rows.map(row => `<tr>${columns.map(column => `<td>${escapeHtml(row[column])}</td>`).join('')}</tr>`).join('')
-  const landscape = columns.length > 7 ? 'landscape' : 'portrait'
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
-    @page { size: A4 ${landscape}; margin: 12mm; }
-    * { box-sizing: border-box; } body { font-family: Arial, sans-serif; color: #1e1b16; margin: 0; font-size: 9px; }
-    header { border-bottom: 3px solid #f4c430; padding-bottom: 8px; margin-bottom: 12px; }
-    h1 { font-size: 18px; margin: 0 0 4px; } .meta { color: #666; font-size: 10px; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; } th { background: #f4c430; font-weight: 700; }
-    th, td { border: 1px solid #d8d2c8; padding: 5px; overflow-wrap: anywhere; vertical-align: top; } tbody tr:nth-child(even) { background: #faf8f2; }
-    footer { margin-top: 10px; color: #777; font-size: 9px; text-align: right; }
-  </style></head><body><header><h1>${escapeHtml(title)}</h1><div class="meta">SML Informatique · Document généré le ${escapeHtml(format(new Date(), 'dd/MM/yyyy HH:mm'))}</div></header>
-  <table><thead><tr>${header}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length}">Aucune donnée</td></tr>`}</tbody></table>
-  <footer>${rows.length} ligne(s)</footer></body></html>`
+const money3 = (value: number) => Math.round((Number(value) || 0) * 1000) / 1000
+
+function buildTvaSalesWorksheet(docs: TvaExportDoc[], bounds: { from: string; to: string }) {
+  const periodStart = bounds.from ? new Date(`${bounds.from}T12:00:00`) : null
+  const periodEnd = bounds.to ? new Date(`${bounds.to}T12:00:00`) : null
+  const generatedAt = new Date()
+  const rows: unknown[][] = [
+    ['', '', '', '', '', 'TVA / Vente', '', '', '', '', '', '', 'Document généré le'],
+    ['', '', '', '', '', 'Sur la période de', '', periodStart ?? '', '', periodEnd ?? '', '', '', generatedAt],
+    ['Document', 'Code', 'Client', 'Date', 'Exoné', 'TVA', 'Base', 'Montant', 'Taxe', 'MT Taxe', 'Total TVA', 'Total HT', 'Total_TTC'],
+  ]
+  let totalHt = 0; let totalTva = 0; let totalTtc = 0
+  for (const doc of docs) {
+    const timbre = money3(Number(doc.timbre) || 0); const docHt = money3(doc.total_ht); const docTva = money3(doc.total_tva); const docTtc = money3(Number(doc.total_ttc) + timbre)
+    totalHt += docHt; totalTva += docTva; totalTtc += docTtc
+    rows.push([doc.numero, doc.client_id ?? '', doc.client_nom ?? 'Client Passager', new Date(doc.created_at), doc.exo ? 'Oui' : '', '', '', '', '', '', docTva, docHt, docTtc])
+    for (const bucket of (doc.tax_buckets?.length ? doc.tax_buckets : [{ taux: 0, base: docHt, montant: docTva }])) rows.push(['', '', '', '', bucket.taux <= 0 ? 'Oui' : '', bucket.taux > 0 ? bucket.taux : '', money3(bucket.base), money3(bucket.montant)])
+    if (timbre > 0) rows.push(['', '', '', '', '', '', '', '', 'TIMBRE FISCAL', timbre])
+  }
+  rows.push(['', '', '', 'Total HT', 'Total TVA', '', 'Vente TTC'])
+  rows.push(['Total', '', '', money3(totalHt), money3(totalTva), '', money3(totalTtc)])
+  const ws = XLSX.utils.aoa_to_sheet(rows)
+  ws['!cols'] = [15, 13, 26, 13, 10, 8, 12, 12, 12, 10, 12, 12, 12].map(wch => ({ wch }))
+  ws['!freeze'] = { xSplit: 0, ySplit: 3 }
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
+  for (let c = 0; c <= 12; c++) { const cell = XLSX.utils.encode_cell({ r: 2, c }); if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } }, alignment: { horizontal: 'center' } } }
+  for (let r = 3; r <= range.e.r; r++) for (const c of [3, 5, 6, 7, 9, 10, 11, 12]) { const cell = XLSX.utils.encode_cell({ r, c }); if (ws[cell] && typeof ws[cell].v === 'number') ws[cell].z = c === 3 ? 'dd/mm/yyyy' : '#,##0.000' }
+  const totalRow = rows.length - 1
+  for (let c = 0; c <= 12; c++) { const cell = XLSX.utils.encode_cell({ r: totalRow, c }); if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFF2CC' } } } }
+  return { ws, documentCount: docs.length }
 }
 
 function renderInvoiceMarkup(doc: InvoiceDocData, lignes: InvoiceLineData[], settings: InvoiceCompanySettings): string {
@@ -147,8 +165,8 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'AVOIR', label: 'Avoirs' },
 ]
 
-// ── PDF Export Preview Modal ───────────────────────────────────────────────────
-function PdfPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats, totalColumns = [], totalLabelColumn }: {
+// ── Excel Export Preview Modal ─────────────────────────────────────────────────
+function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fileName: initialFileName, onClose, isAchats, totalColumns = [], totalLabelColumn, tvaDocs }: {
   rows: Record<string, unknown>[]
   columns: string[]
   title: string
@@ -156,6 +174,7 @@ function PdfPreviewModal({ rows: initialRows, columns, title: initialTitle, file
   isAchats?: boolean
   totalColumns?: string[]
   totalLabelColumn?: string
+  tvaDocs?: TvaExportDoc[]
   onClose: () => void
 }) {
   const [editRows, setEditRows] = useState<Record<string, unknown>[]>(initialRows)
@@ -177,11 +196,11 @@ function PdfPreviewModal({ rows: initialRows, columns, title: initialTitle, file
     else if (periodMode === 'trimestre') label = `${periodTrimestre}_${periodAnnee}`
     else if (periodMode === 'annee') label = periodAnnee
     else label = `${periodFrom}_${periodTo}`
-    const base = isAchats ? 'Bilan Factures Achat' : 'Bilan Ventes'
-    const fileBase = isAchats ? 'FACTURES_ACHAT' : 'BILAN_VENTES'
+    const base = tvaDocs ? 'État TVA Vente' : isAchats ? 'Bilan Factures Achat' : 'Bilan Ventes'
+    const fileBase = tvaDocs ? 'ETAT_TVA_VENTE' : isAchats ? 'FACTURES_ACHAT' : 'BILAN_VENTES'
     setTitle(`${base} ${label}`)
-    setFileName(`${fileBase}_${label.replace(/\//g, '_')}.pdf`)
-  }, [periodMode, periodMois, periodAnnee, periodTrimestre, periodFrom, periodTo, isAchats])
+    setFileName(`${fileBase}_${label.replace(/\//g, '_')}.xlsx`)
+  }, [periodMode, periodMois, periodAnnee, periodTrimestre, periodFrom, periodTo, isAchats, tvaDocs])
 
   const periodBounds = useMemo(() => {
     if (periodMode === 'mois' && /^\d{4}-\d{2}$/.test(periodMois)) {
@@ -221,16 +240,21 @@ function PdfPreviewModal({ rows: initialRows, columns, title: initialTitle, file
     return [...data, total]
   }, [visibleRows, columns, totalColumns, totalLabelColumn])
 
-  const exportToPdf = async () => {
+  const exportToExcel = async () => {
     if (exporting) return
     setExporting(true)
     try {
-      const result = await api.reportsSavePdf(buildDocumentsPdf(title, columns, exportRows), fileName)
-      if (result?.canceled) return
-      if (!result?.success) throw new Error(result?.error || 'Échec enregistrement PDF')
-      showToast('success', `${exportRows.length} ligne(s) exportée(s) en PDF`)
+      const tvaTemplate = tvaDocs ? buildTvaSalesWorksheet(visibleRows.map(({ index }) => tvaDocs[index]).filter(Boolean), periodBounds) : null
+      const ws = tvaTemplate?.ws ?? XLSX.utils.json_to_sheet(exportRows, { header: columns })
+      if (!tvaTemplate) { const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1'); for (let c = range.s.c; c <= range.e.c; c++) { const cell = XLSX.utils.encode_cell({ r: 0, c }); if (ws[cell]) ws[cell].s = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFD600' } } } } }
+      const wb = XLSX.utils.book_new()
+      const sheetName = title.replace(/[:\\/?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || 'Export'
+      XLSX.utils.book_append_sheet(wb, ws, sheetName)
+      const bytes = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
+      if (api.exportsSaveExcel) { const result = await api.exportsSaveExcel(bytes, fileName); if (result?.canceled) return; if (!result?.success) throw new Error(result?.error || 'Échec enregistrement Excel') } else XLSX.writeFile(wb, fileName)
+      showToast('success', tvaTemplate ? `État TVA exporté · ${tvaTemplate.documentCount} document(s)` : `${exportRows.length} ligne(s) exportée(s)`)
     } catch (error) {
-      showToast('error', `Export PDF: ${error instanceof Error ? error.message : 'échec'}`)
+      showToast('error', `Export Excel: ${error instanceof Error ? error.message : 'échec'}`)
     } finally {
       setExporting(false)
     }
@@ -259,8 +283,8 @@ function PdfPreviewModal({ rows: initialRows, columns, title: initialTitle, file
             <button onClick={() => handlePrint()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
               <Printer size={13} /> Imprimer
             </button>
-            <button onClick={() => void exportToPdf()} disabled={exporting} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white rounded-lg text-xs font-bold">
-              <FileDown size={13} /> {exporting ? 'Export…' : 'Télécharger PDF'}
+            <button onClick={() => void exportToExcel()} disabled={exporting} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold">
+              <Download size={13} /> {exporting ? 'Export…' : 'Exporter Excel'}
             </button>
             <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
           </div>
@@ -358,9 +382,9 @@ export default function DocumentsTab() {
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [pdfModal, setPdfModal] = useState<{
+  const [excelModal, setExcelModal] = useState<{
     rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean
-    totalColumns?: string[]; totalLabelColumn?: string
+    totalColumns?: string[]; totalLabelColumn?: string; tvaDocs?: TvaExportDoc[]
   } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<DocRow | null>(null)
   const [printInvoiceDoc, setPrintInvoiceDoc] = useState<Document | null>(null)
@@ -449,23 +473,6 @@ export default function DocumentsTab() {
     }
   }
 
-  const exportFullInvoicesPdf = async (documents: DocRow[], fileName: string, label: string) => {
-    if (!documents.length) {
-      showToast('error', `Aucun document ${label.toLowerCase()} à exporter`)
-      return
-    }
-    try {
-      const markups: string[] = []
-      for (const doc of documents) markups.push(await loadFullInvoiceMarkup(doc))
-      const result = await api.reportsSavePdf(wrapPrintHtml(markups.join(''), 'A4'), fileName)
-      if (result?.canceled) return
-      if (!result?.success) throw new Error(result?.error || 'Échec enregistrement PDF')
-      showToast('success', `${documents.length} ${label.toLowerCase()} exporté(s) en PDF`)
-    } catch (error) {
-      showToast('error', `Export PDF: ${error instanceof Error ? error.message : 'échec'}`)
-    }
-  }
-
   const printDoc = (d: DocRow) => {
     if (d._source === 'ff' && ACHAT_PRINT_TYPES.has(d.type_document)) {
       setPrintAchatId(d.id)
@@ -509,8 +516,14 @@ export default function DocumentsTab() {
   // ── Export Format A — Bilan Factures Achat ──
   const exportAchats = () => {
     const achats = tabFiltered.filter(d => d.type_document === 'FACTURE_ACHAT' || d.type_document === 'FACTURE_ACHAT_BL')
+    const rows = achats.map(f => ({
+      'N° FACTURE': f.numero, 'DATE DE FACTURE': format(new Date(f.created_at), 'dd/MM/yyyy'), 'SOCIETE': f.fournisseur_nom ?? '', 'EXO': f.exo ?? null,
+      'HT': +(f.total_ht ?? 0).toFixed(3), 'TVA': +(f.total_tva ?? 0).toFixed(3), 'TTC': +(f.total_ttc ?? 0).toFixed(3), 'TIMBRE': +(f.timbre ?? 1).toFixed(3), 'TOT GENERAL': +((f.total_ttc ?? 0) + (f.timbre ?? 1)).toFixed(3),
+      'HT 7%': f.ht_7 != null ? +f.ht_7.toFixed(3) : null, 'TVA 7%': f.tva_7 != null ? +f.tva_7.toFixed(3) : null, 'HT 19%': f.ht_19 != null ? +f.ht_19.toFixed(3) : null, 'TVA 19%': f.tva_19 != null ? +f.tva_19.toFixed(3) : null,
+      'TOTAL REMISE': f.total_remise != null ? +f.total_remise.toFixed(3) : null, __exportDate: f.created_at,
+    }))
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
-    void exportFullInvoicesPdf(achats, `FACTURES_ACHAT_${periode.replace('/', '_')}.pdf`, 'facture(s) achat')
+    setExcelModal({ rows, columns: ['N° FACTURE','DATE DE FACTURE','SOCIETE','EXO','HT','TVA','TTC','TIMBRE','TOT GENERAL','HT 7%','TVA 7%','HT 19%','TVA 19%','TOTAL REMISE'], title: `Bilan Factures Achat ${periode}`, fileName: `FACTURES_ACHAT_${periode.replace('/', '_')}.xlsx`, isAchats: true, totalColumns: ['HT','TVA','TTC','TIMBRE','TOT GENERAL','HT 7%','TVA 7%','HT 19%','TVA 19%','TOTAL REMISE'], totalLabelColumn: 'N° FACTURE' })
   }
 
   // ── Export Format B — État TVA Vente (accountant invoice-block template) ──
@@ -518,11 +531,14 @@ export default function DocumentsTab() {
     const exportFilters: Record<string, unknown> = {}
     if (dateFrom) exportFilters.dateFrom = dateFrom
     if (dateTo) exportFilters.dateTo = dateTo
-    const result = await loadData('Préparation factures vente', () => api.documentsListAll(exportFilters) as Promise<DocRow[]>)
+    const result = await loadData('Préparation état TVA vente', () => api.documentsExportSalesTva(exportFilters) as Promise<TvaExportDoc[]>)
     if (!result) return
-    const ventes = result.filter(d => d._source !== 'ff' && (d.type_document === 'FACTURE_VENTE' || d.type_document === 'FACTURE_JOURNALIERE_F'))
+    const rows = result.map(f => ({
+      'DOCUMENT': f.numero, 'TYPE': f.type_document === 'FACTURE_JOURNALIERE_F' ? 'Facture journalière' : 'Facture vente', 'CLIENT': f.client_nom ?? '', 'DATE': format(new Date(f.created_at), 'dd/MM/yyyy'), 'EXO': f.exo ? 'Oui' : '',
+      'TVA': +(f.total_tva ?? 0).toFixed(3), 'BASE': +(f.total_ht ?? 0).toFixed(3), 'TOTAL TVA': +(f.total_tva ?? 0).toFixed(3), 'TOTAL HT': +(f.total_ht ?? 0).toFixed(3), 'TOTAL TTC': +((f.total_ttc ?? 0) + (f.timbre ?? 0)).toFixed(3), __exportDate: f.created_at,
+    }))
     const periode = dateFrom ? dateFrom.slice(0, 7).replace('-', '/') : format(new Date(), 'MM/yyyy')
-    await exportFullInvoicesPdf(ventes, `FACTURES_VENTE_${periode.replace('/', '_')}.pdf`, 'facture(s) vente')
+    setExcelModal({ rows, columns: ['DOCUMENT','TYPE','CLIENT','DATE','EXO','TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'], title: `État TVA Vente ${periode}`, fileName: `ETAT_TVA_VENTE_${periode.replace('/', '_')}.xlsx`, totalColumns: ['TVA','BASE','TOTAL TVA','TOTAL HT','TOTAL TTC'], totalLabelColumn: 'DOCUMENT', tvaDocs: result })
   }
 
   const { printRef: printTableRef, handlePrint: handlePrintTable } = usePrint('Documents')
@@ -537,10 +553,10 @@ export default function DocumentsTab() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
           <button onClick={exportAchats} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold">
-            <FileDown size={13} /> PDF Achats
+            <Download size={13} /> Export Achats
           </button>
           <button onClick={exportVentes} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold">
-            <FileDown size={13} /> PDF Ventes
+            <Download size={13} /> Export Ventes
           </button>
           <button onClick={() => handlePrintTable()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
             <Printer size={13} /> Imprimer
@@ -683,16 +699,17 @@ export default function DocumentsTab() {
         </div>
       )}
 
-      {pdfModal && (
-        <PdfPreviewModal
-          rows={pdfModal.rows}
-          columns={pdfModal.columns}
-          title={pdfModal.title}
-          fileName={pdfModal.fileName}
-          isAchats={pdfModal.isAchats}
-          totalColumns={pdfModal.totalColumns}
-          totalLabelColumn={pdfModal.totalLabelColumn}
-          onClose={() => setPdfModal(null)}
+      {excelModal && (
+        <ExcelPreviewModal
+          rows={excelModal.rows}
+          columns={excelModal.columns}
+          title={excelModal.title}
+          fileName={excelModal.fileName}
+          isAchats={excelModal.isAchats}
+          totalColumns={excelModal.totalColumns}
+          totalLabelColumn={excelModal.totalLabelColumn}
+          tvaDocs={excelModal.tvaDocs}
+          onClose={() => setExcelModal(null)}
         />
       )}
 

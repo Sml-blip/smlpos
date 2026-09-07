@@ -1939,7 +1939,7 @@ function setupIpcHandlers() {
   ipcMain.handle('ventes:create', (_e, vente, lignes) => {
     const normalizedVente = normalizeMoneyFields({
       client_id: null, client_adresse: null, client_matricule: null, type_vente: 'TICKET', a_facture: 0,
-      fidelite_utilisee: 0, fidelite_gagnee: 0, avance_dossier_id: null, avance_utilisee: 0,
+      fidelite_utilisee: 0, fidelite_gagnee: 0, avance_dossier_id: null, avance_utilisee: 0, note_vente: null,
       ...vente,
     }, ['sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue', 'fidelite_utilisee', 'fidelite_gagnee', 'avance_utilisee'])
     const normalizedLignes = (lignes as Record<string, unknown>[]).map(ligne => normalizeVenteLine({ numero_serie: null, ...ligne }))
@@ -1996,10 +1996,10 @@ function setupIpcHandlers() {
     normalizedVente.fidelite_gagnee = loyaltyEarned
     const insertVente = db.prepare(`
       INSERT INTO ventes (id, numero, shift_id, operateur_nom, client_id, client_nom, client_tel, client_adresse, client_matricule,
-        sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, a_facture,
+        sous_total, total_remises, total_ttc, mode_paiement, montant_recu, monnaie_rendue, type, type_vente, note_vente, a_facture,
         fidelite_utilisee, fidelite_gagnee, avance_dossier_id, avance_utilisee, created_at)
       VALUES (@id, @numero, @shift_id, @operateur_nom, @client_id, @client_nom, @client_tel, @client_adresse, @client_matricule,
-        @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @a_facture,
+        @sous_total, @total_remises, @total_ttc, @mode_paiement, @montant_recu, @monnaie_rendue, @type, @type_vente, @note_vente, @a_facture,
         @fidelite_utilisee, @fidelite_gagnee, @avance_dossier_id, @avance_utilisee, @created_at)
     `)
     const insertLigne = db.prepare(`

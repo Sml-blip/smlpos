@@ -61,6 +61,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const [loyaltyMaxUsePct, setLoyaltyMaxUsePct] = useState(100)
   const [productAdvances, setProductAdvances] = useState<ProductAdvanceRow[]>([])
   const [selectedAdvanceDossier, setSelectedAdvanceDossier] = useState('')
+  const [saleNoteFlags, setSaleNoteFlags] = useState({ gratuit: false, endommage: false })
 
   const montantRecuNum = round3(parseFloat(montantRecu.replace(',', '.')) || 0)
   const cleanTotal = round3(total)
@@ -207,6 +208,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         fidelite_gagnee: typeVente === 'DEVIS' ? 0 : loyaltyEarnPreview,
         avance_dossier_id: typeVente === 'DEVIS' ? undefined : selectedAdvance?.dossierId,
         avance_utilisee: typeVente === 'DEVIS' ? 0 : advanceUsed,
+        note_vente: [saleNoteFlags.gratuit ? 'GRATUIT' : '', saleNoteFlags.endommage ? 'ENDOMMAGÉ' : ''].filter(Boolean).join(' · ') || undefined,
         created_at: now,
       }
 
@@ -451,6 +453,21 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
               </div>
             )}
           </div>}
+
+          {typeVente !== 'DEVIS' && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <div className="text-sm font-bold text-amber-900">Note de vente <span className="font-normal text-amber-700">(optionnel)</span></div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-900">
+                  <input type="checkbox" checked={saleNoteFlags.gratuit} onChange={event => setSaleNoteFlags(previous => ({ ...previous, gratuit: event.target.checked }))} /> Gratuit
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-900">
+                  <input type="checkbox" checked={saleNoteFlags.endommage} onChange={event => setSaleNoteFlags(previous => ({ ...previous, endommage: event.target.checked }))} /> Endommagé
+                </label>
+              </div>
+              <p className="mt-2 text-[10px] text-amber-800">Cette note est enregistrée avec la vente et ne modifie jamais le total.</p>
+            </div>
+          )}
 
           {/* Payment mode */}
           {typeVente !== 'DEVIS' && <div className="mb-5">

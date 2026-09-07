@@ -183,6 +183,7 @@ export function initDatabase() {
       montant_recu     REAL,
       monnaie_rendue   REAL DEFAULT 0,
       type             TEXT DEFAULT 'VENTE',
+      note_vente       TEXT,
       a_facture        INTEGER DEFAULT 0,
       created_at       TEXT DEFAULT (datetime('now'))
     );
@@ -801,6 +802,7 @@ export function initDatabase() {
   // untouched; these fields only identify the part already collected earlier.
   try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_dossier_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_utilisee REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ventes ADD COLUMN note_vente TEXT`) } catch { /* already exists */ }
 
   // Repair historical cancellations created before serial restoration existed.
   // Cancelled sales/invoices must never keep their serial numbers marked VENDU.

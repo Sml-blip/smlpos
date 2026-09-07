@@ -131,6 +131,7 @@ export interface Vente {
   monnaie_rendue?: number
   type: 'VENTE' | 'REPARATION'
   type_vente?: 'TICKET' | 'FACTURE' | 'BL_VENTE' | 'DEVIS'
+  note_vente?: string | null
   statut?: 'ACTIVE' | 'ANNULEE'
   annule_par?: string
   annule_at?: string
