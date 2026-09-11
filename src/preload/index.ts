@@ -88,6 +88,7 @@ const api = {
   ventesList: (filters?: unknown) => ipcRenderer.invoke('ventes:list', filters),
   ventesGetLignes: (venteId: string) => ipcRenderer.invoke('ventes:getLignes', venteId),
   ventesGetLastNumber: (prefix: string) => ipcRenderer.invoke('ventes:getLastNumber', prefix),
+  ventesListFreeReasons: () => ipcRenderer.invoke('ventes:listFreeReasons'),
 
   // Factures clients
   facturesClientsList: (filters?: unknown) => ipcRenderer.invoke('facturesClients:list', filters),

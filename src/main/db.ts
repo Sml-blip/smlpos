@@ -308,6 +308,7 @@ export function initDatabase() {
       type             TEXT NOT NULL CHECK(type IN ('AJOUT','RETRAIT')),
       montant          REAL NOT NULL,
       motif            TEXT NOT NULL,
+      caisse_source    TEXT DEFAULT 'SANS_TRACE',
       operateur        TEXT,
       created_at       TEXT DEFAULT (datetime('now'))
     );
@@ -803,6 +804,7 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_dossier_id TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE ventes ADD COLUMN avance_utilisee REAL DEFAULT 0`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE ventes ADD COLUMN note_vente TEXT`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE ajustements_fournisseurs ADD COLUMN caisse_source TEXT DEFAULT 'SANS_TRACE'`) } catch { /* already exists */ }
 
   // Repair historical cancellations created before serial restoration existed.
   // Cancelled sales/invoices must never keep their serial numbers marked VENDU.

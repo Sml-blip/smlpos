@@ -62,6 +62,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const [productAdvances, setProductAdvances] = useState<ProductAdvanceRow[]>([])
   const [selectedAdvanceDossier, setSelectedAdvanceDossier] = useState('')
   const [saleNoteFlags, setSaleNoteFlags] = useState({ gratuit: false, endommage: false })
+  const [saleReason, setSaleReason] = useState('')
+  const [reasonSuggestions, setReasonSuggestions] = useState<string[]>([])
 
   const montantRecuNum = round3(parseFloat(montantRecu.replace(',', '.')) || 0)
   const cleanTotal = round3(total)
@@ -89,6 +91,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const loyaltyEarnPreview = loyaltyClient && payableTotal >= loyaltyMinPurchase ? round3(payableTotal * loyaltyGainPct / 100) : 0
   const monnaieRendue = mode === 'ESPECES' ? round3(Math.max(0, montantRecuNum - cashDue)) : 0
   const hasItemsF = items.some(i => i.type_produit === 'F' && !i.is_service)
+  const hasFreeItemDiscount = items.some(item => Number(item.remise_pct) >= 99.999)
+  const needsSaleReason = saleNoteFlags.gratuit || hasFreeItemDiscount
 
   useEffect(() => {
     api.settingsGetAll().then(settings => {
@@ -97,6 +101,11 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
       setLoyaltyMaxUsePct(Math.min(100, Math.max(0, Number(settings.fidelite_max_utilisation_pct) || 0)))
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!needsSaleReason || !api.ventesListFreeReasons) return
+    api.ventesListFreeReasons().then(rows => setReasonSuggestions((rows as string[]).filter(Boolean))).catch(() => {})
+  }, [needsSaleReason])
 
   useEffect(() => {
     if (!clientForm.clientId) {
@@ -167,6 +176,10 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   ]
 
   const handleConfirm = async () => {
+    if (needsSaleReason && !saleReason.trim()) {
+      setErrorMsg('Un motif est obligatoire pour un produit gratuit ou une remise de 100%.')
+      return
+    }
     if (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < cashDue) return
     if (advanceExceedsTotal) {
       setErrorMsg('Le total de la vente est inférieur aux avances déjà versées. Retirez la remise ou corrigez le panier.')
@@ -208,7 +221,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
         fidelite_gagnee: typeVente === 'DEVIS' ? 0 : loyaltyEarnPreview,
         avance_dossier_id: typeVente === 'DEVIS' ? undefined : selectedAdvance?.dossierId,
         avance_utilisee: typeVente === 'DEVIS' ? 0 : advanceUsed,
-        note_vente: [saleNoteFlags.gratuit ? 'GRATUIT' : '', saleNoteFlags.endommage ? 'ENDOMMAGÉ' : ''].filter(Boolean).join(' · ') || undefined,
+        note_vente: [saleNoteFlags.gratuit ? 'GRATUIT' : '', saleNoteFlags.endommage ? 'ENDOMMAGÉ' : '', hasFreeItemDiscount ? 'REMISE 100%' : '', needsSaleReason ? `Motif: ${saleReason.trim()}` : ''].filter(Boolean).join(' · ') || undefined,
         created_at: now,
       }
 
@@ -466,6 +479,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 </label>
               </div>
               <p className="mt-2 text-[10px] text-amber-800">Cette note est enregistrée avec la vente et ne modifie jamais le total.</p>
+              {needsSaleReason && <div className="mt-3 border-t border-amber-200 pt-3"><label className="mb-1 block text-xs font-bold text-amber-900">Motif obligatoire *</label><input list="smlpos-sale-reasons" value={saleReason} onChange={event => setSaleReason(event.target.value)} placeholder="Pourquoi ce produit est gratuit / remisé à 100% ?" className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs outline-none" autoFocus /><datalist id="smlpos-sale-reasons">{reasonSuggestions.map(reason => <option key={reason} value={reason} />)}</datalist>{reasonSuggestions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{reasonSuggestions.slice(0, 5).map(reason => <button type="button" key={reason} onClick={() => setSaleReason(reason)} className="rounded-full border border-amber-200 bg-white px-2 py-1 text-[10px] text-amber-800 hover:bg-amber-100">{reason}</button>)}</div>}</div>}
             </div>
           )}
 
