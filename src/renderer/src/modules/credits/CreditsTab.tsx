@@ -5,12 +5,13 @@ import { useAppStore } from '../../store/appStore'
 import {
   Users, X, Search, RefreshCw, CreditCard, UserPlus,
   ArrowUpCircle, ArrowDownCircle, DollarSign, Clock, User,
-  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus
+  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus, Edit2
 } from 'lucide-react'
 import type { Organisation, Produit } from '../../lib/types'
 import { runAction, loadData } from '../../lib/apiCall'
 import { saveBalanceReport } from '../../lib/reportPdf'
 import { installmentNote, money3, parseInstallmentPlan, upcomingInstallments } from '../../lib/creditInstallments'
+import { printCreditMovementReceipt } from '../../lib/clientPaymentReceipt'
 
 const api = window.api
 
@@ -47,10 +48,12 @@ export default function CreditsTab() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [showNewClient, setShowNewClient] = useState(false)
   const [showAddTranche, setShowAddTranche] = useState<'CREDIT' | 'PAIEMENT' | null>(null)
+  const [editingMovement, setEditingMovement] = useState<CreditLigne | null>(null)
   const [showAddOrg, setShowAddOrg] = useState(false)
   const [assignOrg, setAssignOrg] = useState<OrganisationSummary | null>(null)
   const [filterOrgId, setFilterOrgId] = useState<string | null>(null)
   const [unassigning, setUnassigning] = useState(false)
+  const [clientSort, setClientSort] = useState<'DESC' | 'ASC'>('DESC')
 
   // Use a ref to avoid including `selected` in load deps (prevents infinite reload loop)
   const selectedIdRef = useRef<string | null>(null)
@@ -120,6 +123,7 @@ export default function CreditsTab() {
     ? clients.filter(c => c.organisation_id === filterOrgId)
     : clients.filter(c => !c.organisation_id))
     .filter(c => !search || `${c.nom} ${c.telephone ?? ''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => clientSort === 'DESC' ? b.solde_credit - a.solde_credit : a.solde_credit - b.solde_credit)
 
   // Compute running balances for history (oldest → newest, then reverse for display)
   const historyWithBalance: CreditWithBalance[] = (() => {
@@ -238,6 +242,14 @@ export default function CreditsTab() {
               <UserPlus size={12} /> Nouveau
             </button>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <span className="text-[10px] font-semibold text-text-muted">Trier par montant</span>
+          <select value={clientSort} onChange={event => setClientSort(event.target.value as 'DESC' | 'ASC')} className="rounded-lg border border-border bg-white px-2 py-1 text-[11px] font-semibold outline-none">
+            <option value="DESC">Plus élevé → plus faible</option>
+            <option value="ASC">Plus faible → plus élevé</option>
+          </select>
         </div>
 
         {/* KPIs */}
@@ -495,6 +507,7 @@ export default function CreditsTab() {
                         <th className="text-right px-3 py-2.5 font-semibold text-text-secondary whitespace-nowrap">
                           <Hash size={10} className="inline mr-1" />Solde courant
                         </th>
+                        <th className="px-3 py-2.5 text-right font-semibold text-text-secondary">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -575,6 +588,9 @@ export default function CreditsTab() {
                                 <CheckCircle size={10} className="text-green-500 inline ml-1" />
                               )}
                             </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <button type="button" onClick={() => setEditingMovement(row)} title="Modifier ce mouvement" className="rounded-lg p-1.5 text-text-muted hover:bg-accent-50 hover:text-accent-700"><Edit2 size={13} /></button>
+                            </td>
                           </tr>
                         )
                       })}
@@ -605,6 +621,16 @@ export default function CreditsTab() {
           currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
           onClose={() => setShowAddTranche(null)}
           onSaved={() => { setShowAddTranche(null); handleSaved() }}
+        />
+      )}
+      {editingMovement && selected && (
+        <AddTrancheModal
+          client={selected}
+          defaultType={editingMovement.type}
+          movement={editingMovement}
+          currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
+          onClose={() => setEditingMovement(null)}
+          onSaved={() => { setEditingMovement(null); handleSaved() }}
         />
       )}
       {showAddOrg && (
@@ -847,21 +873,23 @@ function NewClientModal({
 function AddTrancheModal({
   client,
   defaultType,
+  movement,
   currentShift,
   onClose,
   onSaved,
 }: {
   client: Client
   defaultType: 'CREDIT' | 'PAIEMENT'
+  movement?: CreditLigne
   currentShift: { id?: string; operateur_nom?: string } | null
   onClose: () => void
   onSaved: () => void
 }) {
-  const [type, setType] = useState<'CREDIT' | 'PAIEMENT'>(defaultType)
-  const [montant, setMontant] = useState('')
-  const [reference, setReference] = useState('')
-  const [note, setNote] = useState('')
-  const [agent, setAgent] = useState(currentShift?.operateur_nom ?? '')
+  const [type, setType] = useState<'CREDIT' | 'PAIEMENT'>(movement?.type ?? defaultType)
+  const [montant, setMontant] = useState(movement ? String(movement.montant) : '')
+  const [reference, setReference] = useState(movement?.reference ?? '')
+  const [note, setNote] = useState(cleanAccountingNote(movement?.note))
+  const [agent, setAgent] = useState(movement?.operateur ?? currentShift?.operateur_nom ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [products, setProducts] = useState<Produit[]>([])
@@ -881,9 +909,9 @@ function AddTrancheModal({
   const handleSave = async () => {
     if (montantNum <= 0) return
     setError('')
-    const label = type === 'CREDIT' ? 'Accord crédit' : 'Encaissement paiement'
+    const label = movement ? 'Modification mouvement crédit' : type === 'CREDIT' ? 'Accord crédit' : 'Encaissement paiement'
     const ok = await runAction(label, async () => {
-      await api.creditsCreate({
+      const payload = {
         id: generateId(),
         client_id: client.id,
         client_nom: client.nom,
@@ -896,10 +924,21 @@ function AddTrancheModal({
         quantite: type === 'CREDIT' && productId ? quantity : null,
         operateur: agent.trim() || 'superadmin',
         created_at: new Date().toISOString(),
-      })
+      }
+      const created = movement
+        ? await api.creditsUpdate(movement.id, { type, montant: montantNum, reference: reference.trim() || null, note: note.trim() || null, operateur: agent.trim() || 'superadmin' })
+        : await api.creditsCreate(payload)
+      if (!movement) {
+        const result = created as { before?: number; amount?: number; after?: number; organisation_nom?: string }
+        await printCreditMovementReceipt({
+          numero: `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`,
+          clientNom: client.nom, telephone: client.telephone, adresse: client.adresse, operateur: agent.trim() || 'superadmin', date: new Date().toISOString(), note: note.trim() || undefined,
+          type, before: Number(result.before ?? client.solde_credit), amount: Number(result.amount ?? montantNum), after: Number(result.after ?? newSolde), organisation: result.organisation_nom,
+        })
+      }
     }, {
       setLoading,
-      successMessage: type === 'CREDIT' ? 'Crédit enregistré' : 'Paiement enregistré',
+      successMessage: movement ? 'Mouvement modifié' : type === 'CREDIT' ? 'Crédit enregistré' : 'Paiement enregistré',
       onError: msg => setError(msg.replace(new RegExp(`^${label} : `), '')),
     })
     if (ok) onSaved()
@@ -910,7 +949,7 @@ function AddTrancheModal({
       <div className="bg-white rounded-2xl shadow-2xl w-[440px] animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
-            <h2 className="font-bold text-base">Mouvement Crédit</h2>
+            <h2 className="font-bold text-base">{movement ? 'Modifier le mouvement' : 'Mouvement Crédit'}</h2>
             <p className="text-xs text-text-muted mt-0.5">{client.nom}</p>
           </div>
           <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
@@ -958,7 +997,7 @@ function AddTrancheModal({
               </span>
             </div>
           )}
-          {type === 'CREDIT' && (
+          {type === 'CREDIT' && !movement && (
             <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
               <label className="mb-1.5 block text-xs font-semibold text-purple-800">Produit remis au client (optionnel — met à jour le stock)</label>
               <div className="grid grid-cols-[1fr_80px] gap-2">
@@ -1055,7 +1094,7 @@ function AddTrancheModal({
               type === 'CREDIT' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
             )}
           >
-            {loading ? 'Enregistrement...' : (
+            {loading ? 'Enregistrement...' : movement ? <><Edit2 size={14} /> Enregistrer la modification</> : (
               type === 'CREDIT'
                 ? <><ArrowUpCircle size={14} /> Accorder {formatPrice(montantNum)}</>
                 : <><ArrowDownCircle size={14} /> Encaisser {formatPrice(montantNum)}</>

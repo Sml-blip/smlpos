@@ -492,6 +492,7 @@ const mockApi = {
   // Crédits clients
   creditsList: async () => [],
   creditsCreate: async (credit: unknown) => ({ ...(credit as object), success: true }),
+  creditsUpdate: async (_id: string, patch: unknown) => ({ ...(patch as object), success: true }),
   avancesClientsCreate: async (advance: unknown) => ({ ...(advance as object), success: true }),
   avancesClientsList: async () => [],
 

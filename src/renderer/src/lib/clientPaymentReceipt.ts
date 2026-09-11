@@ -32,3 +32,10 @@ export const printCreditReceipt = (d: Common & { before: number; paid: number; a
   { label: 'Montant payé', value: money(d.paid) },
   { label: 'Crédit restant après paiement', value: money(d.after), strong: true },
 ])
+
+export const printCreditMovementReceipt = (d: Common & { type: 'CREDIT' | 'PAIEMENT'; before: number; amount: number; after: number; organisation?: string }) => printReceipt(
+  d.type === 'CREDIT' ? 'REÇU DE MOUVEMENT CRÉDIT' : 'REÇU DE PAIEMENT CRÉDIT', d,
+  d.type === 'CREDIT'
+    ? [{ label: 'Organisation', value: d.organisation || 'Client particulier' }, { label: 'Solde avant crédit', value: money(d.before) }, { label: 'Crédit accordé', value: money(d.amount) }, { label: 'Nouveau solde crédit', value: money(d.after), strong: true }]
+    : [{ label: 'Organisation', value: d.organisation || 'Client particulier' }, { label: 'Crédit avant paiement', value: money(d.before) }, { label: 'Montant payé', value: money(d.amount) }, { label: 'Crédit restant après paiement', value: money(d.after), strong: true }],
+)

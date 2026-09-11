@@ -31,7 +31,7 @@ import {
 } from './factureAchatTypes'
 import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
-  AlertTriangle, X, ChevronRight, DollarSign, Package,
+  AlertTriangle, X, ChevronRight, ChevronDown, DollarSign, Package,
   RefreshCw, Edit2, PackageCheck, Inbox, InboxIcon, Printer,
   Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle, ScanLine
 } from 'lucide-react'
@@ -69,6 +69,7 @@ export default function AchatsTab() {
   const [showPaiementModal, setShowPaiementModal] = useState<FactureFournisseur | null>(null)
   const [balanceTarget, setBalanceTarget] = useState<{ fournisseur: Fournisseur; type: 'AJOUT' | 'RETRAIT' } | null>(null)
   const [factureFilter, setFactureFilter] = useState<'tous' | 'arrivees' | 'en_attente'>('tous')
+  const [alertsOpen, setAlertsOpen] = useState(false)
 
   const loadFournisseurs = useCallback(async () => {
     const data = await loadData('Chargement fournisseurs', async () => {
@@ -141,7 +142,15 @@ export default function AchatsTab() {
 
       {/* Alerts */}
       {(facturesEnRetard.length > 0 || facturesUrgentes.length > 0 || blFacturesMissing.length > 0) && (
-        <div className="px-4 py-2 bg-white border-b border-border flex-shrink-0 space-y-1.5">
+        <div className="bg-white border-b border-border flex-shrink-0">
+          <button type="button" onClick={() => setAlertsOpen(open => !open)} className="flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted transition-colors">
+            <AlertTriangle size={14} className="text-orange-600" />
+            <span className="text-xs font-bold text-text-primary">Alertes achats</span>
+            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-800">{facturesEnRetard.length + facturesUrgentes.length + blFacturesMissing.length}</span>
+            <span className="ml-auto text-[11px] text-text-muted">{alertsOpen ? 'Réduire' : 'Voir les détails'}</span>
+            <ChevronDown size={14} className={cn('text-text-muted transition-transform', alertsOpen && 'rotate-180')} />
+          </button>
+          {alertsOpen && <div className="max-h-56 space-y-1.5 overflow-y-auto px-4 pb-2">
           {facturesEnRetard.map(f => (
             <div key={f.id} className="flex items-center gap-2 text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               <AlertTriangle size={12} className="flex-shrink-0" />
@@ -160,6 +169,7 @@ export default function AchatsTab() {
               <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — BL enregistré, <strong>facture fournisseur manquante</strong></span>
             </div>
           ))}
+          </div>}
         </div>
       )}
 

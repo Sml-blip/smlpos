@@ -174,6 +174,7 @@ const api = {
   // Crédits Clients
   creditsList: (clientId?: string) => ipcRenderer.invoke('credits:list', clientId),
   creditsCreate: (credit: unknown) => ipcRenderer.invoke('credits:create', credit),
+  creditsUpdate: (id: string, patch: unknown) => ipcRenderer.invoke('credits:update', id, patch),
   avancesClientsCreate: (advance: unknown) => ipcRenderer.invoke('avancesClients:create', advance),
   avancesClientsList: (clientId?: string) => ipcRenderer.invoke('avancesClients:list', clientId),
 

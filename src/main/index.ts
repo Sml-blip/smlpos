@@ -3734,6 +3734,50 @@ function setupIpcHandlers() {
     return { success: true, before, amount: montant, after, organisation_nom: organisation?.nom ?? null }
   })
 
+  // Changes are applied as a financial delta so client balances, the cash shift,
+  // organisation totals, and inventory remain consistent with the edited movement.
+  ipcMain.handle('credits:update', (_e, id: string, patch: Record<string, unknown>) => {
+    const previous = db.prepare(`SELECT * FROM credits_clients WHERE id=?`).get(id) as Record<string, unknown> | undefined
+    if (!previous) throw new Error('Mouvement crédit introuvable')
+    const nextType = String(patch.type ?? previous.type) === 'PAIEMENT' ? 'PAIEMENT' : 'CREDIT'
+    const nextAmount = money3(patch.montant ?? previous.montant)
+    if (!Number.isFinite(nextAmount) || nextAmount <= 0) throw new Error('Le montant doit être supérieur à zéro')
+    const client = db.prepare(`SELECT * FROM clients WHERE id=?`).get(previous.client_id) as Record<string, unknown> | undefined
+    if (!client) throw new Error('Client introuvable')
+    const oldAmount = money3(previous.montant)
+    const impact = (type: string, amount: number) => type === 'CREDIT' ? amount : -amount
+    const newBalance = money3(Number(client.solde_credit || 0) - impact(String(previous.type), oldAmount) + impact(nextType, nextAmount))
+    if (newBalance < -0.0001) throw new Error('Cette modification rendrait le solde crédit négatif')
+    const accountMatch = String(previous.note ?? '').match(/\[SMLPOS_ACCOUNTING\](\{[^\r\n]*\})/)
+    let productMeta: { produitId?: string; quantite?: number } | null = null
+    try { productMeta = accountMatch ? JSON.parse(accountMatch[1]) as { produitId?: string; quantite?: number } : null } catch { productMeta = null }
+    const previousProductCredit = String(previous.type) === 'CREDIT' && Boolean(productMeta?.produitId)
+    db.transaction(() => {
+      if (previousProductCredit && nextType !== 'CREDIT') {
+        db.prepare(`UPDATE produits SET stock_actuel=stock_actuel+?, updated_at=? WHERE id=?`).run(Math.max(1, Number(productMeta?.quantite) || 1), new Date().toISOString(), productMeta?.produitId)
+      }
+      db.prepare(`UPDATE credits_clients SET type=?, montant=?, reference=?, note=?, operateur=? WHERE id=?`).run(
+        nextType, nextAmount, patch.reference ?? previous.reference ?? null,
+        [String(patch.note ?? '').trim(), accountMatch?.[0] ?? ''].filter(Boolean).join('\n') || null,
+        patch.operateur ?? previous.operateur ?? 'superadmin', id,
+      )
+      db.prepare(`UPDATE clients SET solde_credit=? WHERE id=?`).run(Math.max(0, newBalance), previous.client_id)
+      if (previous.shift_id) {
+        const cashDelta = (nextType === 'PAIEMENT' ? nextAmount : 0) - (String(previous.type) === 'PAIEMENT' ? oldAmount : 0)
+        if (cashDelta) db.prepare(`UPDATE shifts SET total_credits_recus=MAX(0,total_credits_recus+?) WHERE id=?`).run(cashDelta, previous.shift_id)
+      }
+      const organisationId = String(client.organisation_id ?? '').trim()
+      if (organisationId) db.prepare(`UPDATE organisations SET credit_total=COALESCE((SELECT SUM(CASE WHEN solde_credit>0 THEN solde_credit ELSE 0 END) FROM clients WHERE actif=1 AND (organisation_id=organisations.id OR lower(trim(organisation_id))=lower(trim(organisations.nom)))),0) WHERE id=? OR lower(trim(nom))=lower(trim(?))`).run(organisationId, organisationId)
+    })()
+    const row = db.prepare(`SELECT * FROM credits_clients WHERE id=?`).get(id) as Record<string, unknown>
+    enqueueSync('credits_clients', 'UPDATE', row)
+    const clientSnapshot = db.prepare(`SELECT * FROM clients WHERE id=?`).get(previous.client_id) as Record<string, unknown>
+    enqueueSync('clients', 'UPDATE', clientSnapshot)
+    if (previousProductCredit && nextType !== 'CREDIT' && productMeta?.produitId) enqueueProductSnapshot(productMeta.produitId)
+    addActivityLog({ shift_id: previous.shift_id as string, operateur: String(patch.operateur ?? previous.operateur ?? 'superadmin'), action: 'CLIENT_CREDIT_UPDATED', montant: nextAmount, details: { id, previous_type: previous.type, next_type: nextType, previous_amount: oldAmount } })
+    return { success: true, before: Math.max(0, newBalance - impact(nextType, nextAmount)), amount: nextAmount, after: Math.max(0, newBalance) }
+  })
+
   ipcMain.handle('avancesClients:create', (_e, advance: Record<string, unknown>) => {
     const typeAvance = String(advance.type_avance ?? 'LIBRE').toUpperCase() === 'PRODUIT' ? 'PRODUIT' : 'LIBRE'
     const now = String(advance.created_at ?? new Date().toISOString())
