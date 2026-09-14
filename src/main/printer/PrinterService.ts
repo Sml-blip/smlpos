@@ -22,6 +22,7 @@ export interface PrintWindowOptions {
   color?: boolean;
   copies?: number;
   scaleFactor?: number;
+  landscape?: boolean;
   dpi?: { horizontal: number; vertical: number };
 }
 
@@ -366,6 +367,7 @@ export class PrinterService {
     pageSize?: string | ElectronPageSize | CustomPageSizeMm
   ): ElectronPageSize {
     if (!pageSize || pageSize === 'A4') return 'A4';
+    if (pageSize === 'A5') return { width: 148000, height: 210000 };
     if (typeof pageSize === 'object') {
       if ('widthMm' in pageSize && 'heightMm' in pageSize) {
         return {
@@ -460,7 +462,9 @@ export class PrinterService {
           printBackground: options.printBackground !== false,
           color: options.color !== false,
           copies: typeof options.copies === 'number' ? options.copies : 1,
-          pageSize: this.resolveElectronPageSize(options.pageSize),
+          pageSize: options.pageSize === 'A5' && options.landscape
+            ? { width: 210000, height: 148000 }
+            : this.resolveElectronPageSize(options.pageSize),
         };
         if (typeof options.scaleFactor === 'number') {
           printOpts.scaleFactor = options.scaleFactor;

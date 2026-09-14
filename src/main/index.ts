@@ -4986,6 +4986,7 @@ function setupIpcHandlers() {
       copies: typeof options.copies === 'number' ? options.copies : 1,
       pageSize: PrinterService.resolveElectronPageSize(pageSize),
       scaleFactor: typeof options.scaleFactor === 'number' ? options.scaleFactor : undefined,
+      landscape: options.landscape === true,
       dpi: options.dpi as { horizontal: number; vertical: number } | undefined,
     })
   })

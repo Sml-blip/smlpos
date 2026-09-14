@@ -495,6 +495,7 @@ export default function HistoriqueTab() {
               onConvert={(v) => void handleConvertVente(v)}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
             />
+            <TransactionsHistoryTable logs={activityLogs} />
           </>
         )}
         {subTab === 'reparations' && (
@@ -679,6 +680,13 @@ export default function HistoriqueTab() {
       )}
     </div>
   )
+}
+
+function TransactionsHistoryTable({ logs }: { logs: Array<{ id: string; operateur?: string; action: string; details?: unknown; montant?: number; created_at: string }> }) {
+  return <section className="mx-4 mb-5 rounded-xl border border-border bg-white overflow-hidden">
+    <div className="flex items-center justify-between border-b border-border px-4 py-3"><div><h3 className="flex items-center gap-2 text-sm font-bold"><ScrollText size={15}/>Toutes les transactions</h3><p className="mt-0.5 text-xs text-text-muted">Ventes, avances, crédits, caisse, fournisseurs et autres mouvements — avec leur libellé.</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs font-bold">{logs.length}</span></div>
+    {logs.length === 0 ? <div className="px-4 py-7 text-center text-sm text-text-muted">Aucune transaction sur cette période</div> : <div className="max-h-80 overflow-y-auto"><table className="w-full text-sm"><thead className="sticky top-0 bg-muted text-xs text-text-secondary"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Transaction</th><th className="px-4 py-2 text-left">Opérateur</th><th className="px-4 py-2 text-right">Montant</th><th className="px-4 py-2 text-left">Détails</th></tr></thead><tbody>{logs.map(log=><tr key={log.id} className="border-t border-border hover:bg-muted/50"><td className="whitespace-nowrap px-4 py-2.5 text-xs text-text-secondary">{formatDate(log.created_at)}</td><td className="px-4 py-2.5"><span className="rounded-full bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-800">{ACTIVITY_LABELS[log.action] ?? log.action}</span></td><td className="px-4 py-2.5 text-xs">{log.operateur || '—'}</td><td className="px-4 py-2.5 text-right font-price text-xs">{log.montant != null ? formatPrice(log.montant) : '—'}</td><td className="max-w-xs truncate px-4 py-2.5 text-xs text-text-secondary" title={formatActivityDetails(log.details)}>{formatActivityDetails(log.details) || '—'}</td></tr>)}</tbody></table></div>}
+  </section>
 }
 
 // ─── Ventes Table ─────────────────────────────────────────────────────────────
