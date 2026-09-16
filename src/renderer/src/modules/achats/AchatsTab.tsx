@@ -1444,6 +1444,7 @@ function FactureFournisseurModal({
   const [printPreview, setPrintPreview] = useState<{ doc: InvoiceDocData; lignes: InvoiceLineData[] } | null>(null)
   const [serialModalLineId, setSerialModalLineId] = useState<string | null>(null)
   const [showInvoiceScan, setShowInvoiceScan] = useState(false)
+  const [inventoryPreview, setInventoryPreview] = useState<Array<{ designation: string; quantite: number; serials: number }> | null>(null)
 
   const hasDraftContent = useMemo(
     () => lignes.some(l => l.designation.trim() || l.produit_id || l.pendingProduct) || !!fournisseurId || !!numeroFacture,
@@ -1895,7 +1896,7 @@ function FactureFournisseurModal({
         statut_paiement: 'EN_ATTENTE', montant_ht: mHT, montant_tva: tvaAmount,
         montant_ttc: totalGeneral, notes: notes || null, created_at: now,
         type: isBL ? 'FACTURE_ACHAT_BL' : 'FACTURE_ACHAT',
-        statut_reception: isBL ? 'NON_ARRIVE' : 'ARRIVE',
+        statut_reception: 'ARRIVE',
         exo: exoFlag ? (exoText || 'EXO') : null,
         timbre: timbreVal, total_remise: remise > 0 ? remise : null,
         ht_7: ht7 > 0 ? ht7 : null, tva_7: tva7 > 0 ? tva7 : null,
@@ -1916,7 +1917,9 @@ function FactureFournisseurModal({
             : null,
         }
       })
-      await api.facturesFournisseursCreate(facture, lignesData)
+      const result = await api.facturesFournisseursCreate(facture, lignesData) as { success?: boolean; inventoryUpdates?: Array<{ designation: string; quantite: number; serials: number }> }
+      if (!result?.success) throw new Error('Échec de la mise à jour de l’inventaire')
+      setInventoryPreview(result.inventoryUpdates ?? [])
     }, {
       setLoading,
       successMessage: isBL ? 'Bon de livraison enregistré' : 'Facture fournisseur enregistrée',
@@ -1925,7 +1928,6 @@ function FactureFournisseurModal({
       if (ok) {
         window.dispatchEvent(new CustomEvent('smlpos:supplier-payments-changed'))
         onSaved()
-        onClose()
       }
     } finally {
       saveInFlight.current = false
@@ -1970,7 +1972,7 @@ function FactureFournisseurModal({
         </div>
         {isBL && (
           <div className="px-6 py-2 bg-blue-50 border-b border-blue-100 text-xs text-blue-700 flex items-center gap-2">
-            <PackageCheck size={13} /> Le stock ne sera <strong>pas mis à jour</strong> avant de marquer comme reçu.
+            <PackageCheck size={13} /> À la validation, le stock et les S/N seront <strong>mis à jour immédiatement</strong>.
           </div>
         )}
         <div className="px-6 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 flex items-center gap-2">
@@ -2437,6 +2439,16 @@ function FactureFournisseurModal({
           preview={printPreview}
           onClose={() => setPrintPreview(null)}
         />
+      )}
+
+      {inventoryPreview && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl animate-slide-in">
+            <div className="bg-emerald-600 px-6 py-5 text-white"><div className="flex items-center gap-2 text-lg font-bold"><CheckCircle size={21}/>Inventaire mis à jour</div><p className="mt-1 text-sm text-emerald-50">Le document est enregistré et les quantités sont disponibles immédiatement dans le POS.</p></div>
+            <div className="max-h-72 overflow-y-auto p-5 space-y-2">{inventoryPreview.length === 0 ? <p className="py-4 text-center text-sm text-text-muted">Aucune ligne produit liée à mettre à jour.</p> : inventoryPreview.map((row, index) => <div key={`${row.designation}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5"><div className="min-w-0"><p className="truncate text-sm font-bold">{row.designation}</p><p className="text-xs text-text-muted">+{row.quantite} en stock{row.serials > 0 ? ` · ${row.serials} S/N ajouté(s)` : ''}</p></div><span className="rounded-full bg-white px-2 py-1 font-price text-sm font-bold text-emerald-800">+{row.quantite}</span></div>)}</div>
+            <div className="border-t border-border p-4"><button type="button" onClick={onClose} className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">Terminer</button></div>
+          </div>
+        </div>
       )}
 
       {showCloseDialog && (

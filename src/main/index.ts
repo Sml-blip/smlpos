@@ -2883,10 +2883,14 @@ function setupIpcHandlers() {
       exo: null, timbre: 1, total_remise: null, ht_7: null, tva_7: null, ht_19: null, tva_19: null,
       ...factureData,
       type: f.type ?? 'FACTURE_ACHAT',
-      statut_reception: f.statut_reception ?? (isBL ? 'NON_ARRIVE' : 'ARRIVE'),
-      stock_applied: f.stock_applied ?? (isBL ? 0 : 1),
+      // A submitted BL represents goods that are now physically in the shop.
+      // Draft BLs never affect stock; final BLs do, exactly like a supplier invoice.
+      // This prevents products and S/Ns being created with a misleading zero stock.
+      statut_reception: f.statut_reception ?? 'ARRIVE',
+      stock_applied: f.stock_applied ?? 1,
     }
     const affectsInventory = achatLineAffectsInventory(factureWithDefaults)
+    const inventoryUpdates: Array<{ produit_id: string; designation: string; quantite: number; serials: number }> = []
     const transaction = db.transaction(() => {
       if (draftId) {
         db.prepare(`DELETE FROM lignes_facture_fournisseur WHERE facture_id = ?`).run(draftId)
@@ -2907,6 +2911,12 @@ function setupIpcHandlers() {
             updatePrixVente.run(prixVenteApplique, now, l.produit_id)
           }
           updateStock.run(l.quantite, l.produit_id)
+          inventoryUpdates.push({
+            produit_id: String(l.produit_id),
+            designation: String(l.designation ?? ''),
+            quantite: Number(l.quantite) || 0,
+            serials: parseSerialJson(l.numeros_serie_json).length,
+          })
           if (l.numeros_serie_json) {
             addSerialNumbersToStock(l.produit_id, l.numeros_serie_json, l.quantite)
           }
@@ -2919,7 +2929,7 @@ function setupIpcHandlers() {
     enqueueSync('factures_fournisseurs', 'INSERT', factureWithDefaults)
     for (const l of lignes) enqueueSync('lignes_facture_fournisseur', 'INSERT', l)
     for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
-    return { success: true }
+    return { success: true, inventoryUpdates }
   })
 
   ipcMain.handle('facturesFournisseurs:annuler', (_e, factureId: string) => {
