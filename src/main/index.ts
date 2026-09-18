@@ -1533,15 +1533,19 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('produits:update', (_e, id, p) => {
+    const { serial_tracking_disable_confirmed: serialTrackingDisableConfirmed, ...productData } = p as Record<string, unknown>
     const normalized = {
       has_serial_number: 0, numero_serie: null,
       tva_achat_pct: 0, marge_pct: null, coef_av: null,
       cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
       source_tag: null,
-      ...p
+      ...productData
     }
-    const hasSerialHistory = !!db.prepare('SELECT 1 FROM serial_numbers WHERE produit_id = ? LIMIT 1').get(id)
-    if (hasSerialHistory) normalized.has_serial_number = 1
+    const disablingSerialTracking = Number(normalized.has_serial_number) === 0 && serialTrackingDisableConfirmed === true
+    if (disablingSerialTracking) {
+      const reserved = db.prepare(`SELECT COUNT(*) AS count FROM serial_numbers WHERE produit_id=? AND statut='RESERVE_AVANCE'`).get(id) as { count: number }
+      if (reserved.count > 0) throw new Error(`Impossible de désactiver le suivi S/N : ${reserved.count} unité(s) réservée(s) par une avance client`)
+    }
     const stmt = db.prepare(`
       UPDATE produits SET
         code_barre=@code_barre, reference=@reference, nom=@nom, description=@description, categorie=@categorie,
@@ -1554,7 +1558,15 @@ function setupIpcHandlers() {
         updated_at=@updated_at
       WHERE id=@id
     `)
-    const result = stmt.run({ id, ...normalized })
+    const result = db.transaction(() => {
+      const updated = stmt.run({ id, ...normalized })
+      if (disablingSerialTracking) {
+        // Available rows are editable inventory state, not immutable sales
+        // history. Locked VENDU/DEFECTUEUX rows remain available for audit.
+        db.prepare(`DELETE FROM serial_numbers WHERE produit_id=? AND statut='EN_STOCK'`).run(id)
+      }
+      return updated
+    })()
     addActivityLog({ action: 'PRODUCT_UPDATED', details: { id, nom: normalized.nom } })
     enqueueSync('produits', 'UPDATE', { id, ...normalized })
     return result
@@ -1815,7 +1827,8 @@ function setupIpcHandlers() {
       for (const sn of unique.values()) {
         insert.run(randomUUID(), produitId, sn, now, now)
       }
-      if (unique.size > 0) db.prepare(`UPDATE produits SET has_serial_number=1, updated_at=? WHERE id=?`).run(now, produitId)
+      db.prepare(`UPDATE produits SET has_serial_number=?, numero_serie=NULL, updated_at=? WHERE id=?`)
+        .run(unique.size > 0 ? 1 : 0, now, produitId)
     })()
     return { success: true }
   })
