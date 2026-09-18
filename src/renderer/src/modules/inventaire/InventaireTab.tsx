@@ -79,6 +79,22 @@ const emptyForm = (): ProductFormData => ({
   has_serial_number: false,
 })
 
+function normalizeSerialStatus(value: unknown): SerialNumber['statut'] {
+  const status = String(value ?? '').trim().toUpperCase().replaceAll(' ', '_')
+  if (status === 'VENDU' || status === 'DEFECTUEUX' || status === 'RESERVE_AVANCE') return status
+  return 'EN_STOCK'
+}
+
+function parseLegacyProductSerials(value: unknown): string[] {
+  const raw = String(value ?? '').trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed.map(item => String(item).trim()).filter(Boolean)
+  } catch { /* legacy plain text */ }
+  return raw.split(/[\n,;|]+/).map(item => item.trim()).filter(Boolean)
+}
+
 export default function InventaireTab() {
   const initialCache = getProduitsCache()
   const [produits, setProduits] = useState<Produit[]>(() => initialCache.data)
@@ -92,6 +108,8 @@ export default function InventaireTab() {
   const [filterType, setFilterType] = useState<'all' | 'F' | 'NF'>('all')
   const [filterLowStock, setFilterLowStock] = useState(false)
   const [filterCategorie, setFilterCategorie] = useState<string>('all')
+  const [filterTvaVente, setFilterTvaVente] = useState<string>('all')
+  const [filterTvaAchat, setFilterTvaAchat] = useState<string>('all')
   const [sortKey, setSortKey] = useState<SortKey>('nom')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showInventoryPriceSearch, setShowInventoryPriceSearch] = useState(false)
@@ -113,6 +131,7 @@ export default function InventaireTab() {
   // Per-unit serial numbers (one entry per stock unit)
   const [serialNums, setSerialNums] = useState<string[]>([])
   const [existingSerials, setExistingSerials] = useState<SerialNumber[]>([])
+  const [serialsLoading, setSerialsLoading] = useState(false)
   // New category modal
   const [showCatModal, setShowCatModal] = useState(false)
   const [newCatNom, setNewCatNom] = useState('')
@@ -190,7 +209,7 @@ export default function InventaireTab() {
   }, [debouncedSearch, produits])
 
   // Reset visible count when filters change
-  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, sortKey, sortDir])
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filterType, filterLowStock, filterCategorie, filterTvaVente, filterTvaAchat, sortKey, sortDir])
 
   // Infinite scroll — show more rows when sentinel is visible
   useEffect(() => {
@@ -230,6 +249,8 @@ export default function InventaireTab() {
       if (filterType !== 'all' && p.type !== filterType) return []
       if (filterLowStock && p.stock_actuel > p.stock_minimum) return []
       if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return []
+      if (filterTvaVente !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTvaVente)) return []
+      if (filterTvaAchat !== 'all' && Number(p.tva_achat_pct ?? 0) !== Number(filterTvaAchat)) return []
       return [p]
     }
     const baseList = debouncedSearch.length >= 2
@@ -240,6 +261,8 @@ export default function InventaireTab() {
         if (filterType !== 'all' && p.type !== filterType) return false
         if (filterLowStock && p.stock_actuel > p.stock_minimum) return false
         if (filterCategorie !== 'all' && p.categorie !== filterCategorie) return false
+        if (filterTvaVente !== 'all' && Number(p.tva_taux ?? 0) !== Number(filterTvaVente)) return false
+        if (filterTvaAchat !== 'all' && Number(p.tva_achat_pct ?? 0) !== Number(filterTvaAchat)) return false
         return true
       })
       .sort((a, b) => {
@@ -251,7 +274,7 @@ export default function InventaireTab() {
           ? va < vb ? -1 : va > vb ? 1 : 0
           : va > vb ? -1 : va < vb ? 1 : 0
       })
-  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, sortKey, sortDir])
+  }, [produits, debouncedSearch, exactBarcodeProduct, fuseIndex, filterType, filterLowStock, filterCategorie, filterTvaVente, filterTvaAchat, sortKey, sortDir])
 
   // Visible slice — virtual scroll
   const visibleRows = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
@@ -260,6 +283,16 @@ export default function InventaireTab() {
   const lowStockCount = useMemo(() => produits.filter(p => p.stock_actuel <= p.stock_minimum).length, [produits])
   const totalValeur = useMemo(() => produits.reduce((s, p) => s + p.prix_vente * p.stock_actuel, 0), [produits])
   const categories = useMemo(() => Array.from(new Set(produits.map(p => p.categorie).filter(Boolean))), [produits])
+  const tvaVenteRates = useMemo(() => Array.from(new Set(
+    [0, 7, 13, 19, ...produits
+      .map(p => Number(p.tva_taux ?? 0))
+      .filter(rate => Number.isFinite(rate))],
+  )).sort((a, b) => a - b), [produits])
+  const tvaAchatRates = useMemo(() => Array.from(new Set(
+    [0, 7, 13, 19, ...produits
+      .map(p => Number(p.tva_achat_pct ?? 0))
+      .filter(rate => Number.isFinite(rate))],
+  )).sort((a, b) => a - b), [produits])
   const inventoryPriceMatches = useMemo(() => {
     const target = parseFloat(inventoryPriceQuery.replace(',', '.'))
     if (!Number.isFinite(target) || target < 0) return []
@@ -287,6 +320,7 @@ export default function InventaireTab() {
     setFormErrors({})
     setSerialNums([])
     setExistingSerials([])
+    setSerialsLoading(false)
     setShowModal(true)
   }
 
@@ -315,20 +349,29 @@ export default function InventaireTab() {
       has_serial_number: !!(p.has_serial_number),
     })
     setFormErrors({})
-    // Load existing serial numbers for this product
-    if (p.has_serial_number) {
-      loadData('Chargement numéros de série', () => api.serialNumbersGetByProduit(p.id), { silent: true }).then(sns => {
-        if (!sns) return
-        const list = sns as SerialNumber[]
-        setExistingSerials(list)
-        const count = p.stock_actuel
-        const filled = Array.from({ length: count }, (_, i) => list[i]?.numero_serie || '')
-        setSerialNums(filled)
-      })
-    } else {
-      setExistingSerials([])
-      setSerialNums([])
-    }
+    // Always inspect the serial table. Older purchase invoices correctly stored
+    // S/N rows but did not set produits.has_serial_number, which made the popup
+    // hide them even though they existed in the database.
+    setExistingSerials([])
+    setSerialNums([])
+    setSerialsLoading(true)
+    loadData('Chargement numéros de série', () => api.serialNumbersGetByProduit(p.id), { silent: true }).then(sns => {
+      const list = ((sns ?? []) as Array<SerialNumber & { serial_number?: string; code?: string }>).map(sn => ({
+        ...sn,
+        numero_serie: String(sn.numero_serie ?? sn.serial_number ?? sn.code ?? '').trim(),
+        statut: normalizeSerialStatus(sn.statut),
+      })).filter(sn => sn.numero_serie)
+      const legacySerials = parseLegacyProductSerials(p.numero_serie)
+      const available = list.filter(sn => sn.statut === 'EN_STOCK')
+      const reservedCount = list.filter(sn => sn.statut === 'RESERVE_AVANCE').length
+      const tracksSerial = !!p.has_serial_number || available.length > 0 || reservedCount > 0 || legacySerials.length > 0
+      setExistingSerials(list)
+      if (tracksSerial && !p.has_serial_number) setFormData(prev => ({ ...prev, has_serial_number: true }))
+      if (!tracksSerial) return
+      const editableCount = Math.max(0, p.stock_actuel - reservedCount)
+      const codes = [...available.map(sn => sn.numero_serie), ...legacySerials.filter(code => !available.some(sn => sn.numero_serie.toLocaleLowerCase('fr') === code.toLocaleLowerCase('fr')))]
+      setSerialNums(Array.from({ length: editableCount }, (_, i) => codes[i] || ''))
+    }).finally(() => setSerialsLoading(false))
     setShowModal(true)
   }
 
@@ -343,6 +386,21 @@ export default function InventaireTab() {
 
   const handleSave = async () => {
     if (!validateForm()) return
+    if (serialsLoading) {
+      showNotif('Chargement des numéros de série en cours…', 'error')
+      return
+    }
+    if (formData.has_serial_number) {
+      const normalizedSerials = serialNums.map(sn => sn.trim()).filter(Boolean)
+      if (normalizedSerials.length !== serialNums.length) {
+        showNotif(`Renseignez tous les S/N (${normalizedSerials.length}/${serialNums.length}).`, 'error')
+        return
+      }
+      if (new Set(normalizedSerials.map(sn => sn.toLocaleLowerCase('fr'))).size !== normalizedSerials.length) {
+        showNotif('Chaque numéro de série doit être unique.', 'error')
+        return
+      }
+    }
     const label = editingProduct ? 'Mise à jour produit' : 'Création produit'
     await runAction(label, async () => {
       const now = new Date().toISOString()
@@ -377,6 +435,7 @@ export default function InventaireTab() {
         fournisseur: formData.fournisseur.trim() || null,
         source_tag: formData.type === 'NF' && formData.source_tag.trim() ? formData.source_tag.trim() : null,
         has_serial_number: formData.has_serial_number ? 1 : 0,
+        serial_tracking_disable_confirmed: !!editingProduct && !formData.has_serial_number,
         created_at: editingProduct?.created_at || now,
         updated_at: now,
       }
@@ -388,6 +447,10 @@ export default function InventaireTab() {
       if (formData.has_serial_number) {
         const filled = serialNums.filter(s => s.trim())
         await api.serialNumbersBulkSet(p.id, filled)
+      } else if (editingProduct) {
+        // Disabling tracking removes only editable EN_STOCK rows. Sold,
+        // defective and reserved history remains protected in the database.
+        await api.serialNumbersBulkSet(p.id, [])
       }
       setShowModal(false)
       await loadProduits(true)
@@ -578,6 +641,34 @@ export default function InventaireTab() {
         >
           <option value="all">Toutes catégories</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+
+        {/* VAT filters — both filters can be used together */}
+        <select
+          value={filterTvaVente}
+          onChange={e => setFilterTvaVente(e.target.value)}
+          className={cn(
+            'border rounded-lg px-2 py-1.5 text-xs bg-white transition-colors',
+            filterTvaVente === 'all' ? 'border-green-300 text-green-800' : 'border-green-500 bg-green-50 text-green-900 font-semibold',
+          )}
+          title="Filtrer par taux de TVA vente"
+          aria-label="Filtrer par taux de TVA vente"
+        >
+          <option value="all">TVA vente · toutes</option>
+          {tvaVenteRates.map(rate => <option key={rate} value={String(rate)}>TVA vente {rate}%</option>)}
+        </select>
+        <select
+          value={filterTvaAchat}
+          onChange={e => setFilterTvaAchat(e.target.value)}
+          className={cn(
+            'border rounded-lg px-2 py-1.5 text-xs bg-white transition-colors',
+            filterTvaAchat === 'all' ? 'border-blue-300 text-blue-800' : 'border-blue-500 bg-blue-50 text-blue-900 font-semibold',
+          )}
+          title="Filtrer par taux de TVA achat"
+          aria-label="Filtrer par taux de TVA achat"
+        >
+          <option value="all">TVA achat · toutes</option>
+          {tvaAchatRates.map(rate => <option key={rate} value={String(rate)}>TVA achat {rate}%</option>)}
         </select>
 
         {/* Low stock filter */}
@@ -1053,7 +1144,8 @@ export default function InventaireTab() {
                         <input
                           type="text"
                           inputMode="decimal"
-                          value={formData.prix_achat_ttc || pricing.prixAchatTTC.toFixed(3)}
+                          value={formData.prix_achat_ttc}
+                          placeholder={pricing.prixAchatTTC.toFixed(3)}
                           onChange={e => onPrixAchatTtcChange(e.target.value.replace(/[^0-9.,]/g, ''))}
                           className="w-full border border-blue-300 bg-blue-50 rounded-lg px-3 py-2 text-sm font-price font-bold text-blue-800"
                         />
@@ -1270,6 +1362,11 @@ export default function InventaireTab() {
                     )}
                     onClick={() => {
                       const next = !formData.has_serial_number
+                      const reserved = existingSerials.filter(sn => normalizeSerialStatus(sn.statut) === 'RESERVE_AVANCE')
+                      if (!next && reserved.length > 0) {
+                        showNotif(`Impossible de désactiver : ${reserved.length} S/N réservé(s) par une avance client.`, 'error')
+                        return
+                      }
                       setFormData(prev => ({ ...prev, has_serial_number: next }))
                       if (next) {
                         const count = parseInt(formData.stock_actuel) || 0
@@ -1288,47 +1385,85 @@ export default function InventaireTab() {
                 </label>
 
                 {formData.has_serial_number && (() => {
-                  const count = parseInt(formData.stock_actuel) || 0
-                  // Sync array length to current stock count
+                  const physicalStock = Math.max(0, parseInt(formData.stock_actuel) || 0)
+                  const reservedSerials = existingSerials.filter(sn => sn.statut === 'RESERVE_AVANCE')
+                  const lockedSerials = existingSerials.filter(sn => sn.statut !== 'EN_STOCK')
+                  // Reserved units are still in physical stock, but their S/N is
+                  // immutable here. Only freely available units remain editable.
+                  const count = Math.max(0, physicalStock - reservedSerials.length)
                   if (serialNums.length !== count) {
                     const synced = Array.from({ length: count }, (_, i) => serialNums[i] ?? '')
                     setTimeout(() => setSerialNums(synced), 0)
                   }
-                  if (count === 0) return (
-                    <p className="text-xs text-text-muted italic">Stock = 0 · Aucun S/N à renseigner.</p>
-                  )
                   return (
-                    <div className="border border-border rounded-xl overflow-hidden">
-                      <div className="bg-muted px-3 py-2 flex items-center justify-between">
-                        <span className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
-                          {count} unité{count > 1 ? 's' : ''} — S/N requis
-                        </span>
-                        <span className="text-[11px] text-text-muted">
-                          {serialNums.filter(s => s.trim()).length}/{count} renseignés
-                        </span>
-                      </div>
-                      <div className="divide-y divide-border">
-                        {Array.from({ length: count }, (_, i) => (
-                          <div key={i} className="flex items-center gap-2 px-3 py-2">
-                            <span className="text-[11px] font-bold text-text-muted w-6 text-center flex-shrink-0">#{i + 1}</span>
-                            <input
-                              value={serialNums[i] ?? ''}
-                              onChange={e => {
-                                const updated = [...serialNums]
-                                updated[i] = e.target.value
-                                setSerialNums(updated)
-                              }}
-                              className="flex-1 border border-border rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none focus:border-accent-500"
-                              placeholder={`S/N unité ${i + 1}...`}
-                            />
-                            {existingSerials[i]?.statut === 'VENDU' && (
-                              <span className="text-[10px] bg-red-100 text-red-700 font-bold px-1.5 py-0.5 rounded flex-shrink-0">VENDU</span>
-                            )}
-                            {existingSerials[i]?.statut === 'EN_STOCK' && (
-                              <span className="text-[10px] bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded flex-shrink-0">EN STOCK</span>
-                            )}
+                    <div className="space-y-2">
+                      {serialsLoading && <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">Chargement des codes S/N…</div>}
+                      {count > 0 ? (
+                        <div className="border border-border rounded-xl overflow-hidden">
+                          <div className="bg-muted px-3 py-2 flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
+                              {count} unité{count > 1 ? 's' : ''} disponible{count > 1 ? 's' : ''} — S/N
+                            </span>
+                            <span className="text-[11px] text-text-muted">
+                              {serialNums.filter(s => s.trim()).length}/{count} renseignés
+                            </span>
                           </div>
-                        ))}
+                          <div className="divide-y divide-border">
+                            {Array.from({ length: count }, (_, i) => (
+                              <div key={i} className="flex items-center gap-2 px-3 py-2">
+                                <span className="text-[11px] font-bold text-text-muted w-6 text-center flex-shrink-0">#{i + 1}</span>
+                                <input
+                                  value={serialNums[i] ?? ''}
+                                  onChange={e => {
+                                    const updated = [...serialNums]
+                                    updated[i] = e.target.value
+                                    setSerialNums(updated)
+                                  }}
+                                  className="flex-1 border border-border rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none focus:border-accent-500"
+                                  placeholder={`S/N unité ${i + 1}...`}
+                                />
+                                {(serialNums[i] ?? '').trim() && (
+                                  <span className="text-[10px] bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded flex-shrink-0">EN STOCK</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-text-muted italic">
+                          {physicalStock === 0 ? 'Stock = 0 · Aucun S/N disponible.' : 'Toutes les unités en stock sont réservées.'}
+                        </p>
+                      )}
+
+                      {lockedSerials.length > 0 && (
+                        <div className="border border-border rounded-xl p-3">
+                          <p className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-2">
+                            Historique S/N non modifiable ({lockedSerials.length})
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {lockedSerials.map(sn => (
+                              <span
+                                key={sn.id}
+                                className={cn(
+                                  'inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[10px] font-mono font-semibold',
+                                  sn.statut === 'VENDU'
+                                    ? 'bg-red-100 text-red-700'
+                                    : sn.statut === 'RESERVE_AVANCE'
+                                      ? 'bg-violet-100 text-violet-700'
+                                      : 'bg-gray-100 text-gray-700'
+                                )}
+                              >
+                                {sn.numero_serie}
+                                <span className="font-sans font-bold">
+                                  {sn.statut === 'RESERVE_AVANCE' ? 'RÉSERVÉ AVANCE' : sn.statut}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-[10px] text-text-muted">
+                        Stock physique : {physicalStock} · Disponible : {count} · Réservé : {reservedSerials.length}
                       </div>
                     </div>
                   )
@@ -1367,10 +1502,10 @@ export default function InventaireTab() {
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={savingForm}
+                disabled={savingForm || serialsLoading}
                 className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors"
               >
-                {savingForm ? 'Sauvegarde...' : editingProduct ? 'Mettre à jour' : 'Créer le produit'}
+                {serialsLoading ? 'Chargement S/N…' : savingForm ? 'Sauvegarde...' : editingProduct ? 'Mettre à jour' : 'Créer le produit'}
               </button>
             </div>
           </div>

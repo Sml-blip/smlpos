@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppStore } from '../store/appStore'
-import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText } from 'lucide-react'
+import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText, BellRing } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
 import DocumentPrintModal from '../modules/historique/DocumentPrintModal'
@@ -38,7 +38,16 @@ export default function StatusBar() {
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [errorRows, setErrorRows] = useState<SyncErrorRow[]>([])
   const [dbHealth, setDbHealth] = useState<{ ok: boolean; error?: string } | null>(null)
-  const [shiftReminderSettings, setShiftReminderSettings] = useState({ enabled: true, time: '21:00' })
+  const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
+  const [snoozedUntil, setSnoozedUntil] = useState(0)
+  const lastAlarmAtRef = useRef(0)
+  const [shiftReminderSettings, setShiftReminderSettings] = useState({
+    enabled: true,
+    alarmEnabled: true,
+    morningTime: '14:00',
+    eveningTime: '21:00',
+    snoozeMinutes: 10,
+  })
 
   useEffect(() => {
     api.appHealth?.().then((h: { ok?: boolean; error?: string }) => {
@@ -60,21 +69,83 @@ export default function StatusBar() {
 
   useEffect(() => {
     let cancelled = false
-    api.settingsGetAll().then((settings: Record<string, string>) => {
-      if (cancelled) return
-      setShiftReminderSettings({
-        enabled: settings.shift_close_reminder_enabled !== 'false',
-        time: settings.shift_close_reminder_time || '21:00',
-      })
-    }).catch(() => { /* settings may not be ready during startup */ })
-    return () => { cancelled = true }
+    const loadSettings = () => {
+      api.settingsGetAll().then((settings: Record<string, string>) => {
+        if (cancelled) return
+        setShiftReminderSettings({
+          enabled: settings.shift_close_reminder_enabled !== 'false',
+          alarmEnabled: settings.shift_close_alarm_enabled !== 'false',
+          morningTime: settings.shift_morning_close_time || '14:00',
+          eveningTime: settings.shift_close_reminder_time || '21:00',
+          snoozeMinutes: Math.max(1, Number(settings.shift_close_snooze_minutes) || 10),
+        })
+      }).catch(() => { /* settings may not be ready during startup */ })
+    }
+    loadSettings()
+    window.addEventListener('smlpos:settings-changed', loadSettings)
+    return () => {
+      cancelled = true
+      window.removeEventListener('smlpos:settings-changed', loadSettings)
+    }
   }, [])
 
-  const shiftReminderTiming = reminderTiming(time, shiftReminderSettings.time)
+  useEffect(() => {
+    let cancelled = false
+    const refresh = () => {
+      if (!currentShift) { setClosedShiftsToday(null); return }
+      setClosedShiftsToday(null)
+      void (api.shiftsCountClosedToday?.() ?? Promise.resolve(0)).then(count => {
+        if (!cancelled) setClosedShiftsToday(Number(count) || 0)
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [currentShift?.id])
+
+  useEffect(() => {
+    setSnoozedUntil(0)
+    lastAlarmAtRef.current = 0
+  }, [currentShift?.id])
+
+  const isMorningShift = closedShiftsToday === 0
+  const activeReminderTime = isMorningShift ? shiftReminderSettings.morningTime : shiftReminderSettings.eveningTime
+  const shiftReminderTiming = reminderTiming(time, activeReminderTime)
+  const snoozed = snoozedUntil > time.getTime()
   const showPinnedShiftReminder = !!currentShift
+    && closedShiftsToday !== null
     && !showFermeture
     && shiftReminderSettings.enabled
     && shiftReminderTiming.pinned
+    && !snoozed
+
+  const playClosingAlarm = useCallback(() => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AudioContextClass) return
+      const context = new AudioContextClass()
+      const gain = context.createGain()
+      gain.gain.setValueAtTime(0.28, context.currentTime)
+      gain.connect(context.destination)
+      ;[0, 0.45, 0.9, 1.35].forEach((offset, index) => {
+        const oscillator = context.createOscillator()
+        oscillator.type = 'square'
+        oscillator.frequency.setValueAtTime(index % 2 === 0 ? 880 : 660, context.currentTime + offset)
+        oscillator.connect(gain)
+        oscillator.start(context.currentTime + offset)
+        oscillator.stop(context.currentTime + offset + 0.32)
+      })
+      window.setTimeout(() => void context.close(), 2200)
+    } catch { /* audio can be blocked before the first user interaction */ }
+  }, [])
+
+  useEffect(() => {
+    if (!currentShift || closedShiftsToday === null || !shiftReminderSettings.enabled || !shiftReminderSettings.alarmEnabled) return
+    if (!shiftReminderTiming.overdue || snoozed || showFermeture) return
+    if (time.getTime() - lastAlarmAtRef.current < 60_000) return
+    lastAlarmAtRef.current = time.getTime()
+    playClosingAlarm()
+  }, [closedShiftsToday, currentShift, playClosingAlarm, shiftReminderSettings.alarmEnabled, shiftReminderSettings.enabled, shiftReminderTiming.overdue, showFermeture, snoozed, time])
 
   const refreshCounts = useCallback(async () => {
     if (!isSupabaseEnabled || !window.api?.syncQueuePendingCount) return
@@ -284,30 +355,46 @@ export default function StatusBar() {
               <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
                 shiftReminderTiming.overdue ? 'bg-orange-100 text-orange-700' : 'bg-teal-100 text-teal-700'
               }`}>
-                <FileText size={17} />
+                {shiftReminderTiming.overdue ? <BellRing size={17} className="animate-pulse" /> : <FileText size={17} />}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="font-bold text-sm text-text-primary">
-                  {shiftReminderTiming.overdue ? 'Clôture de journée à effectuer' : 'Clôture de journée dans moins de 30 min'}
+                  {shiftReminderTiming.overdue
+                    ? `Clôture caisse ${isMorningShift ? 'matin' : 'soir'} à effectuer`
+                    : `Clôture caisse ${isMorningShift ? 'matin' : 'soir'} dans moins de 30 min`}
                 </div>
                 <p className="text-[11px] text-text-secondary mt-1 leading-relaxed">
-                  Alerte prévue à <strong>{shiftReminderSettings.time}</strong>. La clôture créera la facture
-                  Client Passager avec uniquement les ventes F non déjà facturées.
+                  Alerte prévue à <strong>{activeReminderTime}</strong>. {isMorningShift
+                    ? 'La clôture du matin ne crée aucune facture.'
+                    : 'La clôture du soir crée la facture Client Passager complète de la journée.'}
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-[10px] text-text-muted truncate">
                     Shift : {currentShift.operateur_nom}
                   </span>
-                  <button
-                    onClick={() => setShowFermeture(true)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-colors ${
-                      shiftReminderTiming.overdue
-                        ? 'bg-danger hover:bg-red-700'
-                        : 'bg-teal-600 hover:bg-teal-700'
-                    }`}
-                  >
-                    Clôturer
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {shiftReminderTiming.overdue && (
+                      <button
+                        onClick={() => {
+                          setSnoozedUntil(Date.now() + shiftReminderSettings.snoozeMinutes * 60_000)
+                          lastAlarmAtRef.current = Date.now()
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-orange-300 text-orange-800 hover:bg-orange-100"
+                      >
+                        Snooze {shiftReminderSettings.snoozeMinutes} min
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowFermeture(true)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-colors ${
+                        shiftReminderTiming.overdue
+                          ? 'bg-danger hover:bg-red-700'
+                          : 'bg-teal-600 hover:bg-teal-700'
+                      }`}
+                    >
+                      Clôturer
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

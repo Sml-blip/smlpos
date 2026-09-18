@@ -11,6 +11,7 @@ const api = window.api
 interface ShiftSummary {
   ventes: { total: number; count: number }
   reparations: { total: number; count: number }
+  services: { total: number; count: number }
   sorties: { total: number; count: number }
   parMode: Array<{ mode_paiement: string; total: number }>
   creditsPercus: { total: number; count: number }
@@ -37,7 +38,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   const [loading, setLoading] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
-  const [closedShiftsToday, setClosedShiftsToday] = useState(0)
+  const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
 
   useEffect(() => {
     if (!currentShift) return
@@ -68,12 +69,15 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
 
   if (!currentShift) return null
 
+  // Services are cart lines already included in ventes.total; keep their card informational only.
   const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) : 0
   const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0)
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
   const ecart = soldeCaisse ? soldeReel - soldeTheorique : null
+  const isMorningClosure = closedShiftsToday === 0
 
   const handleClose = async () => {
+    if (closedShiftsToday === null) return
     if (!confirmed) { setConfirmed(true); return }
     let dailyInvoice: { documentId?: string; numero?: string; skipped?: boolean; reason?: string } | undefined
     const succeeded = await runAction('Fermeture de caisse', async () => {
@@ -84,19 +88,21 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
         notes_cloture: notes || null,
       })
 
-      const facture = await api.documentsCreateDailyFactureF?.() as {
-        success?: boolean
-        skipped?: boolean
-        documentId?: string
-        numero?: string
-        lineCount?: number
-        reason?: string
-        error?: string
-      } | undefined
-      if (!facture?.success) throw new Error(facture?.error || 'La facture Client Passager n’a pas pu être créée')
-      dailyInvoice = facture
-      if (!facture.skipped && facture.documentId) {
-        await onInvoiceCreated?.(facture.documentId)
+      if (!isMorningClosure) {
+        const facture = await api.documentsCreateDailyFactureF?.() as {
+          success?: boolean
+          skipped?: boolean
+          documentId?: string
+          numero?: string
+          lineCount?: number
+          reason?: string
+          error?: string
+        } | undefined
+        if (!facture?.success) throw new Error(facture?.error || 'La facture Client Passager n’a pas pu être créée')
+        dailyInvoice = facture
+        if (!facture.skipped && facture.documentId) {
+          await onInvoiceCreated?.(facture.documentId)
+        }
       }
 
       await api.caisseInterneTransferShift(currentShift.id)
@@ -107,7 +113,9 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
     }, { setLoading })
     if (succeeded) {
       playFeedback(dailyInvoice?.documentId ? 'invoice' : 'success')
-      showToast('success', dailyInvoice?.documentId
+      showToast('success', isMorningClosure
+        ? 'Caisse du matin fermée — aucune facture créée. Ouvrez maintenant la caisse du soir.'
+        : dailyInvoice?.documentId
         ? `Caisse fermée — facture Client Passager ${dailyInvoice.numero ?? ''} créée`
         : 'Caisse fermée — aucune vente F non facturée à regrouper')
     }
@@ -120,7 +128,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <LogOut size={16} className="text-danger" />
-            <h2 className="font-bold text-base">Fermeture de Caisse</h2>
+            <h2 className="font-bold text-base">Fermeture caisse {isMorningClosure ? 'matin' : 'soir'}</h2>
           </div>
           {!confirmed && (
             <button onClick={onClose} className="text-text-muted hover:text-text-primary">
@@ -130,11 +138,14 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
         </div>
 
         <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-5 items-start">
-          <div className="lg:col-span-2 flex items-start gap-2 p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-900">
+          <div className={`lg:col-span-2 flex items-start gap-2 p-3 rounded-xl text-xs ${isMorningClosure ? 'bg-blue-50 border border-blue-200 text-blue-900' : 'bg-teal-50 border border-teal-200 text-teal-900'}`}>
             <FileText size={14} className="flex-shrink-0 mt-0.5" />
             <span>
-              <strong>Facture de fin de journée</strong> — les ventes <strong>F</strong> non encore facturées seront regroupées
-              pour <strong>Client Passager</strong>. Les produits NF et ventes déjà converties en facture sont exclus.
+              {isMorningClosure ? (
+                <><strong>Clôture du matin</strong> — aucune facture journalière ne sera créée. Les ventes restent disponibles pour la facture complète du soir.</>
+              ) : (
+                <><strong>Facture complète de la journée</strong> — toutes les ventes <strong>F</strong> non encore facturées seront regroupées pour <strong>Client Passager</strong>. Les produits NF et ventes déjà converties sont exclus.</>
+              )}
             </span>
           </div>
 
@@ -154,7 +165,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
             </div>
             <div className="flex items-center justify-between text-sm mt-1">
               <span className="text-text-secondary">Shifts déjà clos aujourd&apos;hui</span>
-              <span className="font-semibold">{closedShiftsToday}</span>
+              <span className="font-semibold">{closedShiftsToday ?? '…'}</span>
             </div>
           </div>
 
@@ -180,6 +191,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <div className="font-price font-bold text-sm text-blue-800">{formatPrice(summary.reparations.total)}</div>
                   <div className="text-xs text-blue-600">{summary.reparations.count} dossier{summary.reparations.count > 1 ? 's' : ''}</div>
                 </div>
+                {(summary.services?.total ?? 0) > 0 && <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-3"><div className="text-xs text-cyan-700 font-semibold mb-1">Services (inclus dans ventes)</div><div className="font-price font-bold text-sm text-cyan-800">{formatPrice(summary.services.total)}</div><div className="text-xs text-cyan-600">{summary.services.count} service(s)</div></div>}
                 {(summary.creditsPercus?.total ?? 0) > 0 && (
                   <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
                     <div className="flex items-center gap-1 text-xs text-orange-700 font-semibold mb-1">
@@ -224,7 +236,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <span className="font-price font-bold text-lg text-text-primary">{formatPrice(soldeTheorique)}</span>
                 </div>
                 <div className="text-xs text-text-secondary mt-1">
-                  Fond + Ventes + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties
+                  Fond + Ventes (services inclus) + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties externes
                 </div>
               </div>
             </div>

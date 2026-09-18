@@ -88,6 +88,7 @@ const api = {
   ventesList: (filters?: unknown) => ipcRenderer.invoke('ventes:list', filters),
   ventesGetLignes: (venteId: string) => ipcRenderer.invoke('ventes:getLignes', venteId),
   ventesGetLastNumber: (prefix: string) => ipcRenderer.invoke('ventes:getLastNumber', prefix),
+  ventesListFreeReasons: () => ipcRenderer.invoke('ventes:listFreeReasons'),
 
   // Factures clients
   facturesClientsList: (filters?: unknown) => ipcRenderer.invoke('facturesClients:list', filters),
@@ -101,6 +102,7 @@ const api = {
   reparationsList: (filters?: unknown) => ipcRenderer.invoke('reparations:list', filters),
   reparationsUpdateStatut: (id: string, statut: string) => ipcRenderer.invoke('reparations:updateStatut', id, statut),
   reparationsFinalize: (id: string, totalFinal: number) => ipcRenderer.invoke('reparations:finalize', id, totalFinal),
+  reparationsMarkPayment: (id: string, data: unknown) => ipcRenderer.invoke('reparations:markPayment', id, data),
   reparationsGetPieces: (repId: string) => ipcRenderer.invoke('reparations:getPieces', repId),
   reparationsGetLastNumber: (prefix: string) => ipcRenderer.invoke('reparations:getLastNumber', prefix),
   reparationsGetBeneficeStats: (mois?: string) => ipcRenderer.invoke('reparations:getBeneficeStats', mois),
@@ -173,6 +175,7 @@ const api = {
   // Crédits Clients
   creditsList: (clientId?: string) => ipcRenderer.invoke('credits:list', clientId),
   creditsCreate: (credit: unknown) => ipcRenderer.invoke('credits:create', credit),
+  creditsUpdate: (id: string, patch: unknown) => ipcRenderer.invoke('credits:update', id, patch),
   avancesClientsCreate: (advance: unknown) => ipcRenderer.invoke('avancesClients:create', advance),
   avancesClientsList: (clientId?: string) => ipcRenderer.invoke('avancesClients:list', clientId),
 
@@ -201,6 +204,8 @@ const api = {
   // Documents (Facture/Devis/BL)
   documentsList: (filters?: unknown) => ipcRenderer.invoke('documents:list', filters),
   documentsListAll: (filters?: unknown) => ipcRenderer.invoke('documents:listAll', filters),
+  documentsExportSalesBilan: (filters?: unknown) => ipcRenderer.invoke('documents:exportSalesBilan', filters),
+  documentsExportSalesTva: (filters?: unknown) => ipcRenderer.invoke('documents:exportSalesTva', filters),
   documentsGet: (id: string) => ipcRenderer.invoke('documents:get', id),
   documentsCreate: (doc: unknown, lignes: unknown[]) => ipcRenderer.invoke('documents:create', doc, lignes),
   documentsCreateDailyFactureF: (localDate?: string) => ipcRenderer.invoke('documents:createDailyFactureF', localDate),
@@ -212,6 +217,7 @@ const api = {
   documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
     ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),
   documentsGetLastNumber: (prefix: string) => ipcRenderer.invoke('documents:getLastNumber', prefix),
+  exportsSaveExcel: (base64: string, suggestedName?: string) => ipcRenderer.invoke('exports:saveExcel', base64, suggestedName),
   facturesCountBLPending: () => ipcRenderer.invoke('factures:countBLPending'),
   facturesListBLPending: () => ipcRenderer.invoke('factures:listBLPending'),
 
