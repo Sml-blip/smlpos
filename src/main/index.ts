@@ -1595,12 +1595,104 @@ function setupIpcHandlers() {
   // ─── Serial Numbers ───────────────────────────────────────────────────────
   function parseSerialJson(numerosSerieJson: unknown): string[] {
     if (!numerosSerieJson) return []
+    const normalizeValues = (values: unknown[]): string[] => values.map(value => {
+      if (value && typeof value === 'object') {
+        const item = value as Record<string, unknown>
+        return String(item.numero_serie ?? item.serial_number ?? item.code ?? item.value ?? '').trim()
+      }
+      return String(value ?? '').trim()
+    }).filter(Boolean)
     try {
-      const sns = typeof numerosSerieJson === 'string' ? JSON.parse(numerosSerieJson) : numerosSerieJson as string[]
-      return Array.isArray(sns) ? sns.map(s => String(s).trim()).filter(Boolean) : []
+      const sns = typeof numerosSerieJson === 'string' ? JSON.parse(numerosSerieJson) : numerosSerieJson
+      if (Array.isArray(sns)) return normalizeValues(sns)
+      if (typeof sns === 'string' && sns.trim()) return [sns.trim()]
     } catch {
-      return []
+      // Some early builds stored a comma/newline separated value rather than JSON.
     }
+    return String(numerosSerieJson).split(/[\n,;|]+/).map(value => value.trim()).filter(Boolean)
+  }
+
+  /**
+   * Early supplier-invoice builds kept S/N values on the purchase line but did
+   * not always populate serial_numbers. Recover only the missing records, cap
+   * available codes to the physical stock, and derive sold status from active
+   * sale/document history. Existing serial records are never changed.
+   */
+  function recoverProductSerialsFromPurchases(produitId: string): number {
+    const product = db.prepare(`SELECT stock_actuel FROM produits WHERE id=?`).get(produitId) as { stock_actuel?: number } | undefined
+    if (!product) return 0
+
+    const existing = db.prepare(`SELECT numero_serie, statut FROM serial_numbers WHERE produit_id=?`).all(produitId) as Array<{ numero_serie: string; statut: string }>
+    const existingKeys = new Set(existing.map(row => String(row.numero_serie).trim().toLocaleLowerCase('fr')))
+    const existingAvailable = existing.filter(row => String(row.statut).trim().toUpperCase() === 'EN_STOCK').length
+    const existingReserved = existing.filter(row => String(row.statut).trim().toUpperCase() === 'RESERVE_AVANCE').length
+    let availableSlots = Math.max(0, Number(product.stock_actuel || 0) - existingAvailable - existingReserved)
+
+    const purchaseLines = db.prepare(`
+      SELECT l.numeros_serie_json
+      FROM lignes_facture_fournisseur l
+      JOIN factures_fournisseurs f ON f.id = l.facture_id
+      WHERE l.produit_id = ?
+        AND COALESCE(trim(l.numeros_serie_json), '') != ''
+        AND COALESCE(f.stock_applied, 1) = 1
+        AND COALESCE(f.statut_paiement, '') != 'ANNULE'
+        AND (COALESCE(f.type, 'FACTURE_ACHAT') != 'FACTURE_ACHAT_BL' OR f.statut_reception = 'ARRIVE')
+      ORDER BY COALESCE(f.date_facture, f.created_at) DESC, l.rowid DESC
+    `).all(produitId) as Array<{ numeros_serie_json: unknown }>
+    if (purchaseLines.length === 0) return 0
+
+    const soldKeys = new Set<string>()
+    const saleLines = db.prepare(`
+      SELECT lv.numero_serie
+      FROM lignes_vente lv
+      JOIN ventes v ON v.id = lv.vente_id
+      WHERE lv.produit_id=? AND COALESCE(trim(lv.numero_serie), '') != ''
+        AND COALESCE(v.statut, '') != 'ANNULEE'
+    `).all(produitId) as Array<{ numero_serie: unknown }>
+    const documentLines = db.prepare(`
+      SELECT ld.numero_serie
+      FROM lignes_document ld
+      JOIN documents d ON d.id = ld.document_id
+      WHERE ld.produit_id=? AND COALESCE(trim(ld.numero_serie), '') != ''
+        AND COALESCE(d.statut, '') NOT IN ('ANNULE', 'REVOQUE')
+        AND d.type_document IN ('FACTURE', 'BON_LIVRAISON')
+    `).all(produitId) as Array<{ numero_serie: unknown }>
+    for (const row of [...saleLines, ...documentLines]) {
+      for (const serial of String(row.numero_serie ?? '').split(/[\n,;|]+/).map(value => value.trim()).filter(Boolean)) {
+        soldKeys.add(serial.toLocaleLowerCase('fr'))
+      }
+    }
+
+    const candidates: string[] = []
+    const candidateKeys = new Set<string>()
+    for (const line of purchaseLines) {
+      for (const serial of parseSerialJson(line.numeros_serie_json)) {
+        const key = serial.toLocaleLowerCase('fr')
+        if (!key || existingKeys.has(key) || candidateKeys.has(key)) continue
+        candidateKeys.add(key)
+        candidates.push(serial)
+      }
+    }
+
+    const now = new Date().toISOString()
+    let inserted = 0
+    db.transaction(() => {
+      const insert = db.prepare(`
+        INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      for (const serial of candidates) {
+        const sold = soldKeys.has(serial.toLocaleLowerCase('fr'))
+        if (!sold && availableSlots <= 0) continue
+        insert.run(randomUUID(), produitId, serial, sold ? 'VENDU' : 'EN_STOCK', now, now)
+        if (!sold) availableSlots--
+        inserted++
+      }
+      if (inserted > 0) {
+        db.prepare(`UPDATE produits SET has_serial_number=1, updated_at=? WHERE id=?`).run(now, produitId)
+      }
+    })()
+    return inserted
   }
 
   function achatLineAffectsInventory(facture: Record<string, unknown>): boolean {
@@ -1801,6 +1893,7 @@ function setupIpcHandlers() {
   }
 
   ipcMain.handle('serialNumbers:getByProduit', (_e, produitId: string) => {
+    recoverProductSerialsFromPurchases(produitId)
     return db.prepare('SELECT * FROM serial_numbers WHERE produit_id = ? ORDER BY created_at ASC').all(produitId)
   })
 
