@@ -4,7 +4,9 @@ import { formatPrice } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
 import { showToast } from '../lib/toast'
 import { playFeedback } from '../lib/feedback'
-import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText } from 'lucide-react'
+import { buildBalanceReport, saveBalanceReport } from '../lib/reportPdf'
+import { printFullHtmlDocument } from '../lib/nativePrint'
+import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, ArrowUpCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText, Download, Printer, RefreshCw } from 'lucide-react'
 
 const api = window.api
 
@@ -16,6 +18,11 @@ interface ShiftSummary {
   parMode: Array<{ mode_paiement: string; total: number }>
   creditsPercus: { total: number; count: number }
   avancesClients: { total: number; count: number }
+  echanges: { entrees: number; sorties: number; count: number }
+  operations: Array<{ id: string; date: string; type: string; direction: 'ENTREE' | 'SORTIE'; amount: number; operator: string; note: string }>
+  moneyIn: number
+  moneyOut: number
+  net: number
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -70,11 +77,43 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   if (!currentShift) return null
 
   // Services are cart lines already included in ventes.total; keep their card informational only.
-  const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) : 0
-  const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0)
+  const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) + (summary.echanges?.entrees ?? 0) : 0
+  const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0) - (summary?.echanges?.sorties ?? 0)
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
   const ecart = soldeCaisse ? soldeReel - soldeTheorique : null
   const isMorningClosure = closedShiftsToday === 0
+
+  const reportData = () => {
+    if (!summary) return null
+    const subject = `${currentShift.operateur_nom} · ${new Date(currentShift.started_at).toLocaleString('fr-TN')} → ${new Date().toLocaleString('fr-TN')}`
+    const boxes: Array<[string, string]> = [
+      ['Fond de caisse', formatPrice(currentShift.fond_de_caisse)],
+      ['Total entrées', formatPrice(summary.moneyIn)],
+      ['Total sorties', formatPrice(summary.moneyOut)],
+      ['Solde théorique', formatPrice(soldeTheorique)],
+    ]
+    const rows = summary.operations.map(operation => ({
+      date: operation.date,
+      type: `${operation.direction === 'ENTREE' ? 'Entrée' : 'Sortie'} · ${operation.type}`,
+      amount: operation.direction === 'SORTIE' ? -operation.amount : operation.amount,
+      operator: operation.operator,
+      note: operation.note,
+    }))
+    return { subject, boxes, rows }
+  }
+
+  const handleDownloadReport = async () => {
+    const report = reportData()
+    if (!report) return
+    const ok = await saveBalanceReport('Bilan détaillé de caisse', report.subject, report.boxes, report.rows, `bilan-caisse-${new Date().toLocaleDateString('en-CA')}.pdf`)
+    showToast(ok ? 'success' : 'error', ok ? 'Bilan PDF enregistré' : 'Enregistrement PDF annulé ou impossible')
+  }
+
+  const handlePrintReport = async () => {
+    const report = reportData()
+    if (!report) return
+    await printFullHtmlDocument(buildBalanceReport('Bilan détaillé de caisse', report.subject, report.boxes, report.rows), { pageSize: 'A4', printKind: 'document' })
+  }
 
   const handleClose = async () => {
     if (closedShiftsToday === null) return
@@ -130,11 +169,10 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
             <LogOut size={16} className="text-danger" />
             <h2 className="font-bold text-base">Fermeture caisse {isMorningClosure ? 'matin' : 'soir'}</h2>
           </div>
-          {!confirmed && (
-            <button onClick={onClose} className="text-text-muted hover:text-text-primary">
-              <X size={18} />
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {summary && <><button onClick={handlePrintReport} title="Imprimer le bilan" className="p-2 rounded-lg hover:bg-muted text-text-secondary"><Printer size={16} /></button><button onClick={handleDownloadReport} title="Télécharger le bilan PDF" className="p-2 rounded-lg hover:bg-muted text-text-secondary"><Download size={16} /></button></>}
+            {!confirmed && <button onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>}
+          </div>
         </div>
 
         <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-5 items-start">
@@ -202,6 +240,8 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   </div>
                 )}
                 {(summary.avancesClients?.total ?? 0) > 0 && <div className="bg-violet-50 border border-violet-200 rounded-xl p-3"><div className="text-xs text-violet-700 font-semibold mb-1">Avances clients</div><div className="font-price font-bold text-sm text-violet-800">{formatPrice(summary.avancesClients.total)}</div><div className="text-xs text-violet-600">{summary.avancesClients.count} avance(s)</div></div>}
+                {(summary.echanges?.entrees ?? 0) > 0 && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="flex items-center gap-1 text-xs text-emerald-700 font-semibold mb-1"><ArrowUpCircle size={11} /> Suppléments échanges</div><div className="font-price font-bold text-sm text-emerald-800">+{formatPrice(summary.echanges.entrees)}</div></div>}
+                {(summary.echanges?.sorties ?? 0) > 0 && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3"><div className="flex items-center gap-1 text-xs text-rose-700 font-semibold mb-1"><RefreshCw size={11} /> Remboursements échanges</div><div className="font-price font-bold text-sm text-rose-800">-{formatPrice(summary.echanges.sorties)}</div></div>}
                 <div className="bg-red-50 border border-red-200 rounded-xl p-3">
                   <div className="flex items-center gap-1 text-xs text-red-700 font-semibold mb-1">
                     <ArrowDownCircle size={11} /> Sorties
@@ -236,8 +276,23 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
                   <span className="font-price font-bold text-lg text-text-primary">{formatPrice(soldeTheorique)}</span>
                 </div>
                 <div className="text-xs text-text-secondary mt-1">
-                  Fond + Ventes (services inclus) + Réparations{(summary?.creditsPercus?.total ?? 0) > 0 ? ' + Paiements crédit' : ''}{(summary?.avancesClients?.total ?? 0) > 0 ? ' + Avances clients' : ''} − Sorties externes
+                  Fond + entrées (ventes, réparations, crédits, avances, suppléments d’échange) − sorties (caisse et remboursements d’échange)
                 </div>
+              </div>
+            </div>
+          )}
+
+          {summary && (
+            <div className="lg:col-span-2 border border-border rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-4 py-3 bg-muted">
+                <div><h3 className="text-sm font-bold">Opérations détaillées du shift</h3><p className="text-xs text-text-secondary">Toutes les entrées et sorties, avec l’utilisateur responsable.</p></div>
+                <div className="flex gap-4 text-xs"><span className="text-green-700 font-semibold">Entrées {formatPrice(summary.moneyIn)}</span><span className="text-red-700 font-semibold">Sorties {formatPrice(summary.moneyOut)}</span></div>
+              </div>
+              <div className="max-h-56 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-white border-b border-border"><tr><th className="text-left p-2">Heure</th><th className="text-left p-2">Opération</th><th className="text-left p-2">Utilisateur</th><th className="text-right p-2">Entrée</th><th className="text-right p-2">Sortie</th><th className="text-left p-2">Détail</th></tr></thead>
+                  <tbody>{summary.operations.length ? summary.operations.map(operation => <tr key={operation.id} className="border-b border-border/60"><td className="p-2 whitespace-nowrap">{new Date(operation.date).toLocaleTimeString('fr-TN', { hour: '2-digit', minute: '2-digit' })}</td><td className="p-2 font-medium">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right font-price text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right font-price text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-secondary">{operation.note}</td></tr>) : <tr><td colSpan={6} className="p-5 text-center text-text-muted">Aucune opération</td></tr>}</tbody>
+                </table>
               </div>
             </div>
           )}

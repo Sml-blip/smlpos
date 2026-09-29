@@ -1041,7 +1041,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('shifts:getSummary', (_e, shiftId: string) => {
     const ventes = db.prepare(`
-      SELECT COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total, COUNT(*) as count
+      SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total, COUNT(*) as count
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -1072,7 +1072,7 @@ function setupIpcHandlers() {
       FROM sorties_caisse WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
     const parMode = db.prepare(`
-      SELECT mode_paiement, COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total
+      SELECT mode_paiement, COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -1086,7 +1086,54 @@ function setupIpcHandlers() {
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
       FROM avances_clients WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
-    return { ventes, reparations, services, sorties, parMode, creditsPercus, avancesClients }
+    const echanges = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END),0) AS entrees,
+        COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties,
+        COUNT(*) AS count
+      FROM mouvements_echange WHERE shift_id=?
+    `).get(shiftId) as { entrees: number; sorties: number; count: number }
+
+    type CashOperation = { id: string; date: string; type: string; direction: 'ENTREE' | 'SORTIE'; amount: number; operator: string; note: string }
+    const operations: CashOperation[] = []
+    const saleRows = db.prepare(`
+      SELECT id,numero,operateur_nom,mode_paiement,created_at,
+        MAX(0,COALESCE(montant_encaisse_initial,total_ttc)-COALESCE(avance_utilisee,0)) AS amount
+      FROM ventes WHERE shift_id=? AND type='VENTE'
+        AND COALESCE(type_vente,'TICKET')!='DEVIS' AND COALESCE(statut,'ACTIVE')!='ANNULEE'
+      ORDER BY created_at
+    `).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of saleRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Vente', direction: 'ENTREE', amount: money3(row.amount), operator: String(row.operateur_nom ?? '—'), note: `${row.numero} · ${row.mode_paiement ?? ''}` })
+
+    const repairRows = db.prepare(`
+      SELECT id,numero,operateur_nom,shift_id,acompte,total_final,total_estime,statut,notes_technicien,created_at,updated_at
+      FROM reparations WHERE shift_id=? OR notes_technicien LIKE ?
+    `).all(shiftId, `%"paymentShiftId":"${shiftId}"%`) as Array<Record<string, unknown>>
+    for (const row of repairRows) {
+      if (row.shift_id === shiftId && Number(row.acompte || 0) > 0) operations.push({ id: `${row.id}-deposit`, date: String(row.created_at), type: 'Acompte réparation', direction: 'ENTREE', amount: money3(row.acompte), operator: String(row.operateur_nom ?? '—'), note: String(row.numero) })
+      const marker = String(row.notes_technicien ?? '').match(/\[SMLPOS_PAYMENT\](\{[^\r\n]*\})/)
+      let payment: Record<string, unknown> | null = null
+      try { payment = marker ? JSON.parse(marker[1]) as Record<string, unknown> : null } catch { payment = null }
+      const isPaidHere = payment?.paid === true && payment.paymentShiftId === shiftId
+      const isLegacyPaidHere = !payment && row.shift_id === shiftId && ['TERMINE', 'RENDU'].includes(String(row.statut))
+      if (isPaidHere || isLegacyPaidHere) {
+        const total = money3(payment?.totalFinal ?? row.total_final ?? row.total_estime)
+        const balance = Math.max(0, money3(total - Number(row.acompte || 0)))
+        if (balance > 0) operations.push({ id: `${row.id}-balance`, date: String(payment?.at ?? row.updated_at ?? row.created_at), type: 'Solde réparation', direction: 'ENTREE', amount: balance, operator: String(payment?.operator ?? row.operateur_nom ?? '—'), note: String(row.numero) })
+      }
+    }
+    const creditRows = db.prepare(`SELECT id,client_nom,montant,operateur,created_at FROM credits_clients WHERE shift_id=? AND type='PAIEMENT'`).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of creditRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Paiement crédit', direction: 'ENTREE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: String(row.client_nom ?? '') })
+    const advanceRows = db.prepare(`SELECT id,numero,client_nom,montant,operateur,created_at FROM avances_clients WHERE shift_id=?`).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of advanceRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Avance client', direction: 'ENTREE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: `${row.numero ?? ''} · ${row.client_nom ?? ''}` })
+    const cashOutRows = db.prepare(`SELECT id,montant,note,operateur,created_at FROM sorties_caisse WHERE shift_id=?`).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of cashOutRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Sortie caisse', direction: 'SORTIE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: String(row.note ?? '') })
+    const exchangeRows = db.prepare(`SELECT id,type,montant,operateur,created_at,vente_id,ancien_total,nouveau_total FROM mouvements_echange WHERE shift_id=?`).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of exchangeRows) operations.push({ id: String(row.id), date: String(row.created_at), type: row.type === 'ENTREE' ? 'Échange · supplément reçu' : 'Échange · remboursement', direction: row.type as 'ENTREE' | 'SORTIE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: `Vente ${row.vente_id} · ${money3(row.ancien_total).toFixed(3)} → ${money3(row.nouveau_total).toFixed(3)} DT` })
+    operations.sort((a, b) => a.date.localeCompare(b.date))
+    const moneyIn = money3(ventes.total + reparations.total + creditsPercus.total + avancesClients.total + echanges.entrees)
+    const moneyOut = money3(sorties.total + echanges.sorties)
+    return { ventes, reparations, services, sorties, parMode, creditsPercus, avancesClients, echanges, operations, moneyIn, moneyOut, net: money3(moneyIn - moneyOut) }
   })
 
   ipcMain.handle('shifts:countClosedToday', () => {
@@ -1127,7 +1174,7 @@ function setupIpcHandlers() {
         FROM lignes_vente lv
         INNER JOIN ventes v ON v.id = lv.vente_id
         LEFT JOIN produits p ON p.id = lv.produit_id
-        WHERE lv.type_produit = 'F'
+        WHERE UPPER(TRIM(COALESCE(lv.type_produit, 'F'))) = 'F'
         AND v.type = 'VENTE'
         AND COALESCE(v.type_vente, 'TICKET') = 'TICKET'
         AND COALESCE(v.a_facture, 0) = 0
@@ -3551,7 +3598,7 @@ function setupIpcHandlers() {
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
     const ventesTotal = db.prepare(`
-      SELECT COALESCE(SUM(MAX(0, total_ttc - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
+      SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
       WHERE shift_id = ? AND type = 'VENTE'
         AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
         AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
@@ -3568,8 +3615,13 @@ function setupIpcHandlers() {
     const creditsTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'`).get(shiftId) as { total: number }
     const advancesTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM avances_clients WHERE shift_id = ?`).get(shiftId) as { total: number }
     const cashOutTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM sorties_caisse WHERE shift_id = ?`).get(shiftId) as { total: number }
+    const exchangeTotal = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END),0) AS entrees,
+             COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties
+      FROM mouvements_echange WHERE shift_id=?
+    `).get(shiftId) as { entrees: number; sorties: number }
     // Service transactions are also NF lines inside ventes.total_ttc; do not count them twice.
-    const total = money3(ventesTotal.total + repsTotal.total + creditsTotal.total + advancesTotal.total - cashOutTotal.total)
+    const total = money3(ventesTotal.total + repsTotal.total + creditsTotal.total + advancesTotal.total + exchangeTotal.entrees - cashOutTotal.total - exchangeTotal.sorties)
     if (total <= 0) {
       db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
       enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
@@ -4121,18 +4173,20 @@ function setupIpcHandlers() {
     numero_serie?: string | null
   }
 
-  function saleLinesToDocumentLines(documentId: string, saleLines: ExchangeLine[]) {
-    return saleLines.filter(line => line.type_produit === 'F').map(line => {
+  function saleLinesToDocumentLines(documentId: string, saleLines: ExchangeLine[], targetTotal?: number) {
+    const rawTotal = money3(saleLines.reduce((sum, line) => sum + Number(line.total_ligne || 0), 0))
+    const factor = targetTotal !== undefined && rawTotal > 0 ? Math.max(0, targetTotal) / rawTotal : 1
+    return saleLines.filter(line => String(line.type_produit ?? 'F').trim().toUpperCase() === 'F').map(line => {
       const product = line.produit_id
         ? db.prepare(`SELECT tva_taux FROM produits WHERE id=?`).get(line.produit_id) as { tva_taux?: number } | undefined
         : undefined
       const tvaTaux = Math.max(0, Number(product?.tva_taux || 0))
-      const totalTtc = money3(line.total_ligne)
+      const totalTtc = money3(Number(line.total_ligne) * factor)
       const totalHt = tvaTaux > 0 ? money3(totalTtc / (1 + tvaTaux / 100)) : totalTtc
       return {
         id: randomUUID(), document_id: documentId, produit_id: line.produit_id ?? null,
         designation: line.designation, quantite: line.quantite,
-        prix_unitaire: tvaTaux > 0 ? money3(line.prix_unitaire / (1 + tvaTaux / 100)) : money3(line.prix_unitaire),
+        prix_unitaire: tvaTaux > 0 ? money3((Number(line.prix_unitaire) * factor) / (1 + tvaTaux / 100)) : money3(Number(line.prix_unitaire) * factor),
         remise_pct: line.remise_pct, tva_taux: tvaTaux,
         total_ht: totalHt, total_tva: money3(totalTtc - totalHt), total_ttc: totalTtc,
         type_produit: 'F', numero_serie: line.numero_serie ?? null,
@@ -4148,7 +4202,7 @@ function setupIpcHandlers() {
              COALESCE(p.tva_taux, 0) AS tva_taux,
              (SELECT COALESCE(SUM(x.total_ligne), 0) FROM lignes_vente x WHERE x.vente_id=v.id) AS vente_lignes_total
       FROM ventes v
-      JOIN lignes_vente lv ON lv.vente_id=v.id AND lv.type_produit='F'
+      JOIN lignes_vente lv ON lv.vente_id=v.id AND UPPER(TRIM(COALESCE(lv.type_produit,'F')))='F'
       LEFT JOIN produits p ON p.id=lv.produit_id
       WHERE v.type='VENTE' AND COALESCE(v.type_vente, 'TICKET')='TICKET'
         AND COALESCE(v.a_facture, 0)=0
@@ -4179,6 +4233,46 @@ function setupIpcHandlers() {
         type_produit: 'F', numero_serie: row.numero_serie ?? null,
       }
     })
+  }
+
+  function recoverEmptySalesDocument(documentId: string) {
+    const doc = db.prepare(`SELECT * FROM documents WHERE id=?`).get(documentId) as Record<string, unknown> | undefined
+    if (!doc || !['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F'].includes(String(doc.type_document))) return false
+    const count = (db.prepare(`SELECT COUNT(*) AS count FROM lignes_document WHERE document_id=?`).get(documentId) as { count: number }).count
+    if (count > 0) return false
+
+    let lines: Array<Record<string, unknown>> = []
+    if (doc.type_document === 'FACTURE_VENTE' && doc.vente_id) {
+      const sale = db.prepare(`SELECT total_ttc FROM ventes WHERE id=?`).get(doc.vente_id) as { total_ttc?: number } | undefined
+      const saleLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id=? ORDER BY rowid`).all(doc.vente_id) as ExchangeLine[]
+      lines = saleLinesToDocumentLines(documentId, saleLines, Number(sale?.total_ttc || 0))
+    } else if (doc.type_document === 'FACTURE_JOURNALIERE_F') {
+      let localDate = new Date(String(doc.created_at)).toLocaleDateString('en-CA')
+      try {
+        const parsed = JSON.parse(String(doc.contenu_json || '{}')) as { local_date?: string }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(parsed.local_date ?? '')) localDate = parsed.local_date!
+      } catch { /* legacy metadata */ }
+      lines = buildDailyInvoiceLines(documentId, localDate)
+    }
+    if (!lines.length) return false
+
+    const totals = lines.reduce<{ ht: number; tva: number; ttc: number; ht7: number; tva7: number; ht19: number; tva19: number }>((acc, line) => {
+      acc.ht += Number(line.total_ht || 0); acc.tva += Number(line.total_tva || 0); acc.ttc += Number(line.total_ttc || 0)
+      if (Math.round(Number(line.tva_taux || 0)) === 7) { acc.ht7 += Number(line.total_ht || 0); acc.tva7 += Number(line.total_tva || 0) }
+      if (Math.round(Number(line.tva_taux || 0)) === 19) { acc.ht19 += Number(line.total_ht || 0); acc.tva19 += Number(line.total_tva || 0) }
+      return acc
+    }, { ht: 0, tva: 0, ttc: 0, ht7: 0, tva7: 0, ht19: 0, tva19: 0 })
+    const insert = db.prepare(`
+      INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie)
+      VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)
+    `)
+    db.transaction(() => {
+      for (const line of lines) insert.run(line)
+      db.prepare(`UPDATE documents SET total_ht=?,total_tva=?,total_ttc=?,montant_paye=?,ht_7=?,tva_7=?,ht_19=?,tva_19=?,updated_at=? WHERE id=?`)
+        .run(money3(totals.ht), money3(totals.tva), money3(totals.ttc), String(doc.statut_paiement) === 'PAYE' ? money3(totals.ttc) : Math.min(Number(doc.montant_paye || 0), money3(totals.ttc)), money3(totals.ht7), money3(totals.tva7), money3(totals.ht19), money3(totals.tva19), new Date().toISOString(), documentId)
+    })()
+    addActivityLog({ action: 'DOCUMENT_LINES_RECOVERED', details: { document_id: documentId, line_count: lines.length } })
+    return true
   }
 
   // ── Ventes: Exchange ──────────────────────────────────────────────────────
@@ -4286,6 +4380,13 @@ function setupIpcHandlers() {
     const oldTotal = money3(vente.total_ttc)
     const difference = money3(newTotal - oldTotal)
     const now = new Date().toISOString()
+    const exchangeShiftId = String(payload.shift_id ?? '').trim()
+    if (Math.abs(difference) > 0.0001) {
+      const activeShift = exchangeShiftId
+        ? db.prepare(`SELECT id FROM shifts WHERE id=? AND ended_at IS NULL`).get(exchangeShiftId)
+        : undefined
+      if (!activeShift) return { success: false, error: 'Ouvrez une caisse avant d’encaisser ou rembourser la différence de l’échange' }
+    }
 
     const directDocument = db.prepare(`
       SELECT * FROM documents WHERE vente_id=? AND type_document='FACTURE_VENTE'
@@ -4317,7 +4418,16 @@ function setupIpcHandlers() {
         `)
         for (const line of newLines) insertSaleLine.run(line)
         for (const line of newLines) applyVenteLineInventory(venteId, line, now)
-        db.prepare(`UPDATE ventes SET sous_total=?, total_remises=?, total_ttc=? WHERE id=?`).run(sousTotal, totalRemises, newTotal, venteId)
+        db.prepare(`UPDATE ventes SET montant_encaisse_initial=COALESCE(montant_encaisse_initial,total_ttc), sous_total=?, total_remises=?, total_ttc=? WHERE id=?`).run(sousTotal, totalRemises, newTotal, venteId)
+
+        if (Math.abs(difference) > 0.0001) {
+          db.prepare(`
+            INSERT INTO mouvements_echange (id,vente_id,shift_id,type,montant,ancien_total,nouveau_total,operateur,details_json,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+          `).run(randomUUID(), venteId, exchangeShiftId, difference > 0 ? 'ENTREE' : 'SORTIE', Math.abs(difference), oldTotal, newTotal,
+            String(payload.operateur ?? vente.operateur_nom ?? 'superadmin'),
+            JSON.stringify({ numero: vente.numero, returned: returnedSummary, replacements: replacementSummary }), now)
+        }
 
         const replaceDocument = (doc: Record<string, unknown>, lines: Array<Record<string, unknown>>, preserveExtras: boolean) => {
           const documentId = String(doc.id)
@@ -4332,7 +4442,7 @@ function setupIpcHandlers() {
           const totalHt = money3(lines.reduce((sum, line) => sum + Number(line.total_ht || 0), 0) + htExtra)
           const totalTva = money3(lines.reduce((sum, line) => sum + Number(line.total_tva || 0), 0) + tvaExtra)
           const totalTtc = Math.max(0, money3(lines.reduce((sum, line) => sum + Number(line.total_ttc || 0), 0) + ttcExtra))
-          const buckets = lines.reduce((acc, line) => {
+          const buckets = lines.reduce<{ ht7: number; tva7: number; ht19: number; tva19: number }>((acc, line) => {
             const rate = Math.round(Number(line.tva_taux || 0))
             if (rate === 7) { acc.ht7 += Number(line.total_ht || 0); acc.tva7 += Number(line.total_tva || 0) }
             if (rate === 19) { acc.ht19 += Number(line.total_ht || 0); acc.tva19 += Number(line.total_tva || 0) }
@@ -4351,14 +4461,20 @@ function setupIpcHandlers() {
           updatedDocuments.push({ id: documentId, numero: String(doc.numero), type: String(doc.type_document) })
         }
 
-        if (directDocument) replaceDocument(directDocument, saleLinesToDocumentLines(String(directDocument.id), newLines), true)
+        if (directDocument) {
+          const directLines = saleLinesToDocumentLines(String(directDocument.id), newLines)
+          if (newLines.length > 0 && directLines.length === 0) throw new Error('Échange refusé : la facture deviendrait vide (aucun article F)')
+          replaceDocument(directDocument, directLines, true)
+        }
         if (dailyDocument) {
           let localDate = new Date(String(vente.created_at)).toLocaleDateString('en-CA')
           try {
             const storedDate = JSON.parse(String(dailyDocument.contenu_json)).local_date
             if (/^\d{4}-\d{2}-\d{2}$/.test(storedDate)) localDate = storedDate
           } catch { /* legacy daily invoice without metadata */ }
-          replaceDocument(dailyDocument, buildDailyInvoiceLines(String(dailyDocument.id), localDate), false)
+          const dailyLines = buildDailyInvoiceLines(String(dailyDocument.id), localDate)
+          if (dailyLines.length === 0) throw new Error('Échange refusé : la facture journalière deviendrait vide')
+          replaceDocument(dailyDocument, dailyLines, false)
         }
         for (const invoice of legacyInvoices) {
           const fiscalLines = saleLinesToDocumentLines(String(invoice.id), newLines)
@@ -4389,7 +4505,7 @@ function setupIpcHandlers() {
     }
     for (const productId of touchedProducts) enqueueProductSnapshot(productId)
     addActivityLog({
-      shift_id: vente.shift_id as string, operateur: String(payload.operateur ?? vente.operateur_nom ?? 'superadmin'),
+      shift_id: exchangeShiftId || vente.shift_id as string, operateur: String(payload.operateur ?? vente.operateur_nom ?? 'superadmin'),
       action: 'SALE_EXCHANGED', montant: Math.abs(difference),
       details: { vente_id: venteId, numero: vente.numero, old_total: oldTotal, new_total: newTotal, difference, returned: returnedSummary, replacements: replacementSummary, updated_documents: updatedDocuments },
     })
@@ -4794,6 +4910,7 @@ function setupIpcHandlers() {
     return db.prepare(`SELECT * FROM documents WHERE id = ?`).get(id)
   })
   ipcMain.handle('documents:getLignes', (_e, documentId: string) => {
+    recoverEmptySalesDocument(documentId)
     const docRow = db.prepare(`SELECT vente_id FROM documents WHERE id = ?`).get(documentId) as { vente_id?: string } | undefined
     const venteId = docRow?.vente_id
     const rows = db.prepare(`

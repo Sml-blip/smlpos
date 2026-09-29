@@ -262,6 +262,7 @@ export default function HistoriqueTab() {
     const succeeded = await runAction('Échange vente', async () => {
       result = await api.ventesExchange(vente.id, {
         ...payload,
+        shift_id: currentShift?.id ?? null,
         operateur: currentOperateur?.nom ?? currentShift?.operateur_nom ?? 'superadmin',
       })
       if (!result.success) throw new Error(result.error || 'Échange impossible')

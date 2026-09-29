@@ -347,6 +347,20 @@ export function initDatabase() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- ── Échanges de vente / mouvements caisse externe ──────────────────────
+    CREATE TABLE IF NOT EXISTS mouvements_echange (
+      id            TEXT PRIMARY KEY,
+      vente_id      TEXT NOT NULL REFERENCES ventes(id),
+      shift_id      TEXT NOT NULL REFERENCES shifts(id),
+      type          TEXT NOT NULL CHECK(type IN ('ENTREE','SORTIE')),
+      montant       REAL NOT NULL,
+      ancien_total  REAL NOT NULL,
+      nouveau_total REAL NOT NULL,
+      operateur     TEXT,
+      details_json  TEXT,
+      created_at    TEXT DEFAULT (datetime('now'))
+    );
+
     -- ── Sync Queue (offline) ─────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS sync_queue (
       id         TEXT PRIMARY KEY,
@@ -426,6 +440,9 @@ export function initDatabase() {
     db.exec(`ALTER TABLE ventes ADD COLUMN client_adresse TEXT`)
     db.exec(`ALTER TABLE ventes ADD COLUMN client_matricule TEXT`)
     db.exec(`ALTER TABLE ventes ADD COLUMN a_facture INTEGER DEFAULT 0`)
+  }
+  if (!venteCols.includes('montant_encaisse_initial')) {
+    db.exec(`ALTER TABLE ventes ADD COLUMN montant_encaisse_initial REAL`)
   }
 
   // Migrate produits table
