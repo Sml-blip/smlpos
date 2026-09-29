@@ -4,6 +4,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   SALE_CREATED: 'Vente créée',
   QUOTE_CREATED: 'Devis créé',
   SALE_CANCELLED: 'Vente annulée',
+  SALE_EXCHANGED: 'Échange vente',
   REPAIR_CREATED: 'Réparation créée',
   REPAIR_STATUS_UPDATED: 'Statut réparation',
   REPAIR_PAYMENT_CONFIRMED: 'Paiement réparation confirmé',
@@ -46,5 +47,6 @@ export function formatActivityDetails(details: unknown): string {
   if (d.client_nom) parts.push(String(d.client_nom))
   if (d.mode) parts.push(String(d.mode))
   if (d.type) parts.push(String(d.type))
+  if (typeof d.difference === 'number') parts.push(`Écart ${d.difference >= 0 ? '+' : ''}${d.difference.toFixed(3)} DT`)
   return parts.slice(0, 3).join(' · ')
 }

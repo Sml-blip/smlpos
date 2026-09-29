@@ -186,6 +186,7 @@ const api = {
 
   // Ventes: Annulation
   ventesAnnuler: (id: string, data: unknown) => ipcRenderer.invoke('ventes:annuler', id, data),
+  ventesExchange: (id: string, data: unknown) => ipcRenderer.invoke('ventes:exchange', id, data),
 
   // Organisations
   organisationsList: () => ipcRenderer.invoke('organisations:list'),

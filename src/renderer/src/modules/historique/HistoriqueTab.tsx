@@ -10,11 +10,12 @@ import { showToast } from '../../lib/toast'
 import {
   ShoppingBag, Wrench, Calendar, Download, RefreshCw, ChevronDown, ChevronUp,
   CreditCard, Banknote, FileCheck, Layers, X, Eye, TrendingUp, Bike,
-  CheckCircle, Clock, Package, FileText, Ban, Plus, Search, Printer, ScrollText
+  CheckCircle, Clock, Package, FileText, Ban, Plus, Search, Printer, ScrollText, Repeat2
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import DocumentPrintModal from './DocumentPrintModal'
 import { ConvertVenteDocModal, VenteTicketPrintModal } from './VenteHistoriqueActions'
+import SaleExchangeModal, { type ExchangeResult } from './SaleExchangeModal'
 import { ACTIVITY_LABELS, formatActivityDetails } from '../../lib/activityLabels'
 
 const api = window.api
@@ -145,6 +146,7 @@ export default function HistoriqueTab() {
   const [updatingStatut, setUpdatingStatut] = useState<string | null>(null)
   const [paymentRepair, setPaymentRepair] = useState<Reparation | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Vente | null>(null)
+  const [exchangeTarget, setExchangeTarget] = useState<Vente | null>(null)
   const [showNewDoc, setShowNewDoc] = useState(false)
   const [printDoc, setPrintDoc] = useState<DocType | null>(null)
   const [printVente, setPrintVente] = useState<Vente | null>(null)
@@ -253,6 +255,30 @@ export default function HistoriqueTab() {
       return
     }
     setConvertVente(vente)
+  }
+
+  const handleExchangeVente = async (vente: Vente, payload: { returns: Array<Record<string, unknown>>; replacements: Array<Record<string, unknown>> }) => {
+    let result: ExchangeResult | null = null
+    const succeeded = await runAction('Échange vente', async () => {
+      result = await api.ventesExchange(vente.id, {
+        ...payload,
+        operateur: currentOperateur?.nom ?? currentShift?.operateur_nom ?? 'superadmin',
+      })
+      if (!result.success) throw new Error(result.error || 'Échange impossible')
+    }, { successMessage: 'Échange enregistré et inventaire mis à jour', feedback: 'success' })
+    if (!succeeded || !result) throw new Error(result?.error || 'Échange impossible')
+    const completed = result as ExchangeResult
+    const documentNumbers = completed.updatedDocuments?.map(document => document.numero).filter(Boolean) ?? []
+    if (documentNumbers.length > 0) {
+      showToast('success', `Facture mise à jour automatiquement : ${documentNumbers.join(', ')}`)
+    }
+    setExchangeTarget(null)
+    setVenteLignes(current => {
+      const copy = { ...current }
+      delete copy[vente.id]
+      return copy
+    })
+    await load()
   }
 
   const createPastDailyInvoice = async (localDate: string) => {
@@ -491,6 +517,7 @@ export default function HistoriqueTab() {
               venteLignes={venteLignes}
               onToggle={toggleVente}
               onCancel={setCancelTarget}
+              onExchange={setExchangeTarget}
               onPrintTicket={setPrintVente}
               onConvert={(v) => void handleConvertVente(v)}
               emptyHint={preset === 'today' ? 'Essayez « Ce mois » ou « 90 jours » pour voir les ventes passées.' : undefined}
@@ -646,6 +673,13 @@ export default function HistoriqueTab() {
           onConfirm={(motif, creerAvoir) => handleCancelVente(cancelTarget, motif, creerAvoir)}
         />
       )}
+      {exchangeTarget && (
+        <SaleExchangeModal
+          vente={exchangeTarget}
+          onClose={() => setExchangeTarget(null)}
+          onConfirm={payload => handleExchangeVente(exchangeTarget, payload)}
+        />
+      )}
       {paymentRepair && (
         <RepairPaymentModal
           repair={paymentRepair}
@@ -757,10 +791,11 @@ function MissingDailyInvoicesPanel({
 }
 
 function VentesTable({
-  ventes, expandedVente, venteLignes, onToggle, onCancel, onPrintTicket, onConvert, emptyHint,
+  ventes, expandedVente, venteLignes, onToggle, onCancel, onExchange, onPrintTicket, onConvert, emptyHint,
 }: {
   ventes: Vente[]; expandedVente: string | null; venteLignes: Record<string, LigneVente[]>
   onToggle: (id: string) => void; onCancel: (v: Vente) => void
+  onExchange: (v: Vente) => void
   onPrintTicket: (v: Vente) => void; onConvert: (v: Vente) => void; emptyHint?: string
 }) {
   if (ventes.length === 0) {
@@ -823,12 +858,20 @@ function VentesTable({
                   {annulee ? (
                     <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Annulée</span>
                   ) : (
-                    <button
-                      onClick={e => { e.stopPropagation(); onCancel(v) }}
-                      className="text-xs text-red-600 hover:bg-red-50 border border-red-200 px-2 py-0.5 rounded-lg flex items-center gap-1 mx-auto"
-                    >
-                      <Ban size={10} /> Annuler
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={e => { e.stopPropagation(); onCancel(v) }}
+                        className="flex items-center gap-1 rounded-lg border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+                      >
+                        <Ban size={10} /> Annuler
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); onExchange(v) }}
+                        className="flex items-center gap-1 rounded-lg border border-blue-200 px-2 py-0.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                      >
+                        <Repeat2 size={10} /> Échanger
+                      </button>
+                    </div>
                   )}
                 </td>
                 <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>

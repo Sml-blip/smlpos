@@ -4108,6 +4108,294 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
+  type ExchangeLine = Record<string, unknown> & {
+    id: string
+    vente_id: string
+    produit_id?: string | null
+    designation: string
+    quantite: number
+    prix_unitaire: number
+    remise_pct: number
+    total_ligne: number
+    type_produit: string
+    numero_serie?: string | null
+  }
+
+  function saleLinesToDocumentLines(documentId: string, saleLines: ExchangeLine[]) {
+    return saleLines.filter(line => line.type_produit === 'F').map(line => {
+      const product = line.produit_id
+        ? db.prepare(`SELECT tva_taux FROM produits WHERE id=?`).get(line.produit_id) as { tva_taux?: number } | undefined
+        : undefined
+      const tvaTaux = Math.max(0, Number(product?.tva_taux || 0))
+      const totalTtc = money3(line.total_ligne)
+      const totalHt = tvaTaux > 0 ? money3(totalTtc / (1 + tvaTaux / 100)) : totalTtc
+      return {
+        id: randomUUID(), document_id: documentId, produit_id: line.produit_id ?? null,
+        designation: line.designation, quantite: line.quantite,
+        prix_unitaire: tvaTaux > 0 ? money3(line.prix_unitaire / (1 + tvaTaux / 100)) : money3(line.prix_unitaire),
+        remise_pct: line.remise_pct, tva_taux: tvaTaux,
+        total_ht: totalHt, total_tva: money3(totalTtc - totalHt), total_ttc: totalTtc,
+        type_produit: 'F', numero_serie: line.numero_serie ?? null,
+      }
+    })
+  }
+
+  function buildDailyInvoiceLines(documentId: string, localDate: string) {
+    const source = db.prepare(`
+      SELECT v.id AS vente_id, v.total_ttc AS vente_total_ttc,
+             lv.produit_id, lv.designation, lv.quantite, lv.prix_unitaire,
+             lv.remise_pct, lv.total_ligne, lv.numero_serie,
+             COALESCE(p.tva_taux, 0) AS tva_taux,
+             (SELECT COALESCE(SUM(x.total_ligne), 0) FROM lignes_vente x WHERE x.vente_id=v.id) AS vente_lignes_total
+      FROM ventes v
+      JOIN lignes_vente lv ON lv.vente_id=v.id AND lv.type_produit='F'
+      LEFT JOIN produits p ON p.id=lv.produit_id
+      WHERE v.type='VENTE' AND COALESCE(v.type_vente, 'TICKET')='TICKET'
+        AND COALESCE(v.a_facture, 0)=0
+        AND COALESCE(v.statut, 'ACTIVE')!='ANNULEE'
+        AND date(v.created_at, 'localtime')=date(?)
+        AND NOT EXISTS (
+          SELECT 1 FROM documents manual
+          WHERE manual.vente_id=v.id AND manual.type_document='FACTURE_VENTE'
+            AND manual.statut NOT IN ('ANNULE','REVOQUE')
+        )
+        AND NOT EXISTS (SELECT 1 FROM factures_clients legacy WHERE legacy.vente_id=v.id)
+      ORDER BY v.created_at, lv.rowid
+    `).all(localDate) as Array<Record<string, unknown>>
+    return source.map(row => {
+      const rawTotal = Number(row.vente_lignes_total || 0)
+      const saleFactor = rawTotal > 0 ? Math.max(0, Number(row.vente_total_ttc || 0)) / rawTotal : 1
+      const totalTtc = money3(Number(row.total_ligne || 0) * saleFactor)
+      const tvaTaux = Math.max(0, Number(row.tva_taux || 0))
+      const totalHt = tvaTaux > 0 ? money3(totalTtc / (1 + tvaTaux / 100)) : totalTtc
+      return {
+        id: randomUUID(), document_id: documentId, produit_id: row.produit_id ?? null,
+        designation: row.designation, quantite: Number(row.quantite),
+        prix_unitaire: tvaTaux > 0
+          ? money3((Number(row.prix_unitaire || 0) * saleFactor) / (1 + tvaTaux / 100))
+          : money3(Number(row.prix_unitaire || 0) * saleFactor),
+        remise_pct: Number(row.remise_pct || 0), tva_taux: tvaTaux,
+        total_ht: totalHt, total_tva: money3(totalTtc - totalHt), total_ttc: totalTtc,
+        type_produit: 'F', numero_serie: row.numero_serie ?? null,
+      }
+    })
+  }
+
+  // ── Ventes: Exchange ──────────────────────────────────────────────────────
+  ipcMain.handle('ventes:exchange', (_e, venteId: string, payload: Record<string, unknown>) => {
+    const vente = db.prepare(`SELECT * FROM ventes WHERE id=?`).get(venteId) as Record<string, unknown> | undefined
+    if (!vente) return { success: false, error: 'Vente introuvable' }
+    if (vente.statut === 'ANNULEE' || vente.type_vente === 'DEVIS') return { success: false, error: 'Cette vente ne peut pas être échangée' }
+
+    const oldLines = db.prepare(`SELECT * FROM lignes_vente WHERE vente_id=? ORDER BY rowid`).all(venteId) as ExchangeLine[]
+    // Repair old sale lines that predate the explicit numero_serie column by
+    // reading the exact S/N rows already attached to this sale.
+    const soldSerialRows = db.prepare(`
+      SELECT produit_id, numero_serie FROM serial_numbers
+      WHERE vente_id=? AND statut='VENDU' ORDER BY updated_at, created_at
+    `).all(venteId) as Array<{ produit_id: string; numero_serie: string }>
+    const serialPool = new Map<string, string[]>()
+    for (const row of soldSerialRows) {
+      const pool = serialPool.get(row.produit_id) ?? []
+      pool.push(row.numero_serie)
+      serialPool.set(row.produit_id, pool)
+    }
+    for (const line of oldLines) {
+      if (!line.produit_id || parseLineSerials(line.numero_serie).length > 0) continue
+      const pool = serialPool.get(String(line.produit_id)) ?? []
+      const assigned = pool.splice(0, Number(line.quantite) || 0)
+      if (assigned.length === Number(line.quantite)) line.numero_serie = assigned.join(', ')
+    }
+    const returns = Array.isArray(payload.returns) ? payload.returns as Array<Record<string, unknown>> : []
+    const replacements = Array.isArray(payload.replacements) ? payload.replacements as Array<Record<string, unknown>> : []
+    if (!returns.length || !replacements.length) return { success: false, error: 'Sélectionnez au moins un article retourné et un article de remplacement' }
+
+    const returnByLine = new Map(returns.map(item => [String(item.line_id ?? ''), item]))
+    const newLines: ExchangeLine[] = []
+    const returnedSummary: Array<Record<string, unknown>> = []
+    for (const oldLine of oldLines) {
+      const selection = returnByLine.get(oldLine.id)
+      if (!selection) {
+        newLines.push({ ...oldLine })
+        continue
+      }
+      const quantity = Number(selection.quantity)
+      if (!Number.isInteger(quantity) || quantity <= 0 || quantity > Number(oldLine.quantite)) {
+        return { success: false, error: `Quantité d'échange invalide pour ${oldLine.designation}` }
+      }
+      const oldSerials = parseLineSerials(oldLine.numero_serie)
+      const selectedSerials = Array.isArray(selection.serial_numbers)
+        ? (selection.serial_numbers as unknown[]).map(value => String(value).trim()).filter(Boolean)
+        : []
+      if (oldSerials.length > 0) {
+        const oldSet = new Set(oldSerials.map(value => value.toLocaleLowerCase('fr')))
+        if (selectedSerials.length !== quantity || selectedSerials.some(value => !oldSet.has(value.toLocaleLowerCase('fr')))) {
+          return { success: false, error: `Choisissez exactement ${quantity} S/N retourné(s) pour ${oldLine.designation}` }
+        }
+      } else if (quantity < Number(oldLine.quantite) && oldLine.produit_id) {
+        const soldSerialCount = (db.prepare(`SELECT COUNT(*) AS count FROM serial_numbers WHERE vente_id=? AND produit_id=? AND statut='VENDU'`).get(venteId, oldLine.produit_id) as { count: number }).count
+        if (soldSerialCount > 0) return { success: false, error: `Échange partiel impossible sans S/N enregistré pour ${oldLine.designation}` }
+      }
+      const selectedSet = new Set(selectedSerials.map(value => value.toLocaleLowerCase('fr')))
+      const remainingSerials = oldSerials.filter(value => !selectedSet.has(value.toLocaleLowerCase('fr')))
+      const remainingQty = Number(oldLine.quantite) - quantity
+      returnedSummary.push({ line_id: oldLine.id, designation: oldLine.designation, quantity, serial_numbers: selectedSerials })
+      if (remainingQty > 0) {
+        newLines.push(normalizeVenteLine({
+          ...oldLine,
+          quantite: remainingQty,
+          numero_serie: remainingSerials.length ? remainingSerials.join(', ') : null,
+        }) as ExchangeLine)
+      }
+    }
+    if (returnedSummary.length !== returns.length) return { success: false, error: 'Une ligne retournée est introuvable dans la vente' }
+
+    const replacementSummary: Array<Record<string, unknown>> = []
+    for (const replacement of replacements) {
+      const productId = String(replacement.product_id ?? '').trim()
+      const quantity = Number(replacement.quantity)
+      const product = db.prepare(`SELECT * FROM produits WHERE id=? AND actif=1`).get(productId) as Record<string, unknown> | undefined
+      if (!product) return { success: false, error: 'Produit de remplacement introuvable' }
+      if (!Number.isInteger(quantity) || quantity <= 0) return { success: false, error: `Quantité invalide pour ${product.nom}` }
+      const serials = Array.isArray(replacement.serial_numbers)
+        ? (replacement.serial_numbers as unknown[]).map(value => String(value).trim()).filter(Boolean)
+        : []
+      const line = normalizeVenteLine({
+        id: randomUUID(), vente_id: venteId, produit_id: productId,
+        designation: product.nom, quantite: quantity, prix_unitaire: product.prix_vente,
+        remise_pct: 0, type_produit: product.type ?? 'F',
+        numero_serie: serials.length ? serials.join(', ') : null,
+      }) as ExchangeLine
+      newLines.push(line)
+      replacementSummary.push({ produit_id: productId, designation: product.nom, quantity, serial_numbers: serials, total: line.total_ligne })
+    }
+
+    const claimedSerials = new Set<string>()
+    try {
+      for (const line of newLines) validateLineSerials(line, claimedSerials, venteId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Numéro de série invalide' }
+    }
+
+    const oldLinesTotal = money3(oldLines.reduce((sum, line) => sum + Number(line.total_ligne || 0), 0))
+    const checkoutAdjustment = money3(Number(vente.total_ttc || 0) - oldLinesTotal)
+    const sousTotal = money3(newLines.reduce((sum, line) => sum + Number(line.quantite) * Number(line.prix_unitaire), 0))
+    const newLinesTotal = money3(newLines.reduce((sum, line) => sum + Number(line.total_ligne), 0))
+    const newTotal = Math.max(0, money3(newLinesTotal + checkoutAdjustment))
+    const totalRemises = Math.max(0, money3(sousTotal - newTotal))
+    const oldTotal = money3(vente.total_ttc)
+    const difference = money3(newTotal - oldTotal)
+    const now = new Date().toISOString()
+
+    const directDocument = db.prepare(`
+      SELECT * FROM documents WHERE vente_id=? AND type_document='FACTURE_VENTE'
+        AND statut NOT IN ('ANNULE','REVOQUE') ORDER BY created_at DESC LIMIT 1
+    `).get(venteId) as Record<string, unknown> | undefined
+    const dailyDocument = db.prepare(`
+      SELECT * FROM documents
+      WHERE type_document='FACTURE_JOURNALIERE_F' AND statut NOT IN ('ANNULE','REVOQUE')
+        AND (
+          (json_valid(contenu_json) AND EXISTS (SELECT 1 FROM json_each(contenu_json, '$.vente_ids') WHERE value=?))
+          OR (NOT json_valid(contenu_json) AND date(created_at, 'localtime')=date(?))
+        )
+      ORDER BY created_at DESC LIMIT 1
+    `).get(venteId, vente.created_at) as Record<string, unknown> | undefined
+    const legacyInvoices = db.prepare(`SELECT * FROM factures_clients WHERE vente_id=?`).all(venteId) as Record<string, unknown>[]
+    const touchedProducts = new Set<string>()
+    for (const line of [...oldLines, ...newLines]) if (line.produit_id) touchedProducts.add(String(line.produit_id))
+    const replacedDocumentLines = new Map<string, Array<{ id: string }>>()
+    const insertedDocumentLines = new Map<string, Array<Record<string, unknown>>>()
+    const updatedDocuments: Array<{ id: string; numero: string; type: string }> = []
+
+    try {
+      db.transaction(() => {
+        for (const line of oldLines) revertVenteLineInventory(venteId, line, now)
+        db.prepare(`DELETE FROM lignes_vente WHERE vente_id=?`).run(venteId)
+        const insertSaleLine = db.prepare(`
+          INSERT INTO lignes_vente (id,vente_id,produit_id,designation,quantite,prix_unitaire,remise_pct,total_ligne,type_produit,numero_serie)
+          VALUES (@id,@vente_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@total_ligne,@type_produit,@numero_serie)
+        `)
+        for (const line of newLines) insertSaleLine.run(line)
+        for (const line of newLines) applyVenteLineInventory(venteId, line, now)
+        db.prepare(`UPDATE ventes SET sous_total=?, total_remises=?, total_ttc=? WHERE id=?`).run(sousTotal, totalRemises, newTotal, venteId)
+
+        const replaceDocument = (doc: Record<string, unknown>, lines: Array<Record<string, unknown>>, preserveExtras: boolean) => {
+          const documentId = String(doc.id)
+          const oldDocLines = db.prepare(`SELECT * FROM lignes_document WHERE document_id=?`).all(documentId) as Array<Record<string, unknown>>
+          replacedDocumentLines.set(documentId, oldDocLines.map(line => ({ id: String(line.id) })))
+          const oldLineHt = money3(oldDocLines.reduce((sum, line) => sum + Number(line.total_ht || 0), 0))
+          const oldLineTva = money3(oldDocLines.reduce((sum, line) => sum + Number(line.total_tva || 0), 0))
+          const oldLineTtc = money3(oldDocLines.reduce((sum, line) => sum + Number(line.total_ttc || 0), 0))
+          const htExtra = preserveExtras ? money3(Number(doc.total_ht || 0) - oldLineHt) : 0
+          const tvaExtra = preserveExtras ? money3(Number(doc.total_tva || 0) - oldLineTva) : 0
+          const ttcExtra = preserveExtras ? money3(Number(doc.total_ttc || 0) - oldLineTtc) : 0
+          const totalHt = money3(lines.reduce((sum, line) => sum + Number(line.total_ht || 0), 0) + htExtra)
+          const totalTva = money3(lines.reduce((sum, line) => sum + Number(line.total_tva || 0), 0) + tvaExtra)
+          const totalTtc = Math.max(0, money3(lines.reduce((sum, line) => sum + Number(line.total_ttc || 0), 0) + ttcExtra))
+          const buckets = lines.reduce((acc, line) => {
+            const rate = Math.round(Number(line.tva_taux || 0))
+            if (rate === 7) { acc.ht7 += Number(line.total_ht || 0); acc.tva7 += Number(line.total_tva || 0) }
+            if (rate === 19) { acc.ht19 += Number(line.total_ht || 0); acc.tva19 += Number(line.total_tva || 0) }
+            return acc
+          }, { ht7: 0, tva7: 0, ht19: 0, tva19: 0 })
+          db.prepare(`DELETE FROM lignes_document WHERE document_id=?`).run(documentId)
+          const insertDocLine = db.prepare(`
+            INSERT INTO lignes_document (id,document_id,produit_id,designation,quantite,prix_unitaire,remise_pct,tva_taux,total_ht,total_tva,total_ttc,type_produit,numero_serie)
+            VALUES (@id,@document_id,@produit_id,@designation,@quantite,@prix_unitaire,@remise_pct,@tva_taux,@total_ht,@total_tva,@total_ttc,@type_produit,@numero_serie)
+          `)
+          for (const line of lines) insertDocLine.run(line)
+          insertedDocumentLines.set(documentId, lines)
+          const paid = String(doc.statut_paiement) === 'PAYE' ? totalTtc : Math.min(Number(doc.montant_paye || 0), totalTtc)
+          db.prepare(`UPDATE documents SET total_ht=?,total_tva=?,total_ttc=?,montant_paye=?,ht_7=?,tva_7=?,ht_19=?,tva_19=?,updated_at=? WHERE id=?`)
+            .run(totalHt, totalTva, totalTtc, paid, money3(buckets.ht7), money3(buckets.tva7), money3(buckets.ht19), money3(buckets.tva19), now, documentId)
+          updatedDocuments.push({ id: documentId, numero: String(doc.numero), type: String(doc.type_document) })
+        }
+
+        if (directDocument) replaceDocument(directDocument, saleLinesToDocumentLines(String(directDocument.id), newLines), true)
+        if (dailyDocument) {
+          let localDate = new Date(String(vente.created_at)).toLocaleDateString('en-CA')
+          try {
+            const storedDate = JSON.parse(String(dailyDocument.contenu_json)).local_date
+            if (/^\d{4}-\d{2}-\d{2}$/.test(storedDate)) localDate = storedDate
+          } catch { /* legacy daily invoice without metadata */ }
+          replaceDocument(dailyDocument, buildDailyInvoiceLines(String(dailyDocument.id), localDate), false)
+        }
+        for (const invoice of legacyInvoices) {
+          const fiscalLines = saleLinesToDocumentLines(String(invoice.id), newLines)
+          const ht = money3(fiscalLines.reduce((sum, line) => sum + Number(line.total_ht), 0))
+          const tva = money3(fiscalLines.reduce((sum, line) => sum + Number(line.total_tva), 0))
+          const ttc = money3(fiscalLines.reduce((sum, line) => sum + Number(line.total_ttc), 0))
+          db.prepare(`UPDATE factures_clients SET total_ht=?,total_tva=?,total_ttc=? WHERE id=?`).run(ht, tva, ttc, invoice.id)
+          updatedDocuments.push({ id: String(invoice.id), numero: String(invoice.numero), type: 'FACTURE_CLIENT_LEGACY' })
+        }
+      })()
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Échange impossible' }
+    }
+
+    for (const oldLine of oldLines) enqueueSync('lignes_vente', 'DELETE', { id: oldLine.id })
+    for (const line of newLines) enqueueSync('lignes_vente', 'INSERT', line)
+    const updatedSale = db.prepare(`SELECT * FROM ventes WHERE id=?`).get(venteId) as Record<string, unknown>
+    enqueueSync('ventes', 'UPDATE', updatedSale)
+    for (const [documentId, oldDocLines] of replacedDocumentLines) {
+      for (const line of oldDocLines) enqueueSync('lignes_document', 'DELETE', line)
+      for (const line of insertedDocumentLines.get(documentId) ?? []) enqueueSync('lignes_document', 'INSERT', line)
+      const docSnapshot = db.prepare(`SELECT * FROM documents WHERE id=?`).get(documentId) as Record<string, unknown>
+      enqueueSync('documents', 'UPDATE', docSnapshot)
+    }
+    for (const invoice of legacyInvoices) {
+      const snapshot = db.prepare(`SELECT * FROM factures_clients WHERE id=?`).get(invoice.id) as Record<string, unknown>
+      enqueueSync('factures_clients', 'UPDATE', snapshot)
+    }
+    for (const productId of touchedProducts) enqueueProductSnapshot(productId)
+    addActivityLog({
+      shift_id: vente.shift_id as string, operateur: String(payload.operateur ?? vente.operateur_nom ?? 'superadmin'),
+      action: 'SALE_EXCHANGED', montant: Math.abs(difference),
+      details: { vente_id: venteId, numero: vente.numero, old_total: oldTotal, new_total: newTotal, difference, returned: returnedSummary, replacements: replacementSummary, updated_documents: updatedDocuments },
+    })
+    return { success: true, oldTotal, newTotal, difference, updatedDocuments }
+  })
+
   // ── Ventes: Cancel ─────────────────────────────────────────────────────────
   ipcMain.handle('ventes:annuler', (_e, id: string, data: Record<string, unknown>) => {
     const now = new Date().toISOString()

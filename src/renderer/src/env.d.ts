@@ -107,6 +107,14 @@ interface Window {
     ventesGetLignes: (venteId: string) => Promise<unknown[]>
     ventesGetLastNumber: (prefix: string) => Promise<number>
     ventesListFreeReasons?: () => Promise<string[]>
+    ventesExchange: (venteId: string, data: unknown) => Promise<{
+      success?: boolean
+      error?: string
+      oldTotal?: number
+      newTotal?: number
+      difference?: number
+      updatedDocuments?: Array<{ id: string; numero: string; type: string }>
+    }>
 
     // Factures clients
     facturesClientsList: (filters?: unknown) => Promise<unknown[]>
