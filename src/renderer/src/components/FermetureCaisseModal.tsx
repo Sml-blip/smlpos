@@ -194,7 +194,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-7xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden animate-slide-in">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -207,7 +207,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           </div>
         </div>
 
-        <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-5 items-start">
+        <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-[380px_minmax(0,1fr)] gap-4 lg:gap-5 items-start bg-slate-50/70">
           <div className={`lg:col-span-2 flex items-start gap-2 p-3 rounded-xl text-xs ${isMorningClosure ? 'bg-blue-50 border border-blue-200 text-blue-900' : 'bg-teal-50 border border-teal-200 text-teal-900'}`}>
             <FileText size={14} className="flex-shrink-0 mt-0.5" />
             <span>
@@ -216,7 +216,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           </div>
 
           {/* Shift info */}
-          <div className="bg-muted rounded-xl p-4">
+          <div className="lg:col-start-1 bg-white border border-border rounded-xl p-4 shadow-sm">
             <div className="flex items-center justify-between text-sm">
               <span className="text-text-secondary">Opérateur</span>
               <span className="font-semibold">{currentShift.operateur_nom}</span>
@@ -237,10 +237,10 @@ export default function FermetureCaisseModal({ onClose }: Props) {
 
           {/* Summary */}
           {loadingSummary ? (
-            <div className="text-center py-4 text-text-muted text-sm">Chargement du résumé...</div>
+            <div className="lg:col-start-2 text-center py-8 text-text-muted text-sm bg-white border border-border rounded-2xl">Chargement du rapport...</div>
           ) : summary && (
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Résumé du shift</h3>
+            <div className="lg:col-start-2 space-y-3 rounded-2xl border border-border bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent-700">Aperçu rapport en direct</p><h3 className="text-sm font-bold">Rapport de caisse {isMorningClosure ? 'Matin' : 'Soir'}</h3></div><span className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold text-text-secondary">Imprimable après clôture</span></div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-green-50 border border-green-200 rounded-xl p-3">
@@ -311,7 +311,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           )}
 
           {summary && (
-            <div className="lg:col-span-2 border border-border rounded-xl overflow-hidden">
+            <div className="lg:col-start-2 lg:col-span-1 lg:row-span-3 border border-border rounded-2xl overflow-hidden bg-white shadow-sm">
               <div className="flex items-center justify-between gap-3 px-4 py-3 bg-muted">
                 <div><h3 className="text-sm font-bold">Opérations détaillées du shift</h3><p className="text-xs text-text-secondary">Toutes les entrées et sorties, avec l’utilisateur responsable.</p></div>
                 <div className="flex gap-4 text-xs"><span className="text-green-700 font-semibold">Entrées {formatPrice(summary.moneyIn)}</span><span className="text-red-700 font-semibold">Sorties {formatPrice(summary.moneyOut)}</span></div>
@@ -326,7 +326,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           )}
 
           {/* Solde réel */}
-          <div>
+          <div className="lg:col-start-1 rounded-xl border border-border bg-white p-4 shadow-sm">
             <label className="block text-xs font-semibold text-text-secondary mb-1.5">
               Solde réel compté (optionnel)
             </label>
@@ -359,7 +359,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           </div>
 
           {/* Notes */}
-          <div>
+          <div className="lg:col-start-1 rounded-xl border border-border bg-white p-4 shadow-sm">
             <label className="block text-xs font-semibold text-text-secondary mb-1.5">Notes de clôture (optionnel)</label>
             <textarea
               value={notes}
@@ -371,7 +371,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
 
           {/* Confirmation warning */}
           {confirmed && (
-            <div className="lg:col-span-2 flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-800">
+            <div className="lg:col-start-1 flex items-center gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-800">
               <AlertCircle size={14} />
               Confirmez la fermeture de caisse. Cette action ne peut pas être annulée.
             </div>
