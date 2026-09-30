@@ -54,6 +54,8 @@ interface Window {
     shiftsGetToday: () => Promise<unknown[]>
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
     shiftsCountClosedToday?: () => Promise<number>
+    rapportsCaisseList: (filters?: unknown) => Promise<unknown[]>
+    rapportsCaisseGet: (id: string) => Promise<unknown>
 
     // Saved POS carts
     savedPaniersList: () => Promise<unknown[]>

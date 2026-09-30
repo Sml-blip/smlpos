@@ -1016,15 +1016,62 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('shifts:close', (_e, id, data) => {
-    const stmt = db.prepare(`
-      UPDATE shifts SET ended_at=@ended_at, solde_theorique=@solde_theorique, notes_cloture=@notes_cloture
-      WHERE id=@id
-    `)
-    const result = stmt.run({ id, ...data })
-    addActivityLog({ shift_id: id, action: 'SHIFT_CLOSED', details: data })
-    enqueueSync('shifts', 'UPDATE', { id, ...data })
-    return result
+    const shift = db.prepare(`SELECT * FROM shifts WHERE id=?`).get(id) as Record<string, unknown> | undefined
+    if (!shift) throw new Error('Shift introuvable')
+    const endedAt = String(data.ended_at ?? new Date().toISOString())
+    const closeData = {
+      id,
+      ended_at: endedAt,
+      solde_theorique: money3(data.solde_theorique),
+      notes_cloture: data.notes_cloture ?? null,
+    }
+    const reportInput = data.rapport && typeof data.rapport === 'object' ? data.rapport as Record<string, unknown> : null
+    let savedReport: Record<string, unknown> | null = null
+
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE shifts SET ended_at=@ended_at, solde_theorique=@solde_theorique, notes_cloture=@notes_cloture
+        WHERE id=@id
+      `).run(closeData)
+      if (reportInput) {
+        const existing = db.prepare(`SELECT * FROM rapports_caisse WHERE shift_id=?`).get(id) as Record<string, unknown> | undefined
+        const dateJournal = new Date(endedAt).toLocaleDateString('en-CA')
+        const sessionType = reportInput.session_type === 'MATIN' ? 'MATIN' : 'SOIR'
+        const sequence = existing ? 1 : ((db.prepare(`SELECT COUNT(*) AS count FROM rapports_caisse WHERE date_journal=? AND session_type=?`).get(dateJournal, sessionType) as { count: number }).count + 1)
+        const numero = String(existing?.numero ?? `RAP-${dateJournal.replace(/-/g, '')}-${sessionType === 'MATIN' ? 'M' : 'S'}-${String(sequence).padStart(2, '0')}`)
+        const soldeReel = reportInput.solde_reel === null || reportInput.solde_reel === undefined ? null : money3(reportInput.solde_reel)
+        const report = {
+          id: String(existing?.id ?? randomUUID()), numero, shift_id: id, date_journal: dateJournal, session_type: sessionType,
+          operateur: String(shift.operateur_nom ?? reportInput.operateur ?? '—'), started_at: String(shift.started_at), ended_at: endedAt,
+          fond_de_caisse: money3(shift.fond_de_caisse), total_entrees: money3(reportInput.total_entrees), total_sorties: money3(reportInput.total_sorties),
+          solde_theorique: money3(data.solde_theorique), solde_reel: soldeReel,
+          ecart: soldeReel === null ? null : money3(soldeReel - money3(data.solde_theorique)), notes: data.notes_cloture ?? null,
+          summary_json: JSON.stringify(reportInput.summary ?? {}), operations_json: JSON.stringify(reportInput.operations ?? []),
+          created_at: String(existing?.created_at ?? endedAt),
+        }
+        db.prepare(`
+          INSERT INTO rapports_caisse (id,numero,shift_id,date_journal,session_type,operateur,started_at,ended_at,fond_de_caisse,total_entrees,total_sorties,solde_theorique,solde_reel,ecart,notes,summary_json,operations_json,created_at)
+          VALUES (@id,@numero,@shift_id,@date_journal,@session_type,@operateur,@started_at,@ended_at,@fond_de_caisse,@total_entrees,@total_sorties,@solde_theorique,@solde_reel,@ecart,@notes,@summary_json,@operations_json,@created_at)
+          ON CONFLICT(shift_id) DO UPDATE SET ended_at=excluded.ended_at,total_entrees=excluded.total_entrees,total_sorties=excluded.total_sorties,solde_theorique=excluded.solde_theorique,solde_reel=excluded.solde_reel,ecart=excluded.ecart,notes=excluded.notes,summary_json=excluded.summary_json,operations_json=excluded.operations_json
+        `).run(report)
+        savedReport = report
+      }
+    })()
+    addActivityLog({ shift_id: id, operateur: String(shift.operateur_nom ?? ''), action: 'SHIFT_CLOSED', details: { ...closeData, rapport_numero: (savedReport as Record<string, unknown> | null)?.numero } })
+    enqueueSync('shifts', 'UPDATE', closeData)
+    return { success: true, report: savedReport }
   })
+
+  ipcMain.handle('rapportsCaisse:list', (_e, filters: { dateFrom?: string; dateTo?: string } = {}) => {
+    let sql = `SELECT * FROM rapports_caisse WHERE 1=1`
+    const params: string[] = []
+    if (filters.dateFrom) { sql += ` AND date_journal>=?`; params.push(filters.dateFrom) }
+    if (filters.dateTo) { sql += ` AND date_journal<=?`; params.push(filters.dateTo) }
+    sql += ` ORDER BY date_journal DESC, CASE session_type WHEN 'MATIN' THEN 1 ELSE 2 END, ended_at DESC`
+    return db.prepare(sql).all(...params)
+  })
+
+  ipcMain.handle('rapportsCaisse:get', (_e, id: string) => db.prepare(`SELECT * FROM rapports_caisse WHERE id=?`).get(id))
 
   ipcMain.handle('shifts:getActive', () => {
     return db.prepare(`

@@ -6,7 +6,8 @@ import * as XLSX from 'xlsx'
 import { format } from 'date-fns'
 import { cn, formatPrice } from '../../lib/utils'
 import { usePrint } from '../../lib/usePrint'
-import { printLabelHtml } from '../../lib/nativePrint'
+import { printFullHtmlDocument, printLabelHtml } from '../../lib/nativePrint'
+import { buildBalanceReport, saveBalanceReport, type ReportRow } from '../../lib/reportPdf'
 import { loadData, runAction } from '../../lib/apiCall'
 import { showToast } from '../../lib/toast'
 import DocumentPrintModal from '../historique/DocumentPrintModal'
@@ -21,7 +22,7 @@ import { wrapPrintHtml } from '../../lib/printHtml'
 import {
   FileText, FileDown, Download, Search, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
-  Ban, PackageCheck, Edit2
+  Ban, PackageCheck, Edit2, CalendarDays, ChevronLeft, ChevronRight, Sun, Moon
 } from 'lucide-react'
 
 const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F', 'AVOIR'])
@@ -29,7 +30,33 @@ const ACHAT_PRINT_TYPES = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
 
 const api = window.api
 
-type SubTab = 'TOUS' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'AVOIR'
+type SubTab = 'TOUS' | 'RAPPORT_CAISSE' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'AVOIR'
+
+interface CashReportRow {
+  id: string; numero: string; shift_id: string; date_journal: string; session_type: 'MATIN' | 'SOIR'; operateur: string
+  started_at: string; ended_at: string; fond_de_caisse: number; total_entrees: number; total_sorties: number
+  solde_theorique: number; solde_reel?: number | null; ecart?: number | null; notes?: string | null
+  summary_json: string; operations_json: string; created_at: string
+}
+
+function reportOperations(report: CashReportRow): Array<{ id: string; date: string; type: string; direction: 'ENTREE' | 'SORTIE'; amount: number; operator: string; note: string }> {
+  try {
+    const parsed = JSON.parse(report.operations_json || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
+function reportPrintData(report: CashReportRow) {
+  const operations = reportOperations(report)
+  const subject = `${report.numero} · ${report.operateur || '—'} · ${report.session_type === 'MATIN' ? 'Matin' : 'Soir'} · ${format(new Date(report.ended_at), 'dd/MM/yyyy HH:mm')}`
+  const boxes: Array<[string, string]> = [
+    ['Fond de caisse', formatPrice(report.fond_de_caisse)], ['Total entrées', formatPrice(report.total_entrees)],
+    ['Total sorties', formatPrice(report.total_sorties)], ['Solde théorique', formatPrice(report.solde_theorique)],
+    ['Solde réel', report.solde_reel == null ? 'Non compté' : formatPrice(report.solde_reel)], ['Écart', report.ecart == null ? '—' : formatPrice(report.ecart)],
+  ]
+  const rows: ReportRow[] = operations.map(operation => ({ date: operation.date, type: `${operation.direction === 'ENTREE' ? 'Entrée' : 'Sortie'} · ${operation.type}`, amount: operation.direction === 'SORTIE' ? -operation.amount : operation.amount, operator: operation.operator, note: operation.note }))
+  return { subject, boxes, rows, operations }
+}
 
 interface DocRow {
   id: string
@@ -156,6 +183,7 @@ const STATUT_CONFIG: Record<string, { label: string; cls: string }> = {
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'TOUS', label: 'Tous' },
+  { id: 'RAPPORT_CAISSE', label: 'Rapports de caisse' },
   { id: 'FACTURE_VENTE', label: 'Factures Vente' },
   { id: 'FACTURE_JOURNALIERE_F', label: 'Facture Journalière F' },
   { id: 'DEVIS', label: 'Devis' },
@@ -374,10 +402,53 @@ function ExcelPreviewModal({ rows: initialRows, columns, title: initialTitle, fi
   )
 }
 
+function CashReportsCalendar({ reports, month, onMonthChange, onOpen }: { reports: CashReportRow[]; month: string; onMonthChange: (month: string) => void; onOpen: (report: CashReportRow) => void }) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  const first = new Date(year, monthNumber - 1, 1)
+  const days = new Date(year, monthNumber, 0).getDate()
+  const mondayOffset = (first.getDay() + 6) % 7
+  const cells = Array.from({ length: Math.ceil((mondayOffset + days) / 7) * 7 }, (_, index) => {
+    const day = index - mondayOffset + 1
+    return day >= 1 && day <= days ? day : null
+  })
+  const moveMonth = (delta: number) => {
+    const next = new Date(year, monthNumber - 1 + delta, 1)
+    onMonthChange(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`)
+  }
+  const byDate = new Map<string, CashReportRow[]>()
+  for (const report of reports) byDate.set(report.date_journal, [...(byDate.get(report.date_journal) ?? []), report])
+
+  return <div className="h-full overflow-auto p-4">
+    <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-white px-4 py-3">
+      <div><h3 className="flex items-center gap-2 font-bold"><CalendarDays size={16}/> Rapports matin & soir</h3><p className="text-xs text-text-muted">Chaque clôture est conservée avec ses opérations et son utilisateur.</p></div>
+      <div className="flex items-center gap-2"><button onClick={() => moveMonth(-1)} className="rounded-lg border border-border p-2"><ChevronLeft size={15}/></button><span className="min-w-36 text-center text-sm font-bold capitalize">{first.toLocaleDateString('fr-TN', {month:'long',year:'numeric'})}</span><button onClick={() => moveMonth(1)} className="rounded-lg border border-border p-2"><ChevronRight size={15}/></button></div>
+    </div>
+    <div className="grid grid-cols-7 overflow-hidden rounded-xl border border-border bg-white">
+      {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(day => <div key={day} className="border-b border-border bg-muted px-2 py-2 text-center text-[10px] font-bold uppercase text-text-secondary">{day}</div>)}
+      {cells.map((day, index) => {
+        const date = day ? `${year}-${String(monthNumber).padStart(2,'0')}-${String(day).padStart(2,'0')}` : ''
+        const dayReports = day ? byDate.get(date) ?? [] : []
+        return <div key={index} className="min-h-28 border-b border-r border-border p-1.5 last:border-r-0">
+          {day && <><div className="mb-1 text-[10px] font-bold text-text-muted">{day}</div><div className="space-y-1">{dayReports.map(report => <button key={report.id} onClick={() => onOpen(report)} className={cn('w-full rounded-lg border p-2 text-left transition hover:shadow-sm', report.session_type === 'MATIN' ? 'border-amber-200 bg-amber-50' : 'border-indigo-200 bg-indigo-50')}><div className="flex items-center gap-1 text-[10px] font-bold">{report.session_type === 'MATIN' ? <Sun size={11} className="text-amber-600"/> : <Moon size={11} className="text-indigo-600"/>}{report.session_type === 'MATIN' ? 'Matin' : 'Soir'}</div><div className="mt-0.5 truncate text-[9px] text-text-muted">{report.operateur}</div><div className="font-price text-[10px] font-bold">{formatPrice(report.solde_theorique)}</div></button>)}</div></>}
+        </div>
+      })}
+    </div>
+  </div>
+}
+
+function CashReportPreview({ report, onClose }: { report: CashReportRow; onClose: () => void }) {
+  const data = reportPrintData(report)
+  const html = buildBalanceReport(`Rapport de caisse ${report.session_type === 'MATIN' ? 'Matin' : 'Soir'}`, data.subject, data.boxes, data.rows)
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold">{report.numero} · {report.session_type === 'MATIN' ? 'Rapport matin' : 'Rapport soir'}</h3><p className="text-xs text-text-muted">{report.operateur} · {format(new Date(report.started_at), 'HH:mm')} → {format(new Date(report.ended_at), 'HH:mm')}</p></div><button onClick={onClose}><X size={18}/></button></div><div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-6">{data.boxes.map(([label,value]) => <div key={label} className="rounded-xl border border-border bg-muted p-2"><p className="text-[9px] uppercase text-text-muted">{label}</p><p className="mt-1 font-price text-xs font-bold">{value}</p></div>)}</div><div className="min-h-0 flex-1 overflow-auto px-4 pb-4"><table className="w-full text-xs"><thead className="sticky top-0 bg-muted"><tr><th className="p-2 text-left">Date</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Note</th></tr></thead><tbody>{data.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2 whitespace-nowrap">{format(new Date(operation.date), 'dd/MM HH:mm')}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table></div><div className="flex justify-end gap-2 border-t border-border p-4"><button onClick={onClose} className="rounded-xl bg-muted px-4 py-2 text-xs font-bold">Fermer</button><button onClick={() => void printFullHtmlDocument(html, {pageSize:'A4',printKind:'document'})} className="flex items-center gap-1.5 rounded-xl border border-border px-4 py-2 text-xs font-bold"><Printer size={13}/> Imprimer</button><button onClick={() => void saveBalanceReport(`Rapport de caisse ${report.session_type}`, data.subject, data.boxes, data.rows, `${report.numero}.pdf`).then(ok => showToast(ok ? 'success' : 'error', ok ? 'Rapport PDF enregistré' : 'Export PDF annulé ou impossible'))} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-4 py-2 text-xs font-bold text-red-700"><FileDown size={13}/> PDF</button></div></div></div>
+}
+
 // ── Main DocumentsTab ──────────────────────────────────────────────────────────
 export default function DocumentsTab() {
   const [subTab, setSubTab] = useState<SubTab>('TOUS')
   const [docs, setDocs] = useState<DocRow[]>([])
+  const [cashReports, setCashReports] = useState<CashReportRow[]>([])
+  const [calendarMonth, setCalendarMonth] = useState(format(new Date(), 'yyyy-MM'))
+  const [previewCashReport, setPreviewCashReport] = useState<CashReportRow | null>(null)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -395,18 +466,25 @@ export default function DocumentsTab() {
   const [showPinForEdit, setShowPinForEdit] = useState<{ mode: 'vente' | 'achat'; id: string; numero: string } | null>(null)
 
   const load = useCallback(async () => {
+    if (subTab === 'RAPPORT_CAISSE') {
+      const [year, month] = calendarMonth.split('-').map(Number)
+      const monthEnd = new Date(year, month, 0).getDate()
+      const result = await loadData('Chargement rapports de caisse', () => api.rapportsCaisseList({ dateFrom: `${calendarMonth}-01`, dateTo: `${calendarMonth}-${String(monthEnd).padStart(2, '0')}` }) as Promise<CashReportRow[]>, { setLoading })
+      if (result) setCashReports(result)
+      return
+    }
     const filters: Record<string, unknown> = {}
     if (subTab !== 'TOUS') filters.type_document = subTab
     if (dateFrom) filters.dateFrom = dateFrom
     if (dateTo) filters.dateTo = dateTo
     const result = await loadData('Chargement documents', () => api.documentsListAll(filters) as Promise<DocRow[]>, { setLoading })
     if (result) setDocs(result)
-  }, [subTab, dateFrom, dateTo])
+  }, [subTab, dateFrom, dateTo, calendarMonth])
 
   useEffect(() => { load() }, [load])
 
   const tabFiltered = useMemo(() => {
-    if (subTab === 'TOUS') return docs
+    if (subTab === 'TOUS' || subTab === 'RAPPORT_CAISSE') return docs
     return docs.filter(d => d.type_document === subTab)
   }, [docs, subTab])
 
@@ -552,15 +630,15 @@ export default function DocumentsTab() {
           <button onClick={load} disabled={loading} className="p-1.5 text-text-muted hover:text-text-primary rounded-lg hover:bg-muted">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
-          <button onClick={exportAchats} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold">
+          {subTab !== 'RAPPORT_CAISSE' && <button onClick={exportAchats} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold">
             <Download size={13} /> Export Achats
-          </button>
-          <button onClick={exportVentes} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold">
+          </button>}
+          {subTab !== 'RAPPORT_CAISSE' && <button onClick={exportVentes} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold">
             <Download size={13} /> Export Ventes
-          </button>
-          <button onClick={() => handlePrintTable()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
+          </button>}
+          {subTab !== 'RAPPORT_CAISSE' && <button onClick={() => handlePrintTable()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
             <Printer size={13} /> Imprimer
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -577,7 +655,7 @@ export default function DocumentsTab() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 px-4 py-2 bg-white border-b border-border flex-shrink-0">
+      {subTab !== 'RAPPORT_CAISSE' && <div className="flex items-center gap-3 px-4 py-2 bg-white border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-1.5 bg-muted flex-1 max-w-xs">
           <Search size={13} className="text-text-muted" />
           <input value={search} onChange={e => setSearch(e.target.value)} className="flex-1 bg-transparent text-xs outline-none" placeholder="Rechercher n°, client, fournisseur..." />
@@ -586,10 +664,10 @@ export default function DocumentsTab() {
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-border rounded-lg px-3 py-1.5 text-xs outline-none focus:border-accent-500" placeholder="Au" />
         {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo('') }} className="text-text-muted hover:text-danger"><X size={14} /></button>}
         <span className="ml-auto text-xs text-text-muted">{filtered.length} doc(s)</span>
-      </div>
+      </div>}
 
       {/* Table */}
-      <div ref={printTableRef} className="flex-1 overflow-auto px-4 py-2">
+      {subTab === 'RAPPORT_CAISSE' ? <div className="min-h-0 flex-1"><CashReportsCalendar reports={cashReports} month={calendarMonth} onMonthChange={setCalendarMonth} onOpen={setPreviewCashReport}/></div> : <div ref={printTableRef} className="flex-1 overflow-auto px-4 py-2">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-muted border-b border-border">
             <tr>
@@ -665,7 +743,7 @@ export default function DocumentsTab() {
             )}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {/* Document preview modal */}
       {previewDoc && (
@@ -698,6 +776,8 @@ export default function DocumentsTab() {
           </div>
         </div>
       )}
+
+      {previewCashReport && <CashReportPreview report={previewCashReport} onClose={() => setPreviewCashReport(null)} />}
 
       {excelModal && (
         <ExcelPreviewModal

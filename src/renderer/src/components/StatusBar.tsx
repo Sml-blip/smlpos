@@ -3,8 +3,6 @@ import { useAppStore } from '../store/appStore'
 import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText, BellRing } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
-import DocumentPrintModal from '../modules/historique/DocumentPrintModal'
-import type { Document } from '../lib/types'
 import { getPendingCount, getFailedCount, processSyncQueue, pullSyncFromRemote, resetFailedItems, purgeFailedItems } from '../lib/sync'
 import { isSupabaseEnabled } from '../lib/supabase'
 import { runAction } from '../lib/apiCall'
@@ -29,7 +27,6 @@ export default function StatusBar() {
   const { isOnline, currentShift } = useAppStore()
   const [time, setTime] = useState(new Date())
   const [showFermeture, setShowFermeture] = useState(false)
-  const [dailyInvoicePreview, setDailyInvoicePreview] = useState<Document | null>(null)
   const [pendingSync, setPendingSync] = useState(0)
   const [failedSync, setFailedSync] = useState(0)
   const [syncing, setSyncing] = useState(false)
@@ -333,15 +330,7 @@ export default function StatusBar() {
       {showFermeture && (
         <FermetureCaisseModal
           onClose={() => setShowFermeture(false)}
-          onInvoiceCreated={async documentId => {
-            const doc = await api.documentsGet?.(documentId) as Document | null
-            if (doc) setDailyInvoicePreview(doc)
-          }}
         />
-      )}
-
-      {dailyInvoicePreview && (
-        <DocumentPrintModal doc={dailyInvoicePreview} onClose={() => setDailyInvoicePreview(null)} />
       )}
 
       {showPinnedShiftReminder && currentShift && (

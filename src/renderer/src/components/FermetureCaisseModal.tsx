@@ -25,6 +25,14 @@ interface ShiftSummary {
   net: number
 }
 
+interface SavedCashReport {
+  id: string
+  numero: string
+  session_type: 'MATIN' | 'SOIR'
+  date_journal: string
+  ended_at: string
+}
+
 const MODE_LABELS: Record<string, string> = {
   ESPECES: 'Espèces',
   CARTE: 'Carte',
@@ -34,10 +42,9 @@ const MODE_LABELS: Record<string, string> = {
 
 interface Props {
   onClose: () => void
-  onInvoiceCreated?: (documentId: string) => void | Promise<void>
 }
 
-export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Props) {
+export default function FermetureCaisseModal({ onClose }: Props) {
   const { currentShift, setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
   const [summary, setSummary] = useState<ShiftSummary | null>(null)
   const [soldeCaisse, setSoldeCaisse] = useState('')
@@ -46,6 +53,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
   const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
+  const [savedReport, setSavedReport] = useState<SavedCashReport | null>(null)
 
   useEffect(() => {
     if (!currentShift) return
@@ -118,46 +126,70 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
   const handleClose = async () => {
     if (closedShiftsToday === null) return
     if (!confirmed) { setConfirmed(true); return }
-    let dailyInvoice: { documentId?: string; numero?: string; skipped?: boolean; reason?: string } | undefined
     const succeeded = await runAction('Fermeture de caisse', async () => {
       const now = new Date().toISOString()
-      await api.shiftsClose(currentShift.id, {
+      const result = await api.shiftsClose(currentShift.id, {
         ended_at: now,
         solde_theorique: soldeTheorique,
         notes_cloture: notes || null,
+        rapport: {
+          session_type: isMorningClosure ? 'MATIN' : 'SOIR',
+          operateur: currentShift.operateur_nom,
+          total_entrees: summary?.moneyIn ?? totalEncaisse,
+          total_sorties: summary?.moneyOut ?? (summary?.sorties.total ?? 0),
+          solde_reel: soldeCaisse ? soldeReel : null,
+          summary,
+          operations: summary?.operations ?? [],
+        },
       })
-
-      if (!isMorningClosure) {
-        const facture = await api.documentsCreateDailyFactureF?.() as {
-          success?: boolean
-          skipped?: boolean
-          documentId?: string
-          numero?: string
-          lineCount?: number
-          reason?: string
-          error?: string
-        } | undefined
-        if (!facture?.success) throw new Error(facture?.error || 'La facture Client Passager n’a pas pu être créée')
-        dailyInvoice = facture
-        if (!facture.skipped && facture.documentId) {
-          await onInvoiceCreated?.(facture.documentId)
-        }
-      }
-
       await api.caisseInterneTransferShift(currentShift.id)
-      setCurrentShift(null)
-      setCurrentOperateur(null)
-      setShowShiftModal(true)
-      onClose()
+      const report = (result as { report?: SavedCashReport } | undefined)?.report
+      if (!report) throw new Error('Le rapport de caisse n’a pas été enregistré')
+      setSavedReport(report)
     }, { setLoading })
     if (succeeded) {
-      playFeedback(dailyInvoice?.documentId ? 'invoice' : 'success')
-      showToast('success', isMorningClosure
-        ? 'Caisse du matin fermée — aucune facture créée. Ouvrez maintenant la caisse du soir.'
-        : dailyInvoice?.documentId
-        ? `Caisse fermée — facture Client Passager ${dailyInvoice.numero ?? ''} créée`
-        : 'Caisse fermée — aucune vente F non facturée à regrouper')
+      playFeedback('success')
+      showToast('success', `Caisse ${isMorningClosure ? 'du matin' : 'du soir'} fermée — rapport enregistré`)
     }
+  }
+
+  const finishClosure = () => {
+    setCurrentShift(null)
+    setCurrentOperateur(null)
+    setShowShiftModal(true)
+    onClose()
+  }
+
+  if (savedReport) {
+    return (
+      <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50 p-3 sm:p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[calc(100vh-2rem)] overflow-hidden animate-slide-in grid grid-cols-1 lg:grid-cols-[320px_1fr]">
+          <aside className="bg-gradient-to-b from-emerald-600 to-teal-700 text-white p-6 flex flex-col">
+            <CheckCircle size={42} className="mb-4" />
+            <p className="text-xs font-bold uppercase tracking-widest text-emerald-100">Clôture terminée</p>
+            <h2 className="text-2xl font-black mt-1">Rapport {savedReport.session_type === 'MATIN' ? 'Matin' : 'Soir'}</h2>
+            <p className="font-mono text-sm mt-2 text-emerald-50">{savedReport.numero}</p>
+            <div className="mt-6 space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-emerald-100">Entrées</span><strong>{formatPrice(summary?.moneyIn ?? 0)}</strong></div>
+              <div className="flex justify-between"><span className="text-emerald-100">Sorties</span><strong>{formatPrice(summary?.moneyOut ?? 0)}</strong></div>
+              <div className="flex justify-between border-t border-white/25 pt-2"><span>Solde théorique</span><strong>{formatPrice(soldeTheorique)}</strong></div>
+            </div>
+            <p className="mt-auto pt-6 text-xs text-emerald-100">Le rapport est conservé dans Documents → Rapports de caisse. La facture journalière reste une fonction indépendante.</p>
+            <button onClick={finishClosure} className="mt-4 rounded-xl bg-white text-teal-800 py-2.5 font-bold">Terminer</button>
+          </aside>
+          <section className="min-h-0 flex flex-col">
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <div><h3 className="font-bold">Aperçu imprimable</h3><p className="text-xs text-text-muted">{new Date(savedReport.ended_at).toLocaleString('fr-TN')}</p></div>
+              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={finishClosure} className="p-2"><X size={18}/></button></div>
+            </div>
+            <div className="overflow-auto p-5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">{[['Fond', currentShift.fond_de_caisse], ['Entrées', summary?.moneyIn ?? 0], ['Sorties', summary?.moneyOut ?? 0], ['Solde', soldeTheorique]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>
+              <table className="w-full text-xs"><thead><tr className="bg-muted"><th className="p-2 text-left">Heure</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Détail</th></tr></thead><tbody>{summary?.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2">{new Date(operation.date).toLocaleTimeString('fr-TN', {hour:'2-digit',minute:'2-digit'})}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table>
+            </div>
+          </section>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -179,11 +211,7 @@ export default function FermetureCaisseModal({ onClose, onInvoiceCreated }: Prop
           <div className={`lg:col-span-2 flex items-start gap-2 p-3 rounded-xl text-xs ${isMorningClosure ? 'bg-blue-50 border border-blue-200 text-blue-900' : 'bg-teal-50 border border-teal-200 text-teal-900'}`}>
             <FileText size={14} className="flex-shrink-0 mt-0.5" />
             <span>
-              {isMorningClosure ? (
-                <><strong>Clôture du matin</strong> — aucune facture journalière ne sera créée. Les ventes restent disponibles pour la facture complète du soir.</>
-              ) : (
-                <><strong>Facture complète de la journée</strong> — toutes les ventes <strong>F</strong> non encore facturées seront regroupées pour <strong>Client Passager</strong>. Les produits NF et ventes déjà converties sont exclus.</>
-              )}
+              <><strong>Rapport de caisse {isMorningClosure ? 'matin' : 'soir'}</strong> — il sera enregistré et affiché dans un aperçu imprimable. La facture journalière Client Passager est séparée et ne sera pas créée par cette clôture.</>
             </span>
           </div>
 

@@ -196,6 +196,8 @@ const mockApi = {
 
   shiftsOpen: async (shift: unknown) => ({ ...SHIFT_ACTIVE, ...(shift as object) }),
   shiftsClose: async () => ({ success: true }),
+  rapportsCaisseList: async () => [],
+  rapportsCaisseGet: async () => null,
   appVersion: async () => '1.9.5',
   invoiceScanChooseImage: async () => ({ success: false, error: 'Import disponible dans l’application Windows.' }),
   invoiceScanAcquireWia: async () => ({ success: false, error: 'Scanner WIA disponible dans l’application Windows.' }),

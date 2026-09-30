@@ -361,6 +361,30 @@ export function initDatabase() {
       created_at    TEXT DEFAULT (datetime('now'))
     );
 
+    -- Immutable morning/evening cash-close snapshots.  The daily sales invoice
+    -- is intentionally independent from these operational reports.
+    CREATE TABLE IF NOT EXISTS rapports_caisse (
+      id                TEXT PRIMARY KEY,
+      numero            TEXT UNIQUE NOT NULL,
+      shift_id          TEXT UNIQUE NOT NULL REFERENCES shifts(id),
+      date_journal      TEXT NOT NULL,
+      session_type      TEXT NOT NULL CHECK(session_type IN ('MATIN','SOIR')),
+      operateur         TEXT,
+      started_at        TEXT NOT NULL,
+      ended_at          TEXT NOT NULL,
+      fond_de_caisse    REAL NOT NULL DEFAULT 0,
+      total_entrees     REAL NOT NULL DEFAULT 0,
+      total_sorties     REAL NOT NULL DEFAULT 0,
+      solde_theorique   REAL NOT NULL DEFAULT 0,
+      solde_reel        REAL,
+      ecart             REAL,
+      notes             TEXT,
+      summary_json      TEXT NOT NULL DEFAULT '{}',
+      operations_json   TEXT NOT NULL DEFAULT '[]',
+      created_at        TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_rapports_caisse_date ON rapports_caisse(date_journal DESC, session_type);
+
     -- ── Sync Queue (offline) ─────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS sync_queue (
       id         TEXT PRIMARY KEY,

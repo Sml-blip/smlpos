@@ -37,6 +37,8 @@ const api = {
   shiftsGetToday: () => ipcRenderer.invoke('shifts:getToday'),
   shiftsGetSummary: (shiftId: string) => ipcRenderer.invoke('shifts:getSummary', shiftId),
   shiftsCountClosedToday: () => ipcRenderer.invoke('shifts:countClosedToday'),
+  rapportsCaisseList: (filters?: unknown) => ipcRenderer.invoke('rapportsCaisse:list', filters),
+  rapportsCaisseGet: (id: string) => ipcRenderer.invoke('rapportsCaisse:get', id),
 
   // Saved POS carts (SQLite-backed, survives updates)
   savedPaniersList: () => ipcRenderer.invoke('savedPaniers:list'),
