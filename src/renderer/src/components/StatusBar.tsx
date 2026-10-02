@@ -105,7 +105,7 @@ export default function StatusBar() {
     lastAlarmAtRef.current = 0
   }, [currentShift?.id])
 
-  const isMorningShift = closedShiftsToday === 0
+  const isMorningShift = currentShift?.session_type ? currentShift.session_type === 'MATIN' : closedShiftsToday === 0
   const activeReminderTime = isMorningShift ? shiftReminderSettings.morningTime : shiftReminderSettings.eveningTime
   const shiftReminderTiming = reminderTiming(time, activeReminderTime)
   const snoozed = snoozedUntil > time.getTime()
@@ -355,7 +355,7 @@ export default function StatusBar() {
                 <p className="text-[11px] text-text-secondary mt-1 leading-relaxed">
                   Alerte prévue à <strong>{activeReminderTime}</strong>. {isMorningShift
                     ? 'La clôture du matin ne crée aucune facture.'
-                    : 'La clôture du soir crée la facture Client Passager complète de la journée.'}
+                    : 'La clôture du soir crée aussi le rapport Total journée. La facture journalière reste indépendante.'}
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-[10px] text-text-muted truncate">

@@ -21,7 +21,8 @@ import DocumentsTab from './modules/documents/DocumentsTab'
 import DemandesTab from './modules/demandes/DemandesTab'
 import {
   ShoppingCart, History, Package, LayoutDashboard, Truck,
-  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen, ClipboardList
+  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen, ClipboardList,
+  Eye, LockKeyhole, Play
 } from 'lucide-react'
 import { cn } from './lib/utils'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
@@ -55,7 +56,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
 
 export default function App() {
   const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur, currentShift,
-    setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
+    setCurrentShift, setCurrentOperateur, setShowShiftModal, previewMode, setPreviewMode } = useAppStore()
   const [showSplash, setShowSplash] = useState(true)
   const [locked, setLocked] = useState(false)
   const [currentPin, setCurrentPin] = useState('')
@@ -182,6 +183,17 @@ export default function App() {
     applyAgentTheme(loadAgentTheme(currentOperateur?.id))
   }, [currentOperateur?.id])
 
+  useEffect(() => {
+    if (!previewMode) return
+    const blockShortcuts = (event: KeyboardEvent) => {
+      if (event.key === 'Tab' || event.key.startsWith('Arrow') || event.key === 'PageDown' || event.key === 'PageUp' || event.key === 'Home' || event.key === 'End') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    window.addEventListener('keydown', blockShortcuts, true)
+    return () => window.removeEventListener('keydown', blockShortcuts, true)
+  }, [previewMode])
+
   return (
     <PrintManagerProvider>
     <div className="h-screen flex flex-col bg-surface overflow-hidden">
@@ -229,8 +241,39 @@ export default function App() {
         })}
       </div>
 
+      {previewMode && (
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-950">
+          <Eye size={15} className="text-blue-700"/>
+          <div className="min-w-0 flex-1"><strong>Mode aperçu · lecture seule</strong><span className="ml-2 text-blue-700">Vous pouvez consulter les écrans et faire défiler, aucune action ne sera exécutée.</span></div>
+          <button
+            type="button"
+            onClick={() => { setPreviewMode(false); setShowShiftModal(true) }}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 font-bold text-white hover:bg-blue-800"
+          >
+            <Play size={12}/> Ouvrir une caisse
+          </button>
+          <LockKeyhole size={14} className="text-blue-700"/>
+        </div>
+      )}
+
       {/* Content */}
-      <div key={activeTab} className="flex-1 overflow-hidden app-view-enter">
+      <div
+        key={activeTab}
+        className="flex-1 overflow-hidden app-view-enter"
+        onClickCapture={(event) => {
+          if (!previewMode) return
+          const target = event.target as HTMLElement
+          if (!target.closest('button,a,input,textarea,select,[contenteditable="true"]')) return
+          event.preventDefault()
+          event.stopPropagation()
+          showToast('info', 'Mode aperçu : action bloquée — ouvrez une caisse pour modifier.')
+        }}
+        onInputCapture={(event) => {
+          if (!previewMode) return
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+      >
         {activeTab === 'pos'            && <POSTab />}
         {activeTab === 'historique'     && <HistoriqueTab />}
         {activeTab === 'inventaire'     && <InventaireTab />}

@@ -1004,15 +1004,50 @@ function setupIpcHandlers() {
   })
 
   // ─── Shifts ──────────────────────────────────────────────────────────────────
+  const getTodayShiftRows = () => db.prepare(`
+    SELECT * FROM shifts
+    WHERE date(started_at, 'localtime') = date('now', 'localtime')
+    ORDER BY started_at ASC
+  `).all() as Array<Record<string, unknown>>
+
+  const getTodayShiftStatus = () => {
+    const shifts = getTodayShiftRows()
+    const active = shifts.find(row => !row.ended_at) ?? null
+    const labelled: Array<Record<string, unknown>> = shifts.map((row, index) => ({
+      ...row,
+      session_type: row.session_type === 'MATIN' || row.session_type === 'SOIR'
+        ? row.session_type
+        : (index === 0 ? 'MATIN' : 'SOIR'),
+    }))
+    return {
+      shifts: labelled,
+      openedCount: shifts.length,
+      closedCount: shifts.filter(row => !!row.ended_at).length,
+      active,
+      morningDone: labelled.some(row => row.session_type === 'MATIN' && !!row.ended_at),
+      eveningDone: labelled.some(row => row.session_type === 'SOIR' && !!row.ended_at),
+      nextSession: shifts.length === 0 ? 'MATIN' : shifts.length === 1 ? 'SOIR' : null,
+      canOpen: !active && shifts.length < 2,
+    }
+  }
+
   ipcMain.handle('shifts:open', (_e, shift) => {
+    const status = getTodayShiftStatus()
+    if (status.active) throw new Error('Une caisse est déjà ouverte.')
+    if (!status.canOpen || !status.nextSession) {
+      throw new Error('Les deux caisses de la journée (matin et soir) sont déjà terminées. Utilisez le mode aperçu.')
+    }
+    const shiftWithSession = { ...shift, session_type: status.nextSession }
     const stmt = db.prepare(`
-      INSERT INTO shifts (id, operateur_id, operateur_nom, fond_de_caisse, started_at)
-      VALUES (@id, @operateur_id, @operateur_nom, @fond_de_caisse, @started_at)
+      INSERT INTO shifts (id, operateur_id, operateur_nom, fond_de_caisse, started_at, session_type)
+      VALUES (@id, @operateur_id, @operateur_nom, @fond_de_caisse, @started_at, @session_type)
     `)
-    const result = stmt.run(shift)
-    addActivityLog({ shift_id: shift.id, operateur: shift.operateur_nom, action: 'SHIFT_OPENED', details: { fond_de_caisse: shift.fond_de_caisse } })
+    stmt.run(shiftWithSession)
+    addActivityLog({ shift_id: shift.id, operateur: shift.operateur_nom, action: 'SHIFT_OPENED', details: { fond_de_caisse: shift.fond_de_caisse, session_type: status.nextSession } })
+    // Keep cloud payload compatible with existing installations; session_type
+    // is a local scheduling guard and reports remain the synced authority.
     enqueueSync('shifts', 'INSERT', shift)
-    return result
+    return shiftWithSession
   })
 
   ipcMain.handle('shifts:close', (_e, id, data) => {
@@ -1036,7 +1071,9 @@ function setupIpcHandlers() {
       if (reportInput) {
         const existing = db.prepare(`SELECT * FROM rapports_caisse WHERE shift_id=?`).get(id) as Record<string, unknown> | undefined
         const dateJournal = new Date(endedAt).toLocaleDateString('en-CA')
-        const sessionType = reportInput.session_type === 'MATIN' ? 'MATIN' : 'SOIR'
+        const sessionType = shift.session_type === 'MATIN' || shift.session_type === 'SOIR'
+          ? String(shift.session_type)
+          : (reportInput.session_type === 'MATIN' ? 'MATIN' : 'SOIR')
         const sequence = existing ? 1 : ((db.prepare(`SELECT COUNT(*) AS count FROM rapports_caisse WHERE date_journal=? AND session_type=?`).get(dateJournal, sessionType) as { count: number }).count + 1)
         const numero = String(existing?.numero ?? `RAP-${dateJournal.replace(/-/g, '')}-${sessionType === 'MATIN' ? 'M' : 'S'}-${String(sequence).padStart(2, '0')}`)
         const soldeReel = reportInput.solde_reel === null || reportInput.solde_reel === undefined ? null : money3(reportInput.solde_reel)
@@ -1044,9 +1081,11 @@ function setupIpcHandlers() {
           id: String(existing?.id ?? randomUUID()), numero, shift_id: id, date_journal: dateJournal, session_type: sessionType,
           operateur: String(shift.operateur_nom ?? reportInput.operateur ?? '—'), started_at: String(shift.started_at), ended_at: endedAt,
           fond_de_caisse: money3(shift.fond_de_caisse), total_entrees: money3(reportInput.total_entrees), total_sorties: money3(reportInput.total_sorties),
-          solde_theorique: money3(data.solde_theorique), solde_reel: soldeReel,
-          ecart: soldeReel === null ? null : money3(soldeReel - money3(data.solde_theorique)), notes: data.notes_cloture ?? null,
-          summary_json: JSON.stringify(reportInput.summary ?? {}), operations_json: JSON.stringify(reportInput.operations ?? []),
+          // Cash reports are operational movement reports: the opening fund is
+          // metadata only and is never included in their balances.
+          solde_theorique: money3(money3(reportInput.total_entrees) - money3(reportInput.total_sorties)), solde_reel: soldeReel,
+          ecart: soldeReel === null ? null : money3(soldeReel - money3(money3(reportInput.total_entrees) - money3(reportInput.total_sorties))), notes: data.notes_cloture ?? null,
+          summary_json: JSON.stringify({ ...((reportInput.summary && typeof reportInput.summary === 'object') ? reportInput.summary as Record<string, unknown> : {}), balance_excludes_fund: true }), operations_json: JSON.stringify(reportInput.operations ?? []),
           created_at: String(existing?.created_at ?? endedAt),
         }
         db.prepare(`
@@ -1062,16 +1101,78 @@ function setupIpcHandlers() {
     return { success: true, report: savedReport }
   })
 
+  const normalizeCashReport = (row: Record<string, unknown>): Record<string, unknown> => {
+    let alreadyOutsideFund = false
+    try {
+      const summary = JSON.parse(String(row.summary_json || '{}')) as Record<string, unknown>
+      alreadyOutsideFund = summary.balance_excludes_fund === true
+    } catch { /* legacy row */ }
+    return {
+      ...row,
+      // Normalize historical snapshots too, so every report shown/printed is
+      // consistently outside the opening fund.
+      solde_theorique: money3(Number(row.total_entrees) - Number(row.total_sorties)),
+      solde_reel: row.solde_reel == null ? null : money3(Number(row.solde_reel) - (alreadyOutsideFund ? 0 : Number(row.fond_de_caisse || 0))),
+    }
+  }
+
+  const buildDailyCashReport = (date: string, rows: Array<Record<string, unknown>>) => {
+    const normalized = rows.map(normalizeCashReport)
+    const operations = normalized.flatMap(row => {
+      try { const parsed = JSON.parse(String(row.operations_json || '[]')); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
+    }).sort((a, b) => String(a?.date ?? '').localeCompare(String(b?.date ?? '')))
+    const operators = [...new Set(normalized.map(row => String(row.operateur || '')).filter(Boolean))]
+    const totalEntrees = money3(normalized.reduce((sum, row) => sum + Number(row.total_entrees || 0), 0))
+    const totalSorties = money3(normalized.reduce((sum, row) => sum + Number(row.total_sorties || 0), 0))
+    const realValues = normalized.filter(row => row.solde_reel != null)
+    const ecartValues = normalized.filter(row => row.ecart != null)
+    return {
+      id: `journee-${date}`,
+      numero: `RAP-${date.replace(/-/g, '')}-J`,
+      shift_id: normalized.map(row => String(row.shift_id)).join(','),
+      date_journal: date,
+      session_type: 'JOURNEE',
+      operateur: operators.join(' + ') || '—',
+      started_at: String(normalized[0]?.started_at ?? `${date}T00:00:00`),
+      ended_at: String(normalized[normalized.length - 1]?.ended_at ?? `${date}T23:59:59`),
+      fond_de_caisse: 0,
+      total_entrees: totalEntrees,
+      total_sorties: totalSorties,
+      solde_theorique: money3(totalEntrees - totalSorties),
+      solde_reel: realValues.length === normalized.length ? money3(realValues.reduce((sum, row) => sum + Number(row.solde_reel), 0)) : null,
+      ecart: ecartValues.length === normalized.length ? money3(ecartValues.reduce((sum, row) => sum + Number(row.ecart), 0)) : null,
+      notes: 'Synthèse automatique de la journée, hors fonds de caisse.',
+      summary_json: JSON.stringify({ reportCount: normalized.length }),
+      operations_json: JSON.stringify(operations),
+      created_at: String(normalized[normalized.length - 1]?.ended_at ?? new Date().toISOString()),
+    }
+  }
+
   ipcMain.handle('rapportsCaisse:list', (_e, filters: { dateFrom?: string; dateTo?: string } = {}) => {
     let sql = `SELECT * FROM rapports_caisse WHERE 1=1`
     const params: string[] = []
     if (filters.dateFrom) { sql += ` AND date_journal>=?`; params.push(filters.dateFrom) }
     if (filters.dateTo) { sql += ` AND date_journal<=?`; params.push(filters.dateTo) }
-    sql += ` ORDER BY date_journal DESC, CASE session_type WHEN 'MATIN' THEN 1 ELSE 2 END, ended_at DESC`
-    return db.prepare(sql).all(...params)
+    sql += ` ORDER BY date_journal DESC, CASE session_type WHEN 'MATIN' THEN 1 ELSE 2 END, ended_at ASC`
+    const reports = (db.prepare(sql).all(...params) as Array<Record<string, unknown>>).map(normalizeCashReport)
+    const byDate = new Map<string, Array<Record<string, unknown>>>()
+    for (const report of reports) byDate.set(String(report.date_journal), [...(byDate.get(String(report.date_journal)) ?? []), report])
+    const daily = [...byDate.entries()]
+      .filter(([, rows]) => rows.some(row => row.session_type === 'SOIR'))
+      .map(([date, rows]) => buildDailyCashReport(date, rows))
+    const rank: Record<string, number> = { MATIN: 1, SOIR: 2, JOURNEE: 3 }
+    return [...reports, ...daily].sort((a, b) => String(b.date_journal).localeCompare(String(a.date_journal)) || (rank[String(a.session_type)] ?? 4) - (rank[String(b.session_type)] ?? 4))
   })
 
-  ipcMain.handle('rapportsCaisse:get', (_e, id: string) => db.prepare(`SELECT * FROM rapports_caisse WHERE id=?`).get(id))
+  ipcMain.handle('rapportsCaisse:get', (_e, id: string) => {
+    if (id.startsWith('journee-')) {
+      const date = id.slice('journee-'.length)
+      const rows = db.prepare(`SELECT * FROM rapports_caisse WHERE date_journal=? ORDER BY ended_at ASC`).all(date) as Array<Record<string, unknown>>
+      return rows.some(row => row.session_type === 'SOIR') ? buildDailyCashReport(date, rows) : null
+    }
+    const row = db.prepare(`SELECT * FROM rapports_caisse WHERE id=?`).get(id) as Record<string, unknown> | undefined
+    return row ? normalizeCashReport(row) : null
+  })
 
   ipcMain.handle('shifts:getActive', () => {
     return db.prepare(`
@@ -1080,11 +1181,10 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('shifts:getToday', () => {
-    const today = new Date().toISOString().slice(0, 10)
-    return db.prepare(`
-      SELECT * FROM shifts WHERE started_at >= ? ORDER BY started_at DESC
-    `).all(today)
+    return getTodayShiftRows()
   })
+
+  ipcMain.handle('shifts:getTodayStatus', () => getTodayShiftStatus())
 
   ipcMain.handle('shifts:getSummary', (_e, shiftId: string) => {
     const ventes = db.prepare(`

@@ -6,7 +6,7 @@ import { showToast } from '../lib/toast'
 import { playFeedback } from '../lib/feedback'
 import { buildBalanceReport, saveBalanceReport } from '../lib/reportPdf'
 import { printFullHtmlDocument } from '../lib/nativePrint'
-import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, ArrowUpCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText, Download, Printer, RefreshCw } from 'lucide-react'
+import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, ArrowUpCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText, Download, Printer, RefreshCw, Eye, Play } from 'lucide-react'
 
 const api = window.api
 
@@ -45,7 +45,7 @@ interface Props {
 }
 
 export default function FermetureCaisseModal({ onClose }: Props) {
-  const { currentShift, setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
+  const { currentShift, setCurrentShift, setCurrentOperateur, setShowShiftModal, setPreviewMode } = useAppStore()
   const [summary, setSummary] = useState<ShiftSummary | null>(null)
   const [soldeCaisse, setSoldeCaisse] = useState('')
   const [notes, setNotes] = useState('')
@@ -86,19 +86,21 @@ export default function FermetureCaisseModal({ onClose }: Props) {
 
   // Services are cart lines already included in ventes.total; keep their card informational only.
   const totalEncaisse = summary ? summary.ventes.total + summary.reparations.total + (summary.creditsPercus?.total ?? 0) + (summary.avancesClients?.total ?? 0) + (summary.echanges?.entrees ?? 0) : 0
-  const soldeTheorique = currentShift.fond_de_caisse + totalEncaisse - (summary?.sorties.total ?? 0) - (summary?.echanges?.sorties ?? 0)
+  const reportNet = summary ? summary.moneyIn - summary.moneyOut : 0
+  const drawerExpected = currentShift.fond_de_caisse + reportNet
   const soldeReel = parseFloat(soldeCaisse.replace(',', '.')) || 0
-  const ecart = soldeCaisse ? soldeReel - soldeTheorique : null
-  const isMorningClosure = closedShiftsToday === 0
+  const soldeReelHorsFond = soldeCaisse ? soldeReel - currentShift.fond_de_caisse : null
+  const ecart = soldeCaisse ? soldeReel - drawerExpected : null
+  const isMorningClosure = currentShift.session_type ? currentShift.session_type === 'MATIN' : closedShiftsToday === 0
 
   const reportData = () => {
     if (!summary) return null
     const subject = `${currentShift.operateur_nom} · ${new Date(currentShift.started_at).toLocaleString('fr-TN')} → ${new Date().toLocaleString('fr-TN')}`
     const boxes: Array<[string, string]> = [
-      ['Fond de caisse', formatPrice(currentShift.fond_de_caisse)],
       ['Total entrées', formatPrice(summary.moneyIn)],
       ['Total sorties', formatPrice(summary.moneyOut)],
-      ['Solde théorique', formatPrice(soldeTheorique)],
+      ['Résultat hors fond', formatPrice(reportNet)],
+      ['Réel hors fond', soldeReelHorsFond == null ? 'Non compté' : formatPrice(soldeReelHorsFond)],
     ]
     const rows = summary.operations.map(operation => ({
       date: operation.date,
@@ -130,14 +132,16 @@ export default function FermetureCaisseModal({ onClose }: Props) {
       const now = new Date().toISOString()
       const result = await api.shiftsClose(currentShift.id, {
         ended_at: now,
-        solde_theorique: soldeTheorique,
+        // Keep the physical drawer value on the shift for backwards-compatible
+        // reconciliation; the attached report itself is always outside the fund.
+        solde_theorique: drawerExpected,
         notes_cloture: notes || null,
         rapport: {
           session_type: isMorningClosure ? 'MATIN' : 'SOIR',
           operateur: currentShift.operateur_nom,
           total_entrees: summary?.moneyIn ?? totalEncaisse,
           total_sorties: summary?.moneyOut ?? (summary?.sorties.total ?? 0),
-          solde_reel: soldeCaisse ? soldeReel : null,
+          solde_reel: soldeReelHorsFond,
           summary,
           operations: summary?.operations ?? [],
         },
@@ -153,10 +157,11 @@ export default function FermetureCaisseModal({ onClose }: Props) {
     }
   }
 
-  const finishClosure = () => {
+  const finishClosure = (openNext = false) => {
     setCurrentShift(null)
     setCurrentOperateur(null)
-    setShowShiftModal(true)
+    setPreviewMode(!openNext)
+    setShowShiftModal(openNext)
     onClose()
   }
 
@@ -172,18 +177,19 @@ export default function FermetureCaisseModal({ onClose }: Props) {
             <div className="mt-6 space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-emerald-100">Entrées</span><strong>{formatPrice(summary?.moneyIn ?? 0)}</strong></div>
               <div className="flex justify-between"><span className="text-emerald-100">Sorties</span><strong>{formatPrice(summary?.moneyOut ?? 0)}</strong></div>
-              <div className="flex justify-between border-t border-white/25 pt-2"><span>Solde théorique</span><strong>{formatPrice(soldeTheorique)}</strong></div>
+              <div className="flex justify-between border-t border-white/25 pt-2"><span>Résultat hors fond</span><strong>{formatPrice(reportNet)}</strong></div>
             </div>
-            <p className="mt-auto pt-6 text-xs text-emerald-100">Le rapport est conservé dans Documents → Rapports de caisse. La facture journalière reste une fonction indépendante.</p>
-            <button onClick={finishClosure} className="mt-4 rounded-xl bg-white text-teal-800 py-2.5 font-bold">Terminer</button>
+            <p className="mt-auto pt-6 text-xs text-emerald-100">Le rapport est conservé hors fonds dans Documents → Rapports de caisse.{!isMorningClosure && ' Le rapport Total journée a aussi été généré.'} La facture journalière reste indépendante.</p>
+            <button onClick={() => finishClosure(false)} className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-white text-teal-800 py-2.5 font-bold"><Eye size={15}/> Mode aperçu</button>
+            {isMorningClosure && <button onClick={() => finishClosure(true)} className="mt-2 flex items-center justify-center gap-2 rounded-xl border border-white/40 bg-white/10 text-white py-2.5 font-bold"><Play size={15}/> Ouvrir caisse soir</button>}
           </aside>
           <section className="min-h-0 flex flex-col">
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div><h3 className="font-bold">Aperçu imprimable</h3><p className="text-xs text-text-muted">{new Date(savedReport.ended_at).toLocaleString('fr-TN')}</p></div>
-              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={finishClosure} className="p-2"><X size={18}/></button></div>
+              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={() => finishClosure(false)} className="p-2"><X size={18}/></button></div>
             </div>
             <div className="overflow-auto p-5">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">{[['Fond', currentShift.fond_de_caisse], ['Entrées', summary?.moneyIn ?? 0], ['Sorties', summary?.moneyOut ?? 0], ['Solde', soldeTheorique]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">{[['Entrées', summary?.moneyIn ?? 0], ['Sorties', summary?.moneyOut ?? 0], ['Résultat hors fond', reportNet]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>
               <table className="w-full text-xs"><thead><tr className="bg-muted"><th className="p-2 text-left">Heure</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Détail</th></tr></thead><tbody>{summary?.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2">{new Date(operation.date).toLocaleTimeString('fr-TN', {hour:'2-digit',minute:'2-digit'})}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table>
             </div>
           </section>
@@ -299,12 +305,12 @@ export default function FermetureCaisseModal({ onClose }: Props) {
                 <div className="flex justify-between items-center">
                   <span className="text-sm font-semibold text-text-primary flex items-center gap-1.5">
                     <DollarSign size={14} />
-                    Solde théorique en caisse
+                    Résultat du rapport (hors fond)
                   </span>
-                  <span className="font-price font-bold text-lg text-text-primary">{formatPrice(soldeTheorique)}</span>
+                  <span className="font-price font-bold text-lg text-text-primary">{formatPrice(reportNet)}</span>
                 </div>
                 <div className="text-xs text-text-secondary mt-1">
-                  Fond + entrées (ventes, réparations, crédits, avances, suppléments d’échange) − sorties (caisse et remboursements d’échange)
+                  Entrées (ventes, réparations, crédits, avances, suppléments d’échange) − sorties. Le fond initial est toujours exclu du rapport.
                 </div>
               </div>
             </div>
@@ -337,10 +343,11 @@ export default function FermetureCaisseModal({ onClose }: Props) {
                 value={soldeCaisse}
                 onChange={e => setSoldeCaisse(e.target.value.replace(/[^0-9.,]/g, ''))}
                 className="flex-1 bg-transparent font-price text-base font-semibold outline-none"
-                placeholder={soldeTheorique.toFixed(3)}
+                placeholder={drawerExpected.toFixed(3)}
               />
               <span className="text-text-secondary font-medium">DT</span>
             </div>
+            <p className="mt-1.5 text-[10px] text-text-muted">Comptez tout le tiroir, fonds inclus. Le rapport soustrait automatiquement le fond de {formatPrice(currentShift.fond_de_caisse)}.</p>
             {ecart !== null && (
               <div className={`mt-2 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold ${
                 Math.abs(ecart) < 0.001

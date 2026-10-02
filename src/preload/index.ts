@@ -35,6 +35,7 @@ const api = {
   shiftsClose: (id: string, data: unknown) => ipcRenderer.invoke('shifts:close', id, data),
   shiftsGetActive: () => ipcRenderer.invoke('shifts:getActive'),
   shiftsGetToday: () => ipcRenderer.invoke('shifts:getToday'),
+  shiftsGetTodayStatus: () => ipcRenderer.invoke('shifts:getTodayStatus'),
   shiftsGetSummary: (shiftId: string) => ipcRenderer.invoke('shifts:getSummary', shiftId),
   shiftsCountClosedToday: () => ipcRenderer.invoke('shifts:countClosedToday'),
   rapportsCaisseList: (filters?: unknown) => ipcRenderer.invoke('rapportsCaisse:list', filters),

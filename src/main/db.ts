@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.4'
+export const SCHEMA_VERSION = '1.10.5'
 
 export function initDatabase() {
   const db = getDb()
@@ -109,7 +109,8 @@ export function initDatabase() {
       solde_declare            REAL,
       ecart                    REAL,
       transfere_caisse_interne INTEGER DEFAULT 0,
-      notes_cloture            TEXT
+      notes_cloture            TEXT,
+      session_type             TEXT CHECK(session_type IN ('MATIN','SOIR'))
     );
 
     -- ── Services POS (Enda / Ooredoo / Orange) ───────────────────────────────
@@ -455,6 +456,18 @@ export function initDatabase() {
   if (!shiftCols.includes('transfere_caisse_interne')) {
     db.exec(`ALTER TABLE shifts ADD COLUMN transfere_caisse_interne INTEGER DEFAULT 0`)
   }
+  if (!shiftCols.includes('session_type')) {
+    db.exec(`ALTER TABLE shifts ADD COLUMN session_type TEXT`)
+  }
+  // Existing reports are authoritative for historical shift labels.
+  db.exec(`
+    UPDATE shifts
+    SET session_type = (
+      SELECT session_type FROM rapports_caisse WHERE rapports_caisse.shift_id = shifts.id
+    )
+    WHERE session_type IS NULL
+      AND EXISTS (SELECT 1 FROM rapports_caisse WHERE rapports_caisse.shift_id = shifts.id)
+  `)
 
   // Migrate ventes table
   const venteCols = (db.pragma('table_info(ventes)') as { name: string }[]).map(c => c.name)

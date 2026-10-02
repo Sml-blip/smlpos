@@ -22,7 +22,7 @@ import { wrapPrintHtml } from '../../lib/printHtml'
 import {
   FileText, FileDown, Download, Search, Printer, Eye, X, CheckCircle, Clock,
   Truck, RotateCcw, AlertTriangle, RefreshCw, ChevronDown, Plus,
-  Ban, PackageCheck, Edit2, CalendarDays, ChevronLeft, ChevronRight, Sun, Moon
+  Ban, PackageCheck, Edit2, CalendarDays, ChevronLeft, ChevronRight, Sun, Moon, CalendarCheck2
 } from 'lucide-react'
 
 const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 'FACTURE_JOURNALIERE_F', 'AVOIR'])
@@ -33,7 +33,7 @@ const api = window.api
 type SubTab = 'TOUS' | 'RAPPORT_CAISSE' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'AVOIR'
 
 interface CashReportRow {
-  id: string; numero: string; shift_id: string; date_journal: string; session_type: 'MATIN' | 'SOIR'; operateur: string
+  id: string; numero: string; shift_id: string; date_journal: string; session_type: 'MATIN' | 'SOIR' | 'JOURNEE'; operateur: string
   started_at: string; ended_at: string; fond_de_caisse: number; total_entrees: number; total_sorties: number
   solde_theorique: number; solde_reel?: number | null; ecart?: number | null; notes?: string | null
   summary_json: string; operations_json: string; created_at: string
@@ -48,11 +48,12 @@ function reportOperations(report: CashReportRow): Array<{ id: string; date: stri
 
 function reportPrintData(report: CashReportRow) {
   const operations = reportOperations(report)
-  const subject = `${report.numero} · ${report.operateur || '—'} · ${report.session_type === 'MATIN' ? 'Matin' : 'Soir'} · ${format(new Date(report.ended_at), 'dd/MM/yyyy HH:mm')}`
+  const sessionLabel = report.session_type === 'MATIN' ? 'Matin' : report.session_type === 'SOIR' ? 'Soir' : 'Total journée'
+  const subject = `${report.numero} · ${report.operateur || '—'} · ${sessionLabel} · ${format(new Date(report.ended_at), 'dd/MM/yyyy HH:mm')}`
   const boxes: Array<[string, string]> = [
-    ['Fond de caisse', formatPrice(report.fond_de_caisse)], ['Total entrées', formatPrice(report.total_entrees)],
-    ['Total sorties', formatPrice(report.total_sorties)], ['Solde théorique', formatPrice(report.solde_theorique)],
-    ['Solde réel', report.solde_reel == null ? 'Non compté' : formatPrice(report.solde_reel)], ['Écart', report.ecart == null ? '—' : formatPrice(report.ecart)],
+    ['Total entrées', formatPrice(report.total_entrees)], ['Total sorties', formatPrice(report.total_sorties)],
+    ['Résultat hors fond', formatPrice(report.solde_theorique)],
+    ['Réel hors fond', report.solde_reel == null ? 'Non compté' : formatPrice(report.solde_reel)], ['Écart', report.ecart == null ? '—' : formatPrice(report.ecart)],
   ]
   const rows: ReportRow[] = operations.map(operation => ({ date: operation.date, type: `${operation.direction === 'ENTREE' ? 'Entrée' : 'Sortie'} · ${operation.type}`, amount: operation.direction === 'SORTIE' ? -operation.amount : operation.amount, operator: operation.operator, note: operation.note }))
   return { subject, boxes, rows, operations }
@@ -420,7 +421,7 @@ function CashReportsCalendar({ reports, month, onMonthChange, onOpen }: { report
 
   return <div className="h-full overflow-auto p-4">
     <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-white px-4 py-3">
-      <div><h3 className="flex items-center gap-2 font-bold"><CalendarDays size={16}/> Rapports matin & soir</h3><p className="text-xs text-text-muted">Chaque clôture est conservée avec ses opérations et son utilisateur.</p></div>
+      <div><h3 className="flex items-center gap-2 font-bold"><CalendarDays size={16}/> Rapports matin, soir & journée</h3><p className="text-xs text-text-muted">Tous les montants sont hors fonds de caisse. Le total journée apparaît après la clôture du soir.</p></div>
       <div className="flex items-center gap-2"><button onClick={() => moveMonth(-1)} className="rounded-lg border border-border p-2"><ChevronLeft size={15}/></button><span className="min-w-36 text-center text-sm font-bold capitalize">{first.toLocaleDateString('fr-TN', {month:'long',year:'numeric'})}</span><button onClick={() => moveMonth(1)} className="rounded-lg border border-border p-2"><ChevronRight size={15}/></button></div>
     </div>
     <div className="grid grid-cols-7 overflow-hidden rounded-xl border border-border bg-white">
@@ -428,8 +429,12 @@ function CashReportsCalendar({ reports, month, onMonthChange, onOpen }: { report
       {cells.map((day, index) => {
         const date = day ? `${year}-${String(monthNumber).padStart(2,'0')}-${String(day).padStart(2,'0')}` : ''
         const dayReports = day ? byDate.get(date) ?? [] : []
-        return <div key={index} className="min-h-28 border-b border-r border-border p-1.5 last:border-r-0">
-          {day && <><div className="mb-1 text-[10px] font-bold text-text-muted">{day}</div><div className="space-y-1">{dayReports.map(report => <button key={report.id} onClick={() => onOpen(report)} className={cn('w-full rounded-lg border p-2 text-left transition hover:shadow-sm', report.session_type === 'MATIN' ? 'border-amber-200 bg-amber-50' : 'border-indigo-200 bg-indigo-50')}><div className="flex items-center gap-1 text-[10px] font-bold">{report.session_type === 'MATIN' ? <Sun size={11} className="text-amber-600"/> : <Moon size={11} className="text-indigo-600"/>}{report.session_type === 'MATIN' ? 'Matin' : 'Soir'}</div><div className="mt-0.5 truncate text-[9px] text-text-muted">{report.operateur}</div><div className="font-price text-[10px] font-bold">{formatPrice(report.solde_theorique)}</div></button>)}</div></>}
+        return <div key={index} className="min-h-40 border-b border-r border-border p-1.5 last:border-r-0">
+          {day && <><div className="mb-1 text-[10px] font-bold text-text-muted">{day}</div><div className="space-y-1">{dayReports.map(report => {
+            const isMorning = report.session_type === 'MATIN'
+            const isDay = report.session_type === 'JOURNEE'
+            return <button key={report.id} onClick={() => onOpen(report)} className={cn('w-full rounded-lg border px-2 py-1.5 text-left transition hover:shadow-sm', isMorning ? 'border-amber-200 bg-amber-50' : isDay ? 'border-emerald-300 bg-emerald-50 ring-1 ring-emerald-100' : 'border-indigo-200 bg-indigo-50')}><div className="flex items-center gap-1 text-[10px] font-bold">{isMorning ? <Sun size={11} className="text-amber-600"/> : isDay ? <CalendarCheck2 size={11} className="text-emerald-700"/> : <Moon size={11} className="text-indigo-600"/>}{isMorning ? 'Matin' : isDay ? 'Total journée' : 'Soir'}</div><div className="mt-0.5 truncate text-[9px] text-text-muted">{report.operateur}</div><div className="font-price text-[10px] font-bold">{formatPrice(report.solde_theorique)}</div></button>
+          })}</div></>}
         </div>
       })}
     </div>
@@ -438,8 +443,9 @@ function CashReportsCalendar({ reports, month, onMonthChange, onOpen }: { report
 
 function CashReportPreview({ report, onClose }: { report: CashReportRow; onClose: () => void }) {
   const data = reportPrintData(report)
-  const html = buildBalanceReport(`Rapport de caisse ${report.session_type === 'MATIN' ? 'Matin' : 'Soir'}`, data.subject, data.boxes, data.rows)
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold">{report.numero} · {report.session_type === 'MATIN' ? 'Rapport matin' : 'Rapport soir'}</h3><p className="text-xs text-text-muted">{report.operateur} · {format(new Date(report.started_at), 'HH:mm')} → {format(new Date(report.ended_at), 'HH:mm')}</p></div><button onClick={onClose}><X size={18}/></button></div><div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-6">{data.boxes.map(([label,value]) => <div key={label} className="rounded-xl border border-border bg-muted p-2"><p className="text-[9px] uppercase text-text-muted">{label}</p><p className="mt-1 font-price text-xs font-bold">{value}</p></div>)}</div><div className="min-h-0 flex-1 overflow-auto px-4 pb-4"><table className="w-full text-xs"><thead className="sticky top-0 bg-muted"><tr><th className="p-2 text-left">Date</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Note</th></tr></thead><tbody>{data.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2 whitespace-nowrap">{format(new Date(operation.date), 'dd/MM HH:mm')}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table></div><div className="flex justify-end gap-2 border-t border-border p-4"><button onClick={onClose} className="rounded-xl bg-muted px-4 py-2 text-xs font-bold">Fermer</button><button onClick={() => void printFullHtmlDocument(html, {pageSize:'A4',printKind:'document'})} className="flex items-center gap-1.5 rounded-xl border border-border px-4 py-2 text-xs font-bold"><Printer size={13}/> Imprimer</button><button onClick={() => void saveBalanceReport(`Rapport de caisse ${report.session_type}`, data.subject, data.boxes, data.rows, `${report.numero}.pdf`).then(ok => showToast(ok ? 'success' : 'error', ok ? 'Rapport PDF enregistré' : 'Export PDF annulé ou impossible'))} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-4 py-2 text-xs font-bold text-red-700"><FileDown size={13}/> PDF</button></div></div></div>
+  const label = report.session_type === 'MATIN' ? 'Matin' : report.session_type === 'SOIR' ? 'Soir' : 'Total journée'
+  const html = buildBalanceReport(`Rapport de caisse ${label}`, data.subject, data.boxes, data.rows)
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold">{report.numero} · Rapport {label.toLowerCase()}</h3><p className="text-xs text-text-muted">{report.operateur} · {format(new Date(report.started_at), 'HH:mm')} → {format(new Date(report.ended_at), 'HH:mm')} · hors fonds de caisse</p></div><button onClick={onClose}><X size={18}/></button></div><div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-5">{data.boxes.map(([boxLabel,value]) => <div key={boxLabel} className="rounded-xl border border-border bg-muted p-2"><p className="text-[9px] uppercase text-text-muted">{boxLabel}</p><p className="mt-1 font-price text-xs font-bold">{value}</p></div>)}</div><div className="min-h-0 flex-1 overflow-auto px-4 pb-4"><table className="w-full text-xs"><thead className="sticky top-0 bg-muted"><tr><th className="p-2 text-left">Date</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Note</th></tr></thead><tbody>{data.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2 whitespace-nowrap">{format(new Date(operation.date), 'dd/MM HH:mm')}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table></div><div className="flex justify-end gap-2 border-t border-border p-4"><button onClick={onClose} className="rounded-xl bg-muted px-4 py-2 text-xs font-bold">Fermer</button><button onClick={() => void printFullHtmlDocument(html, {pageSize:'A4',printKind:'document'})} className="flex items-center gap-1.5 rounded-xl border border-border px-4 py-2 text-xs font-bold"><Printer size={13}/> Imprimer</button><button onClick={() => void saveBalanceReport(`Rapport de caisse ${label}`, data.subject, data.boxes, data.rows, `${report.numero}.pdf`).then(ok => showToast(ok ? 'success' : 'error', ok ? 'Rapport PDF enregistré' : 'Export PDF annulé ou impossible'))} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-4 py-2 text-xs font-bold text-red-700"><FileDown size={13}/> PDF</button></div></div></div>
 }
 
 // ── Main DocumentsTab ──────────────────────────────────────────────────────────

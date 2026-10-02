@@ -10,6 +10,7 @@ interface AppState {
   isOnline: boolean
   activeTab: TabId
   showShiftModal: boolean
+  previewMode: boolean
   sessionClient: Client | null
 
   setCurrentShift: (shift: Shift | null) => void
@@ -18,6 +19,7 @@ interface AppState {
   setIsOnline: (v: boolean) => void
   setActiveTab: (tab: TabId) => void
   setShowShiftModal: (v: boolean) => void
+  setPreviewMode: (v: boolean) => void
   setSessionClient: (client: Client | null) => void
 }
 
@@ -28,6 +30,7 @@ export const useAppStore = create<AppState>((set) => ({
   isOnline: navigator.onLine,
   activeTab: 'pos',
   showShiftModal: true,
+  previewMode: false,
   sessionClient: null,
 
   setCurrentShift: (shift) => set({ currentShift: shift }),
@@ -36,5 +39,6 @@ export const useAppStore = create<AppState>((set) => ({
   setIsOnline: (v) => set({ isOnline: v }),
   setActiveTab: (tab) => set({ activeTab: tab }),
   setShowShiftModal: (v) => set({ showShiftModal: v }),
+  setPreviewMode: (v) => set({ previewMode: v }),
   setSessionClient: (client) => set({ sessionClient: client }),
 }))

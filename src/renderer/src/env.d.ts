@@ -52,6 +52,7 @@ interface Window {
     shiftsClose: (id: string, data: unknown) => Promise<unknown>
     shiftsGetActive: () => Promise<unknown>
     shiftsGetToday: () => Promise<unknown[]>
+    shiftsGetTodayStatus: () => Promise<{ shifts: unknown[]; openedCount: number; closedCount: number; active: unknown | null; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean }>
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
     shiftsCountClosedToday?: () => Promise<number>
     rapportsCaisseList: (filters?: unknown) => Promise<unknown[]>

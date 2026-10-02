@@ -210,6 +210,7 @@ const mockApi = {
   appHealth: async () => ({ ok: true, schemaVersion: '1.9.2', expectedSchemaVersion: '1.9.2', pendingSync: 0 }),
   shiftsGetActive: async () => SHIFT_ACTIVE,
   shiftsGetToday: async () => [SHIFT_ACTIVE],
+  shiftsGetTodayStatus: async () => ({ shifts: [SHIFT_ACTIVE], openedCount: 1, closedCount: 0, active: SHIFT_ACTIVE, morningDone: false, eveningDone: false, nextSession: 'SOIR', canOpen: false }),
   shiftsGetSummary: async () => ({
     ventes: { total: 338, count: 2 },
     reparations: { total: 75, count: 1 },

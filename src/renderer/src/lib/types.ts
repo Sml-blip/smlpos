@@ -29,6 +29,7 @@ export interface Shift {
   ecart?: number
   transfere_caisse_interne?: number
   notes_cloture?: string
+    session_type?: 'MATIN' | 'SOIR'
 }
 
 export interface Categorie {
