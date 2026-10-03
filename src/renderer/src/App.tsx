@@ -21,7 +21,8 @@ import DocumentsTab from './modules/documents/DocumentsTab'
 import DemandesTab from './modules/demandes/DemandesTab'
 import {
   ShoppingCart, History, Package, LayoutDashboard, Truck,
-  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen, ClipboardList
+  Vault, ShoppingBag, CreditCard, Settings, RotateCcw, Users, Users2, FolderOpen, ClipboardList,
+  Eye, LockKeyhole, Play
 } from 'lucide-react'
 import { cn } from './lib/utils'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
@@ -30,7 +31,6 @@ import { PrintManagerProvider } from './components/PrintManagerProvider'
 import UpdateModal from './components/UpdateModal'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { showToast } from './lib/toast'
-import { generateId } from './lib/utils'
 import { applyAgentTheme, loadAgentTheme } from './lib/agentTheme'
 import { installGlobalInteractionFeedback, playFeedback } from './lib/feedback'
 import type { Operateur, Shift } from './lib/types'
@@ -56,14 +56,13 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
 
 export default function App() {
   const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur, currentShift,
-    setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
+    setCurrentShift, setCurrentOperateur, setShowShiftModal, previewMode, setPreviewMode } = useAppStore()
   const [showSplash, setShowSplash] = useState(true)
   const [locked, setLocked] = useState(false)
   const [currentPin, setCurrentPin] = useState('')
   const [appVersion, setAppVersion] = useState('1.9.2')
-  const [agentChangeOpen, setAgentChangeOpen] = useState(false)
-  const [agentChangeSettings, setAgentChangeSettings] = useState<Record<string, string>>({})
   const [pendingDemandes, setPendingDemandes] = useState(0)
+  const [pendingSupplierPayments, setPendingSupplierPayments] = useState(0)
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { status: updateStatus, showModal: showUpdateModal, isManualChecking, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
 
@@ -98,6 +97,29 @@ export default function App() {
 
   useEffect(() => {
     return installGlobalInteractionFeedback()
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void api.facturesFournisseursList({})
+        .then(rows => {
+          if (!active) return
+          const pending = (rows as Array<{ statut_paiement?: string }>).filter(row =>
+            !['PAYE', 'ANNULE', 'BROUILLON'].includes(String(row.statut_paiement ?? ''))
+          ).length
+          setPendingSupplierPayments(pending)
+        })
+        .catch(() => { /* database may still be starting */ })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    window.addEventListener('smlpos:supplier-payments-changed', refresh)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('smlpos:supplier-payments-changed', refresh)
+    }
   }, [])
 
   useEffect(() => {
@@ -162,23 +184,17 @@ export default function App() {
   }, [currentOperateur?.id])
 
   useEffect(() => {
-    let cancelled = false
-    const check = async () => {
-      if (!currentShift) return
-      const settings = await api.settingsGetAll().catch(() => ({} as Record<string, string>))
-      if (cancelled) return
-      setAgentChangeSettings(settings)
-      if (settings.shift_agent_change_enabled === 'false') return
-      const target = settings.shift_agent_change_time || '03:00'
-      const now = new Date()
-      const current = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-      const key = `smlpos-agent-change-${now.toISOString().slice(0, 10)}`
-      if (current >= target && localStorage.getItem(key) !== '1') setAgentChangeOpen(true)
+    if (!previewMode) return
+    const blockShortcuts = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-preview-allowed="true"]')) return
+      if (event.key === 'Tab' || event.key.startsWith('Arrow') || event.key === 'PageDown' || event.key === 'PageUp' || event.key === 'Home' || event.key === 'End') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
     }
-    void check()
-    const timer = window.setInterval(() => void check(), 30_000)
-    return () => { cancelled = true; window.clearInterval(timer) }
-  }, [currentShift])
+    window.addEventListener('keydown', blockShortcuts, true)
+    return () => window.removeEventListener('keydown', blockShortcuts, true)
+  }, [previewMode])
 
   return (
     <PrintManagerProvider>
@@ -217,13 +233,54 @@ export default function App() {
                   {pendingDemandes > 99 ? '99+' : pendingDemandes}
                 </span>
               )}
+              {tab.id === 'achats' && pendingSupplierPayments > 0 && (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white shadow-sm">
+                  {pendingSupplierPayments > 99 ? '99+' : pendingSupplierPayments}
+                </span>
+              )}
             </button>
           )
         })}
       </div>
 
+      {previewMode && (
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-950">
+          <Eye size={15} className="text-blue-700"/>
+          <div className="min-w-0 flex-1"><strong>Mode aperçu · lecture seule</strong><span className="ml-2 text-blue-700">Consultation, recherche inventaire et impression restent disponibles. Les modifications sont bloquées.</span></div>
+          <button
+            type="button"
+            onClick={() => { setPreviewMode(false); setShowShiftModal(true) }}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 font-bold text-white hover:bg-blue-800"
+          >
+            <Play size={12}/> Ouvrir une caisse
+          </button>
+          <LockKeyhole size={14} className="text-blue-700"/>
+        </div>
+      )}
+
       {/* Content */}
-      <div key={activeTab} className="flex-1 overflow-hidden app-view-enter">
+      <div
+        key={activeTab}
+        className="flex-1 overflow-hidden app-view-enter"
+        onClickCapture={(event) => {
+          if (!previewMode) return
+          const target = event.target as HTMLElement
+          const control = target.closest('button,a,input,textarea,select,[contenteditable="true"]') as HTMLElement | null
+          if (!control) return
+          const label = `${control.getAttribute('title') ?? ''} ${control.getAttribute('aria-label') ?? ''} ${control.textContent ?? ''}`.toLowerCase()
+          if (control.closest('[data-preview-allowed="true"]') || /imprim|ticket|étiquette|etiquette|télécharger pdf|telecharger pdf/.test(label)) return
+          event.preventDefault()
+          event.stopPropagation()
+          showToast('info', 'Mode aperçu : action bloquée — ouvrez une caisse pour modifier.')
+        }}
+        onInputCapture={(event) => {
+          if (!previewMode) return
+          const target = event.target as HTMLElement
+          if (target.closest('[data-preview-allowed="true"]')) return
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+      >
         {activeTab === 'pos'            && <POSTab />}
         {activeTab === 'historique'     && <HistoriqueTab />}
         {activeTab === 'inventaire'     && <InventaireTab />}
@@ -243,7 +300,6 @@ export default function App() {
       <StatusBar />
 
       {showShiftModal && <ShiftModal />}
-      {agentChangeOpen && currentShift && <AgentChangeModal currentShift={currentShift} settings={agentChangeSettings} onClose={() => { localStorage.setItem(`smlpos-agent-change-${new Date().toISOString().slice(0, 10)}`, '1'); setAgentChangeOpen(false) }} onDone={() => { localStorage.setItem(`smlpos-agent-change-${new Date().toISOString().slice(0, 10)}`, '1'); setAgentChangeOpen(false) }} />}
 
       {showUpdateModal && (
         <UpdateModal
@@ -259,31 +315,4 @@ export default function App() {
     </div>
     </PrintManagerProvider>
   )
-}
-
-function AgentChangeModal({ currentShift, settings, onClose, onDone }: { currentShift: Shift; settings: Record<string, string>; onClose: () => void; onDone: () => void }) {
-  const { operateurs, setCurrentShift, setCurrentOperateur } = useAppStore()
-  const [selectedId, setSelectedId] = useState('')
-  const [pin, setPin] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const selected = operateurs.find(op => op.id === selectedId)
-  const confirm = async () => {
-    if (!selected) return
-    const expected = settings[`pin_${selected.identifiant.toLowerCase()}`] ?? 'sml2023'
-    if (pin !== expected) { setError('PIN opérateur incorrect.'); return }
-    setLoading(true); setError('')
-    try {
-      const now = new Date().toISOString()
-      await api.shiftsClose(currentShift.id, { ended_at: now, solde_theorique: currentShift.fond_de_caisse, notes_cloture: 'Changement automatique de deuxième shift' })
-      await api.caisseInterneTransferShift(currentShift.id)
-      const nextShift = { id: generateId(), operateur_id: selected.id, operateur_nom: selected.nom, fond_de_caisse: currentShift.fond_de_caisse, started_at: now }
-      await api.shiftsOpen(nextShift)
-      setCurrentShift(nextShift)
-      setCurrentOperateur(selected)
-      onDone()
-    } catch (e) { setError(e instanceof Error ? e.message : 'Impossible de changer d’agent') }
-    finally { setLoading(false) }
-  }
-  return <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6 space-y-5"><div><h2 className="text-lg font-bold">Changement de deuxième shift</h2><p className="text-sm text-text-secondary mt-1">Sélectionnez l’agent qui prend la caisse.</p></div>{error && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}<div className="grid grid-cols-2 gap-2">{operateurs.map(op => <button key={op.id} onClick={() => { setSelectedId(op.id); setPin(''); setError('') }} className={cn('rounded-xl border-2 p-3 text-sm font-semibold', selectedId === op.id ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted')}>{op.nom}</button>)}</div><input type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN du nouvel agent" className="w-full rounded-xl border border-border px-3 py-3 font-mono outline-none" /><div className="flex gap-2"><button onClick={onClose} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Rappeler plus tard</button><button onClick={() => void confirm()} disabled={!selected || !pin || loading} className="flex-1 rounded-xl bg-accent-500 py-2.5 font-bold disabled:opacity-50">{loading ? 'Changement...' : 'Changer l’agent'}</button></div></div></div>
 }

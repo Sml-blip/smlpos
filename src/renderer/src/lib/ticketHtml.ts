@@ -1,6 +1,10 @@
 import type { CartItem, LigneVente, Vente } from './types'
+import { SML_TICKET_LOGO_DATA_URL } from '../assets/sml-ticket-logo-data'
 
-type TicketLine = Pick<CartItem | LigneVente, 'designation' | 'quantite' | 'prix_unitaire' | 'remise_pct' | 'total_ligne'>
+type TicketLine = Pick<CartItem | LigneVente, 'designation' | 'quantite' | 'prix_unitaire' | 'remise_pct' | 'total_ligne'> & {
+  produit_id?: string
+  is_service?: boolean
+}
 
 const MODE_LABELS: Record<string, string> = {
   ESPECES: 'Especes',
@@ -33,6 +37,7 @@ function formatDateParts(value: string): { date: string; time: string } {
 
 export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): string {
   const { date, time } = formatDateParts(vente.created_at)
+  const hasProduct = lines.some(line => line.is_service === false || !!line.produit_id)
   const itemsHtml = lines.map((line) => {
     const remise = Number(line.remise_pct) || 0
     const unit = Number(line.prix_unitaire) * (1 - remise / 100)
@@ -77,10 +82,18 @@ export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): strin
     }
     .center { text-align: center; }
     .brand {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 900;
-      letter-spacing: 1px;
+      letter-spacing: .3px;
       line-height: 1.1;
+      margin-top: 4px;
+    }
+    .brand-logo {
+      display: block;
+      width: 38mm;
+      max-width: 82%;
+      height: auto;
+      margin: 0 auto;
     }
     .muted {
       color: #333;
@@ -135,6 +148,28 @@ export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): strin
       line-height: 1.35;
       margin-top: 8px;
     }
+    .return-policy {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      margin-top: 9px;
+      padding: 8px 10px;
+      border-radius: 30px;
+      background: #000;
+      color: #fff;
+      text-align: left;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.25;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .return-policy svg {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 15px;
+    }
     @media screen {
       body {
         min-height: 100%;
@@ -148,8 +183,8 @@ export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): strin
 <body>
   <div class="ticket">
     <div class="center">
-      <div class="brand">SMLPOS</div>
-      <div class="muted">Systeme de Point de Vente</div>
+      <img class="brand-logo" src="${SML_TICKET_LOGO_DATA_URL}" alt="SML" />
+      <div class="brand">SML informatique</div>
       <div class="muted">${date} - ${time}</div>
       <div class="muted">Ticket No ${escapeHtml(vente.numero)}</div>
       ${vente.operateur_nom ? `<div class="muted">Caissier: ${escapeHtml(vente.operateur_nom)}</div>` : ''}
@@ -177,6 +212,10 @@ export function buildReceiptTicketHtml(vente: Vente, lines: TicketLine[]): strin
       <div>Merci pour votre confiance</div>
       <div>Bonne journee !</div>
     </div>
+    ${hasProduct ? `<div class="return-policy">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M10.3 2.9 1.8 17.2A2 2 0 0 0 3.5 20h17a2 2 0 0 0 1.7-2.8L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 9v4M12 17h.01"/></svg>
+      <span>Ce produit peut être retourné sous 24 heures maximum</span>
+    </div>` : ''}
   </div>
 </body>
 </html>`

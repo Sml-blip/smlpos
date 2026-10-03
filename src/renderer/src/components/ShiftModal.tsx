@@ -3,25 +3,29 @@ import { useAppStore } from '../store/appStore'
 import { generateId } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
 import type { Operateur } from '../lib/types'
-import { Wallet, Play, AlertCircle, KeyRound } from 'lucide-react'
+import { Wallet, Play, AlertCircle, KeyRound, Eye, Sun, Moon, CheckCircle2, Lock } from 'lucide-react'
 import logoUrl from '../assets/logo.svg'
 
 const api = window.api
 
 export default function ShiftModal() {
-  const { operateurs, setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
+  const { operateurs, setCurrentShift, setCurrentOperateur, setShowShiftModal, setPreviewMode } = useAppStore()
   const [selectedOp, setSelectedOp] = useState<Operateur | null>(null)
   const [fondCaisse, setFondCaisse] = useState('100.000')
   const [pin, setPin] = useState('')
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState('')
+  const [dayStatus, setDayStatus] = useState<{ openedCount: number; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean } | null>(null)
 
   const fondValue = parseFloat(fondCaisse.replace(',', '.')) || 0
 
   useEffect(() => {
-    api.settingsGetAll()
-      .then((s) => setSettings((s ?? {}) as Record<string, string>))
+    Promise.all([api.settingsGetAll(), api.shiftsGetTodayStatus()])
+      .then(([s, status]) => {
+        setSettings((s ?? {}) as Record<string, string>)
+        setDayStatus(status)
+      })
       .catch(() => setSettings({}))
   }, [])
 
@@ -45,15 +49,23 @@ export default function ShiftModal() {
         fond_de_caisse: fondValue,
         started_at: new Date().toISOString(),
       }
-      await api.shiftsOpen(shift)
-      setCurrentShift(shift)
+      const opened = await api.shiftsOpen(shift) as typeof shift & { session_type?: 'MATIN' | 'SOIR' }
+      setCurrentShift(opened)
       setCurrentOperateur(selectedOp)
+      setPreviewMode(false)
       setShowShiftModal(false)
     }, {
       setLoading,
       successMessage: `Shift ouvert — ${selectedOp.nom}`,
-      onError: () => setAlert('Erreur lors du démarrage du shift.'),
+      onError: (message) => setAlert(message),
     })
+  }
+
+  const enterPreview = () => {
+    setCurrentShift(null)
+    setCurrentOperateur(null)
+    setPreviewMode(true)
+    setShowShiftModal(false)
   }
 
   const avatarColors: Record<string, string> = {
@@ -64,7 +76,7 @@ export default function ShiftModal() {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[480px] p-8 animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[520px] max-h-[calc(100vh-2rem)] overflow-y-auto p-8 animate-slide-in">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
           <div className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center">
@@ -75,6 +87,24 @@ export default function ShiftModal() {
             <p className="text-sm text-text-secondary">SMLPOS — Qui prend la caisse ?</p>
           </div>
         </div>
+
+        <div className="mb-6 grid grid-cols-2 gap-3">
+          <div className={`rounded-xl border p-3 ${dayStatus?.morningDone ? 'border-emerald-200 bg-emerald-50' : dayStatus?.nextSession === 'MATIN' ? 'border-amber-300 bg-amber-50' : 'border-border bg-muted'}`}>
+            <div className="flex items-center gap-2 text-sm font-bold"><Sun size={15} className="text-amber-600"/> Caisse matin {dayStatus?.morningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
+            <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.morningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'MATIN' ? 'Prochaine ouverture' : 'Non disponible'}</p>
+          </div>
+          <div className={`rounded-xl border p-3 ${dayStatus?.eveningDone ? 'border-emerald-200 bg-emerald-50' : dayStatus?.nextSession === 'SOIR' ? 'border-indigo-300 bg-indigo-50' : 'border-border bg-muted'}`}>
+            <div className="flex items-center gap-2 text-sm font-bold"><Moon size={15} className="text-indigo-600"/> Caisse soir {dayStatus?.eveningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
+            <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.eveningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'SOIR' ? 'Prochaine ouverture' : dayStatus?.nextSession === 'MATIN' ? 'Après la caisse matin' : 'Non disponible'}</p>
+          </div>
+        </div>
+
+        {dayStatus && !dayStatus.canOpen && (
+          <div className="mb-6 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+            <Lock size={15} className="mt-0.5 flex-shrink-0"/>
+            <span>Les deux ouvertures autorisées aujourd’hui sont terminées. Une nouvelle caisse sera disponible demain.</span>
+          </div>
+        )}
 
         {/* Operator selection */}
         <div className="mb-6">
@@ -151,11 +181,22 @@ export default function ShiftModal() {
           type="button"
           onClick={handleStart}
           disabled={!selectedOp || !pin || loading}
+          style={{ display: dayStatus?.canOpen === false ? 'none' : undefined }}
           className="w-full flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors text-base"
         >
           <Play size={18} />
-          {loading ? 'Démarrage...' : 'Démarrer le Shift'}
+          {loading ? 'Démarrage...' : `Ouvrir la caisse ${dayStatus?.nextSession === 'SOIR' ? 'soir' : 'matin'}`}
         </button>
+
+        <button
+          type="button"
+          onClick={enterPreview}
+          className="mt-3 w-full flex items-center justify-center gap-2 border border-border bg-white hover:bg-muted text-text-primary font-bold py-3 rounded-xl transition-colors text-sm"
+        >
+          <Eye size={17}/>
+          Entrer en mode aperçu (lecture seule)
+        </button>
+        <p className="mt-2 text-center text-[10px] text-text-muted">Navigation autorisée, aucune création ni modification possible.</p>
       </div>
     </div>
   )

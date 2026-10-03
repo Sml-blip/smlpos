@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { usePrint } from '../../lib/usePrint'
+import { useRef } from 'react'
+import { printFullHtmlDocument } from '../../lib/nativePrint'
 import { Printer, X } from 'lucide-react'
 
 const api = window.api
@@ -24,7 +25,7 @@ interface Props {
 }
 
 export default function CommandePrintModal({ commande, onClose }: Props) {
-  const { printRef, handlePrint } = usePrint(`Commande-${commande.numero}`)
+  const printRef = useRef<HTMLDivElement>(null)
   const [settings, setSettings] = useState<Record<string, string>>({})
 
   useEffect(() => {
@@ -42,6 +43,10 @@ export default function CommandePrintModal({ commande, onClose }: Props) {
   const companyPhone = settings['entreprise.telephone'] || ''
   const companyEmail = settings['entreprise.email'] || ''
   const footerText = settings['facture.footer_text'] || 'Merci pour votre confiance.'
+  const handlePrint = async () => {
+    if (!printRef.current) return
+    await printFullHtmlDocument(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>@page { size: A5 landscape; margin: 0; } body { margin: 0; }</style></head><body>${printRef.current.outerHTML}</body></html>`, { pageSize: 'A5', printKind: 'document' })
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -228,7 +233,7 @@ export default function CommandePrintModal({ commande, onClose }: Props) {
             className="flex-1 bg-muted hover:bg-border font-semibold py-2.5 rounded-xl text-sm transition-colors">
             Fermer
           </button>
-          <button onClick={() => handlePrint()}
+          <button onClick={() => void handlePrint()}
             className="flex-1 bg-accent-500 hover:bg-accent-600 font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
             <Printer size={15} /> Imprimer A5 Paysage
           </button>
