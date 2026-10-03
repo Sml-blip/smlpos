@@ -216,7 +216,7 @@ const api = {
   documentsListMissingDailyFactureFDays: (from?: string, to?: string) => ipcRenderer.invoke('documents:listMissingDailyFactureFDays', from, to),
   documentsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('documents:update', id, data),
   documentsRevoquer: (id: string, motif: string, par: string) => ipcRenderer.invoke('documents:revoquer', id, motif, par),
-  documentsAnnulerAvecAvoir: (id: string, motif?: string) => ipcRenderer.invoke('documents:annulerAvecAvoir', id, motif),
+  documentsAnnulerAvecAvoir: (id: string, motif?: string, refund?: unknown) => ipcRenderer.invoke('documents:annulerAvecAvoir', id, motif, refund),
   documentsGetLignes: (documentId: string) => ipcRenderer.invoke('documents:getLignes', documentId),
   documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
     ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),

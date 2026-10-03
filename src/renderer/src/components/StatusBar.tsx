@@ -37,7 +37,9 @@ export default function StatusBar() {
   const [dbHealth, setDbHealth] = useState<{ ok: boolean; error?: string } | null>(null)
   const [closedShiftsToday, setClosedShiftsToday] = useState<number | null>(null)
   const [snoozedUntil, setSnoozedUntil] = useState(0)
+  const [mutedShiftId, setMutedShiftId] = useState<string | null>(null)
   const lastAlarmAtRef = useRef(0)
+  const alarmContextRef = useRef<AudioContext | null>(null)
   const [shiftReminderSettings, setShiftReminderSettings] = useState({
     enabled: true,
     alarmEnabled: true,
@@ -102,7 +104,11 @@ export default function StatusBar() {
 
   useEffect(() => {
     setSnoozedUntil(0)
+    setMutedShiftId(null)
     lastAlarmAtRef.current = 0
+    const context = alarmContextRef.current
+    alarmContextRef.current = null
+    if (context && context.state !== 'closed') void context.close()
   }, [currentShift?.id])
 
   const isMorningShift = currentShift?.session_type ? currentShift.session_type === 'MATIN' : closedShiftsToday === 0
@@ -115,12 +121,16 @@ export default function StatusBar() {
     && shiftReminderSettings.enabled
     && shiftReminderTiming.pinned
     && !snoozed
+    && mutedShiftId !== currentShift?.id
 
   const playClosingAlarm = useCallback(() => {
     try {
       const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
       if (!AudioContextClass) return
+      const previous = alarmContextRef.current
+      if (previous && previous.state !== 'closed') void previous.close()
       const context = new AudioContextClass()
+      alarmContextRef.current = context
       const gain = context.createGain()
       gain.gain.setValueAtTime(0.28, context.currentTime)
       gain.connect(context.destination)
@@ -132,17 +142,20 @@ export default function StatusBar() {
         oscillator.start(context.currentTime + offset)
         oscillator.stop(context.currentTime + offset + 0.32)
       })
-      window.setTimeout(() => void context.close(), 2200)
+      window.setTimeout(() => {
+        if (alarmContextRef.current === context) alarmContextRef.current = null
+        if (context.state !== 'closed') void context.close()
+      }, 2200)
     } catch { /* audio can be blocked before the first user interaction */ }
   }, [])
 
   useEffect(() => {
     if (!currentShift || closedShiftsToday === null || !shiftReminderSettings.enabled || !shiftReminderSettings.alarmEnabled) return
-    if (!shiftReminderTiming.overdue || snoozed || showFermeture) return
+    if (!shiftReminderTiming.overdue || snoozed || showFermeture || mutedShiftId === currentShift.id) return
     if (time.getTime() - lastAlarmAtRef.current < 60_000) return
     lastAlarmAtRef.current = time.getTime()
     playClosingAlarm()
-  }, [closedShiftsToday, currentShift, playClosingAlarm, shiftReminderSettings.alarmEnabled, shiftReminderSettings.enabled, shiftReminderTiming.overdue, showFermeture, snoozed, time])
+  }, [closedShiftsToday, currentShift, mutedShiftId, playClosingAlarm, shiftReminderSettings.alarmEnabled, shiftReminderSettings.enabled, shiftReminderTiming.overdue, showFermeture, snoozed, time])
 
   const refreshCounts = useCallback(async () => {
     if (!isSupabaseEnabled || !window.api?.syncQueuePendingCount) return
@@ -362,6 +375,20 @@ export default function StatusBar() {
                     Shift : {currentShift.operateur_nom}
                   </span>
                   <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setMutedShiftId(currentShift.id)
+                        setSnoozedUntil(0)
+                        lastAlarmAtRef.current = Date.now()
+                        const context = alarmContextRef.current
+                        alarmContextRef.current = null
+                        if (context && context.state !== 'closed') void context.close()
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100"
+                      title="Arrêter définitivement l’alarme pour cette caisse"
+                    >
+                      Forcer arrêt
+                    </button>
                     {shiftReminderTiming.overdue && (
                       <button
                         onClick={() => {

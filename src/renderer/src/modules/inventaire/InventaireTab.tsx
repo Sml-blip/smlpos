@@ -601,13 +601,14 @@ export default function InventaireTab() {
           <Search size={14} className="text-text-muted flex-shrink-0" />
           <input
             type="text"
+            data-preview-allowed="true"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Rechercher nom, réf, code-barres..."
             className="flex-1 bg-transparent outline-none text-sm"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-text-muted hover:text-text-primary">
+            <button data-preview-allowed="true" onClick={() => setSearch('')} className="text-text-muted hover:text-text-primary">
               <X size={12} />
             </button>
           )}

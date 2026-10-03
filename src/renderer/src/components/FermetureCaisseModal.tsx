@@ -6,7 +6,7 @@ import { showToast } from '../lib/toast'
 import { playFeedback } from '../lib/feedback'
 import { buildBalanceReport, saveBalanceReport } from '../lib/reportPdf'
 import { printFullHtmlDocument } from '../lib/nativePrint'
-import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, ArrowUpCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText, Download, Printer, RefreshCw, Eye, Play } from 'lucide-react'
+import { X, DollarSign, ShoppingBag, Wrench, ArrowDownCircle, ArrowUpCircle, LogOut, AlertCircle, CheckCircle, CreditCard, FileText, Download, Printer, RefreshCw, Play } from 'lucide-react'
 
 const api = window.api
 
@@ -157,11 +157,11 @@ export default function FermetureCaisseModal({ onClose }: Props) {
     }
   }
 
-  const finishClosure = (openNext = false) => {
+  const finishClosure = () => {
     setCurrentShift(null)
     setCurrentOperateur(null)
-    setPreviewMode(!openNext)
-    setShowShiftModal(openNext)
+    setPreviewMode(false)
+    setShowShiftModal(true)
     onClose()
   }
 
@@ -180,13 +180,12 @@ export default function FermetureCaisseModal({ onClose }: Props) {
               <div className="flex justify-between border-t border-white/25 pt-2"><span>Résultat hors fond</span><strong>{formatPrice(reportNet)}</strong></div>
             </div>
             <p className="mt-auto pt-6 text-xs text-emerald-100">Le rapport est conservé hors fonds dans Documents → Rapports de caisse.{!isMorningClosure && ' Le rapport Total journée a aussi été généré.'} La facture journalière reste indépendante.</p>
-            <button onClick={() => finishClosure(false)} className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-white text-teal-800 py-2.5 font-bold"><Eye size={15}/> Mode aperçu</button>
-            {isMorningClosure && <button onClick={() => finishClosure(true)} className="mt-2 flex items-center justify-center gap-2 rounded-xl border border-white/40 bg-white/10 text-white py-2.5 font-bold"><Play size={15}/> Ouvrir caisse soir</button>}
+            <button onClick={finishClosure} className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-white text-teal-800 py-2.5 font-bold"><Play size={15}/> Continuer vers le choix</button>
           </aside>
           <section className="min-h-0 flex flex-col">
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div><h3 className="font-bold">Aperçu imprimable</h3><p className="text-xs text-text-muted">{new Date(savedReport.ended_at).toLocaleString('fr-TN')}</p></div>
-              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={() => finishClosure(false)} className="p-2"><X size={18}/></button></div>
+              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={finishClosure} className="p-2"><X size={18}/></button></div>
             </div>
             <div className="overflow-auto p-5">
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">{[['Entrées', summary?.moneyIn ?? 0], ['Sorties', summary?.moneyOut ?? 0], ['Résultat hors fond', reportNet]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>

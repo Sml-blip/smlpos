@@ -37,6 +37,8 @@ import {
 } from 'lucide-react'
 
 const api = window.api
+const supplierInvoiceNet = (facture: FactureFournisseur) => facture.net_a_payer ?? facture.montant_ttc
+const supplierInvoiceRemaining = (facture: FactureFournisseur) => Math.max(0, supplierInvoiceNet(facture) - facture.montant_paye)
 
 type Tab = 'fournisseurs' | 'factures' | 'echeancier'
 
@@ -154,13 +156,13 @@ export default function AchatsTab() {
           {facturesEnRetard.map(f => (
             <div key={f.id} className="flex items-center gap-2 text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               <AlertTriangle size={12} className="flex-shrink-0" />
-              <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — <strong className="font-price">{formatPrice(f.montant_restant ?? (f.montant_ttc - f.montant_paye))}</strong> — En retard</span>
+              <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — <strong className="font-price">{formatPrice(supplierInvoiceRemaining(f))}</strong> — En retard</span>
             </div>
           ))}
           {facturesUrgentes.map(f => (
             <div key={f.id} className="flex items-center gap-2 text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
               <Clock size={12} className="flex-shrink-0" />
-              <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — <strong className="font-price">{formatPrice(f.montant_restant ?? (f.montant_ttc - f.montant_paye))}</strong> — Échéance dans ≤7j</span>
+              <span><strong>{f.fournisseur_nom}</strong> — {f.numero_facture} — <strong className="font-price">{formatPrice(supplierInvoiceRemaining(f))}</strong> — Échéance dans ≤7j</span>
             </div>
           ))}
           {blFacturesMissing.map(f => (
@@ -431,7 +433,7 @@ function FournisseursTable({ fournisseurs, factures, onEdit, onAdjust, onExport 
               <td className="px-4 py-3 text-text-secondary">{f.telephone || '—'}</td>
               <td className="px-4 py-3 text-right">
                 <span className={cn('font-price font-bold', f.solde_du > 0 ? 'text-danger' : 'text-success')}>{formatPrice(f.solde_du)}</span>
-                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + x.montant_ttc, 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <><div className="mt-1 text-[10px] text-text-muted">Factures {formatPrice(total)} · Payé {formatPrice(paid)}</div><div className="mt-1 ml-auto h-1.5 w-32 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div></> })()}
+                {(() => { const mine = factures.filter(x => x.fournisseur_id === f.id); const total = mine.reduce((s, x) => s + supplierInvoiceNet(x), 0); const paid = mine.reduce((s, x) => s + x.montant_paye, 0); const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 100; return <><div className="mt-1 text-[10px] text-text-muted">Net factures {formatPrice(total)} · Payé {formatPrice(paid)}</div><div className="mt-1 ml-auto h-1.5 w-32 overflow-hidden rounded-full bg-gray-200"><div className="h-full rounded-full bg-green-500" style={{ width: `${pct}%` }} /></div></> })()}
               </td>
               <td className="px-4 py-3 text-right">
                 <div className="flex items-center justify-end gap-1">
@@ -477,7 +479,7 @@ function FacturesTable({ factures, onPayer, onMarquerRecu }: { factures: Facture
         </thead>
         <tbody>
           {factures.map(f => {
-            const restant = f.montant_restant ?? (f.montant_ttc - f.montant_paye)
+            const restant = supplierInvoiceRemaining(f)
             const isBL = f.type === 'FACTURE_ACHAT_BL'
             const notReceived = isBL && f.statut_reception !== 'ARRIVE'
             return (
@@ -552,7 +554,7 @@ function EcheancierTable({ factures, onPayer }: { factures: FactureFournisseur[]
   return (
     <div className="space-y-3">
       {pending.map(f => {
-        const restant = f.montant_restant ?? (f.montant_ttc - f.montant_paye)
+        const restant = supplierInvoiceRemaining(f)
         const daysLeft = Math.ceil((new Date(f.date_echeance!).getTime() - Date.now()) / 86400000)
         const isLate = daysLeft < 0
         const isUrgent = daysLeft >= 0 && daysLeft <= 7
@@ -1849,6 +1851,9 @@ function FactureFournisseurModal({
 
   const montantHT = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat, 0)
   const montantTTC = lignes.reduce((s, l) => s + l.quantite * l.nouveau_prix_achat * (1 + l.tva_taux / 100), 0)
+  const totalGeneralAchat = (exoFlag ? montantHT : montantTTC) - (parseFloat(remiseGlobale) || 0) + (parseFloat(timbre) || 0)
+  const retenueSource = totalGeneralAchat >= 1000 ? totalGeneralAchat * 0.01 : 0
+  const netAPayerAchat = totalGeneralAchat - retenueSource
 
   const handleSave = async () => {
     if (saveInFlight.current) return
@@ -1899,6 +1904,9 @@ function FactureFournisseurModal({
         statut_reception: 'ARRIVE',
         exo: exoFlag ? (exoText || 'EXO') : null,
         timbre: timbreVal, total_remise: remise > 0 ? remise : null,
+        retenue_source_pct: totalGeneral >= 1000 ? 1 : 0,
+        retenue_source_montant: totalGeneral >= 1000 ? +(totalGeneral * 0.01).toFixed(3) : 0,
+        net_a_payer: totalGeneral >= 1000 ? +(totalGeneral * 0.99).toFixed(3) : totalGeneral,
         ht_7: ht7 > 0 ? ht7 : null, tva_7: tva7 > 0 ? tva7 : null,
         ht_19: ht19 > 0 ? ht19 : null, tva_19: tva19 > 0 ? tva19 : null,
       }
@@ -2283,8 +2291,13 @@ function FactureFournisseurModal({
             {(parseFloat(timbre) || 0) > 0 && <div className="flex justify-between text-sm"><span className="text-text-secondary">Timbre fiscal</span><span className="font-price font-semibold">+ {formatPrice(parseFloat(timbre) || 0)}</span></div>}
             <div className="flex justify-between font-bold border-t border-border pt-1.5">
               <span>Total Général</span>
-              <span className="font-price text-lg">{formatPrice((exoFlag ? montantHT : montantTTC) - (parseFloat(remiseGlobale) || 0) + (parseFloat(timbre) || 0))}</span>
+              <span className="font-price text-lg">{formatPrice(totalGeneralAchat)}</span>
             </div>
+            {retenueSource > 0 && <>
+              <div className="flex justify-between text-sm text-orange-700"><span>Retenue à la source (1 %)</span><span className="font-price font-semibold">- {formatPrice(retenueSource)}</span></div>
+              <div className="flex justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 font-bold text-emerald-800"><span>Net à payer fournisseur</span><span className="font-price">{formatPrice(netAPayerAchat)}</span></div>
+            </>}
+            {totalGeneralAchat > 0 && totalGeneralAchat < 1000 && <p className="text-[10px] text-text-muted">Retenue 1 % appliquée automatiquement à partir de 1 000.000 DT TTC.</p>}
           </div>
         </div>
 
@@ -2321,7 +2334,7 @@ function FactureFournisseurModal({
             <Printer size={14} /> Aperçu
           </button>
           <button type="button" onClick={handleSave} disabled={loading || !fournisseurId || !numeroFacture} className={cn('flex-1 disabled:bg-gray-200 disabled:text-gray-400 font-bold py-2.5 rounded-xl text-sm transition-colors', isBL ? 'bg-blue-500 hover:bg-blue-600 text-white' : 'bg-accent-500 hover:bg-accent-600 text-text-primary')}>
-            {loading ? 'Enregistrement...' : `${isBL ? 'Créer BL' : 'Enregistrer'} — ${formatPrice((exoFlag ? montantHT : montantTTC) - (parseFloat(remiseGlobale) || 0) + (parseFloat(timbre) || 0))}`}
+            {loading ? 'Enregistrement...' : `${isBL ? 'Créer BL' : 'Enregistrer'} — ${formatPrice(netAPayerAchat)}`}
           </button>
         </div>
       </div>
@@ -2507,7 +2520,7 @@ function SupplierBalanceModal({ target, onClose, onSaved }: { target: { fourniss
 
 function PaiementModal({ facture, onClose, onSaved }: { facture: FactureFournisseur; onClose: () => void; onSaved: () => void }) {
   const { currentShift } = useAppStore()
-  const restant = facture.montant_restant ?? (facture.montant_ttc - facture.montant_paye)
+  const restant = supplierInvoiceRemaining(facture)
   const [montant, setMontant] = useState(restant.toFixed(3))
   const [mode, setMode] = useState<'ESPECES' | 'CHEQUE' | 'VIREMENT' | 'AUTRE'>('ESPECES')
   const [refCheque, setRefCheque] = useState('')

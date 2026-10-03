@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.5'
+export const SCHEMA_VERSION = '1.10.6'
 
 export function initDatabase() {
   const db = getDb()
@@ -262,6 +262,17 @@ export function initDatabase() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS remboursements_ventes (
+      id             TEXT PRIMARY KEY,
+      vente_id       TEXT NOT NULL UNIQUE REFERENCES ventes(id),
+      shift_id       TEXT,
+      montant        REAL NOT NULL DEFAULT 0,
+      mode_paiement  TEXT DEFAULT 'ESPECES',
+      operateur      TEXT,
+      motif          TEXT,
+      created_at     TEXT DEFAULT (datetime('now'))
+    );
+
     -- ── Factures Fournisseurs ────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS factures_fournisseurs (
       id              TEXT PRIMARY KEY,
@@ -274,6 +285,9 @@ export function initDatabase() {
       montant_tva     REAL DEFAULT 0,
       montant_ttc     REAL NOT NULL,
       montant_paye    REAL DEFAULT 0,
+      retenue_source_pct REAL DEFAULT 0,
+      retenue_source_montant REAL DEFAULT 0,
+      net_a_payer     REAL,
       notes           TEXT,
       created_at      TEXT DEFAULT (datetime('now'))
     );
@@ -991,6 +1005,21 @@ export function initDatabase() {
 
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN updated_at TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN stock_applied INTEGER DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN retenue_source_pct REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN retenue_source_montant REAL DEFAULT 0`) } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE factures_fournisseurs ADD COLUMN net_a_payer REAL`) } catch { /* already exists */ }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS remboursements_ventes (
+      id TEXT PRIMARY KEY,
+      vente_id TEXT NOT NULL UNIQUE REFERENCES ventes(id),
+      shift_id TEXT,
+      montant REAL NOT NULL DEFAULT 0,
+      mode_paiement TEXT DEFAULT 'ESPECES',
+      operateur TEXT,
+      motif TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN pending_product_json TEXT`) } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE lignes_facture_fournisseur ADD COLUMN numeros_serie_json TEXT`) } catch { /* already exists */ }
 

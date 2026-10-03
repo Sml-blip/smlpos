@@ -29,6 +29,8 @@ const INVOICE_PRINT_TYPES = new Set(['FACTURE_VENTE', 'DEVIS', 'BON_LIVRAISON', 
 const ACHAT_PRINT_TYPES = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
 
 const api = window.api
+const documentDisplayTotal = (document: DocRow) => Number(document.total_ttc || 0) +
+  (['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F'].includes(document.type_document) ? Number(document.timbre || 0) : 0)
 
 type SubTab = 'TOUS' | 'RAPPORT_CAISSE' | 'FACTURE_VENTE' | 'FACTURE_JOURNALIERE_F' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'AVOIR'
 
@@ -701,7 +703,7 @@ export default function DocumentsTab() {
                   <td className="px-3 py-2 text-text-muted">{d.type_document?.replace('_', ' ')}</td>
                   <td className={cn('px-3 py-2 max-w-[180px] truncate', d.statut === 'ANNULE' && 'line-through')}>{tiers(d)}</td>
                   <td className="px-3 py-2 text-text-muted">{d.created_at ? format(new Date(d.created_at), 'dd/MM/yyyy') : '—'}</td>
-                  <td className="px-3 py-2 text-right font-price font-semibold">{formatPrice(d.total_ttc)}</td>
+                  <td className="px-3 py-2 text-right font-price font-semibold">{formatPrice(documentDisplayTotal(d))}</td>
                   <td className="px-3 py-2 text-center">
                     <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border', sc.cls)}>{sc.label}</span>
                   </td>
@@ -767,7 +769,7 @@ export default function DocumentsTab() {
               <div className="flex justify-between"><span className="text-text-muted">TVA</span><span className="font-price">{formatPrice(previewDoc.total_tva)}</span></div>
               {previewDoc.timbre ? <div className="flex justify-between"><span className="text-text-muted">Timbre</span><span className="font-price">{formatPrice(previewDoc.timbre)}</span></div> : null}
               {previewDoc.total_remise ? <div className="flex justify-between text-red-600"><span>Remise</span><span className="font-price">- {formatPrice(previewDoc.total_remise)}</span></div> : null}
-              <div className="flex justify-between font-bold border-t border-border pt-1"><span>Total TTC</span><span className="font-price text-base">{formatPrice(previewDoc.total_ttc)}</span></div>
+              <div className="flex justify-between font-bold border-t border-border pt-1"><span>Total général</span><span className="font-price text-base">{formatPrice(documentDisplayTotal(previewDoc))}</span></div>
             </div>
             <div className="flex gap-2 flex-wrap">
               <button type="button" onClick={() => setPreviewDoc(null)} className="flex-1 bg-muted hover:bg-border py-2 rounded-xl text-sm font-semibold">Fermer</button>

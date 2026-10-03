@@ -19,6 +19,9 @@ import SaleExchangeModal, { type ExchangeResult } from './SaleExchangeModal'
 import { ACTIVITY_LABELS, formatActivityDetails } from '../../lib/activityLabels'
 
 const api = window.api
+const venteDisplayTotal = (vente: Vente) => Number(vente.total_ttc || 0) + Number(vente.timbre_fiscal || 0)
+const documentDisplayTotal = (document: DocType) => Number(document.total_ttc || 0) +
+  (['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F'].includes(document.type_document) ? Number(document.timbre || 0) : 0)
 const HISTORIQUE_PRESET_KEY = 'smlpos_historique_preset'
 const HISTORIQUE_FROM_KEY = 'smlpos_historique_from'
 const HISTORIQUE_TO_KEY = 'smlpos_historique_to'
@@ -223,7 +226,7 @@ export default function HistoriqueTab() {
     }
   }
 
-  const handleCancelVente = async (vente: Vente, motif: string, creerAvoir: boolean) => {
+  const handleCancelVente = async (vente: Vente, motif: string, creerAvoir: boolean, refund: { montant: number; mode: string }) => {
     await runAction('Annulation vente', async () => {
       if (vente.type_vente === 'FACTURE' && creerAvoir) {
         const linkedInvoice = (items: DocType[]) => items.find(doc =>
@@ -234,12 +237,20 @@ export default function HistoriqueTab() {
         const invoice = linkedInvoice(documents)
           ?? linkedInvoice(await api.documentsList({}) as DocType[])
         if (!invoice) throw new Error('Facture active liée introuvable — annulation avec avoir impossible')
-        const result = await api.documentsAnnulerAvecAvoir?.(invoice.id, motif)
+        const result = await api.documentsAnnulerAvecAvoir?.(invoice.id, motif, {
+          montant_rembourse: refund.montant,
+          mode_remboursement: refund.mode,
+          shift_id: currentShift?.id ?? null,
+          operateur: currentOperateur?.nom ?? 'superadmin',
+        })
         if (!result?.success) throw new Error(result?.error || 'Création de l’avoir impossible')
       } else {
         await api.ventesAnnuler(vente.id, {
           annule_par: currentOperateur?.nom ?? 'superadmin',
           annule_motif: motif,
+          montant_rembourse: refund.montant,
+          mode_remboursement: refund.mode,
+          shift_id: currentShift?.id ?? null,
           ...(vente.type_vente === 'FACTURE' ? { creer_avoir: false } : {}),
         })
       }
@@ -322,7 +333,7 @@ export default function HistoriqueTab() {
   }
 
   const activeVentes = ventes.filter(v => v.type === 'VENTE' && v.statut !== 'ANNULEE' && v.type_vente !== 'DEVIS')
-  const totalVentes = activeVentes.reduce((s, v) => s + v.total_ttc, 0)
+  const totalVentes = activeVentes.reduce((s, v) => s + venteDisplayTotal(v), 0)
   const totalReparations = reparations.filter(r => r.statut !== 'ANNULE').reduce((s, r) => s + r.total_estime, 0)
 
   const exportVentes = () => {
@@ -333,7 +344,7 @@ export default function HistoriqueTab() {
       'Type': SALE_TYPE_CONFIG[v.type_vente ?? 'TICKET'].label,
       'Mode': MODE_LABELS[v.mode_paiement] || v.mode_paiement,
       'Remises': v.total_remises,
-      'Total TTC': v.total_ttc,
+      'Total TTC': venteDisplayTotal(v),
     }))
     const ws = XLSX.utils.json_to_sheet(rows)
     const wb = XLSX.utils.book_new()
@@ -671,7 +682,7 @@ export default function HistoriqueTab() {
         <CancelVenteModal
           vente={cancelTarget}
           onClose={() => setCancelTarget(null)}
-          onConfirm={(motif, creerAvoir) => handleCancelVente(cancelTarget, motif, creerAvoir)}
+          onConfirm={(motif, creerAvoir, refund) => handleCancelVente(cancelTarget, motif, creerAvoir, refund)}
         />
       )}
       {exchangeTarget && (
@@ -854,7 +865,7 @@ function VentesTable({
                     <span className="text-xs font-price text-danger">-{formatPrice(v.total_remises)}</span>
                   ) : <span className="text-xs text-text-muted">—</span>}
                 </td>
-                <td className="px-4 py-2.5 text-right font-price font-bold">{formatPrice(v.total_ttc)}</td>
+                <td className="px-4 py-2.5 text-right font-price font-bold">{formatPrice(venteDisplayTotal(v))}</td>
                 <td className="px-4 py-2.5 text-center">
                   {annulee ? (
                     <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Annulée</span>
@@ -919,9 +930,12 @@ function VentesTable({
                             {v.total_remises > 0 && (
                               <div className="text-xs text-danger font-price mb-0.5">Remises: -{formatPrice(v.total_remises)}</div>
                             )}
-                            <div className="text-sm font-bold font-price">Total: {formatPrice(v.total_ttc)}</div>
+                            <div className="text-sm font-bold font-price">Total: {formatPrice(venteDisplayTotal(v))}</div>
                             {v.monnaie_rendue && v.monnaie_rendue > 0 && (
                               <div className="text-xs text-success font-price">Monnaie: {formatPrice(v.monnaie_rendue)}</div>
+                            )}
+                            {v.montant_rembourse != null && v.montant_rembourse > 0 && (
+                              <div className="text-xs text-red-700 font-price">Remboursé au client: {formatPrice(v.montant_rembourse)}</div>
                             )}
                           </div>
                         </div>
@@ -1301,7 +1315,7 @@ function DocumentsTable({ documents, onPrint }: { documents: DocType[]; onRefres
               </td>
               <td className="px-4 py-2.5 text-xs font-medium">{d.client_nom || '—'}</td>
               <td className="px-4 py-2.5 text-xs text-text-secondary">{formatDate(d.created_at)}</td>
-              <td className="px-4 py-2.5 text-right font-price font-bold">{formatPrice(d.total_ttc)}</td>
+              <td className="px-4 py-2.5 text-right font-price font-bold">{formatPrice(documentDisplayTotal(d))}</td>
               <td className="px-4 py-2.5 text-center">
                 <span className={cn('text-xs px-2 py-0.5 rounded-full',
                   d.statut === 'ACTIF' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}>
@@ -1328,14 +1342,20 @@ function DocumentsTable({ documents, onPrint }: { documents: DocType[]; onRefres
 // ─── Cancel Vente Modal ────────────────────────────────────────────────────────
 
 function CancelVenteModal({ vente, onClose, onConfirm }: {
-  vente: Vente; onClose: () => void; onConfirm: (motif: string, creerAvoir: boolean) => void
+  vente: Vente; onClose: () => void; onConfirm: (motif: string, creerAvoir: boolean, refund: { montant: number; mode: string }) => void
 }) {
   const [motif, setMotif] = useState('')
   const [error, setError] = useState('')
+  const defaultRefund = Math.max(0, venteDisplayTotal(vente) - Number(vente.avance_utilisee || 0))
+  const [refundEnabled, setRefundEnabled] = useState(defaultRefund > 0)
+  const [refundAmount, setRefundAmount] = useState(defaultRefund.toFixed(3))
+  const [refundMode, setRefundMode] = useState(vente.mode_paiement || 'ESPECES')
   const isInvoice = vente.type_vente === 'FACTURE'
   const handleConfirm = (creerAvoir: boolean) => {
     if (!motif.trim()) { setError('Le motif est obligatoire'); return }
-    onConfirm(motif, creerAvoir)
+    const amount = refundEnabled ? Number(refundAmount.replace(',', '.')) : 0
+    if (!Number.isFinite(amount) || amount < 0) { setError('Montant remboursé invalide'); return }
+    onConfirm(motif, creerAvoir, { montant: amount, mode: refundMode })
   }
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1345,7 +1365,7 @@ function CancelVenteModal({ vente, onClose, onConfirm }: {
           <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
         </div>
         <p className="text-sm text-text-secondary">
-          Confirmer l'annulation de <strong>{vente.numero}</strong> ({formatPrice(vente.total_ttc)}) ?<br />
+          Confirmer l'annulation de <strong>{vente.numero}</strong> ({formatPrice(venteDisplayTotal(vente))}) ?<br />
           <span className="text-xs text-text-muted">
             {vente.type_vente === 'DEVIS' ? 'Le devis n’a aucun stock à restaurer.' : 'Le stock et les S/N seront automatiquement restaurés.'}
           </span>
@@ -1356,6 +1376,23 @@ function CancelVenteModal({ vente, onClose, onConfirm }: {
           <textarea value={motif} onChange={e => setMotif(e.target.value)} rows={2}
             placeholder="Ex: Erreur de saisie, client annulé..."
             className="px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-red-400/30" />
+        </div>
+        <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 space-y-2">
+          <label className="flex items-center gap-2 text-xs font-bold text-orange-900">
+            <input type="checkbox" checked={refundEnabled} onChange={e => setRefundEnabled(e.target.checked)} />
+            Argent rendu au client
+          </label>
+          {refundEnabled && <div className="grid grid-cols-2 gap-2">
+            <label className="text-[11px] text-text-secondary">Montant remboursé
+              <input value={refundAmount} onChange={e => setRefundAmount(e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2 py-1.5 font-price" />
+            </label>
+            <label className="text-[11px] text-text-secondary">Mode
+              <select value={refundMode} onChange={e => setRefundMode(e.target.value as Vente['mode_paiement'])} className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2 py-1.5">
+                <option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="MIXTE">Mixte</option>
+              </select>
+            </label>
+          </div>}
+          <p className="text-[10px] text-orange-800">Ce remboursement sera enregistré dans le rapport de la caisse active.</p>
         </div>
         <div className="flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-border rounded-lg text-text-secondary">Fermer</button>

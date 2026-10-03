@@ -186,6 +186,8 @@ export default function App() {
   useEffect(() => {
     if (!previewMode) return
     const blockShortcuts = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-preview-allowed="true"]')) return
       if (event.key === 'Tab' || event.key.startsWith('Arrow') || event.key === 'PageDown' || event.key === 'PageUp' || event.key === 'Home' || event.key === 'End') return
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -244,7 +246,7 @@ export default function App() {
       {previewMode && (
         <div className="flex flex-shrink-0 items-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-950">
           <Eye size={15} className="text-blue-700"/>
-          <div className="min-w-0 flex-1"><strong>Mode aperçu · lecture seule</strong><span className="ml-2 text-blue-700">Vous pouvez consulter les écrans et faire défiler, aucune action ne sera exécutée.</span></div>
+          <div className="min-w-0 flex-1"><strong>Mode aperçu · lecture seule</strong><span className="ml-2 text-blue-700">Consultation, recherche inventaire et impression restent disponibles. Les modifications sont bloquées.</span></div>
           <button
             type="button"
             onClick={() => { setPreviewMode(false); setShowShiftModal(true) }}
@@ -263,13 +265,18 @@ export default function App() {
         onClickCapture={(event) => {
           if (!previewMode) return
           const target = event.target as HTMLElement
-          if (!target.closest('button,a,input,textarea,select,[contenteditable="true"]')) return
+          const control = target.closest('button,a,input,textarea,select,[contenteditable="true"]') as HTMLElement | null
+          if (!control) return
+          const label = `${control.getAttribute('title') ?? ''} ${control.getAttribute('aria-label') ?? ''} ${control.textContent ?? ''}`.toLowerCase()
+          if (control.closest('[data-preview-allowed="true"]') || /imprim|ticket|étiquette|etiquette|télécharger pdf|telecharger pdf/.test(label)) return
           event.preventDefault()
           event.stopPropagation()
           showToast('info', 'Mode aperçu : action bloquée — ouvrez une caisse pour modifier.')
         }}
         onInputCapture={(event) => {
           if (!previewMode) return
+          const target = event.target as HTMLElement
+          if (target.closest('[data-preview-allowed="true"]')) return
           event.preventDefault()
           event.stopPropagation()
         }}

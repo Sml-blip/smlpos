@@ -233,7 +233,7 @@ interface Window {
     documentsListMissingDailyFactureFDays?: (from?: string, to?: string) => Promise<unknown[]>
     documentsUpdate: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
     documentsRevoquer?: (id: string, motif: string, par: string) => Promise<{ success?: boolean }>
-    documentsAnnulerAvecAvoir?: (id: string, motif?: string) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>
+    documentsAnnulerAvecAvoir?: (id: string, motif?: string, refund?: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
     documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: Record<string, unknown>) => Promise<{ success?: boolean; error?: string }>
     documentsGetLastNumber: (prefix: string) => Promise<number>

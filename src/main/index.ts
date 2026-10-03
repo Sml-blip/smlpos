@@ -1218,6 +1218,10 @@ function setupIpcHandlers() {
       SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
       FROM sorties_caisse WHERE shift_id = ?
     `).get(shiftId) as { total: number; count: number }
+    const remboursements = db.prepare(`
+      SELECT COALESCE(SUM(montant),0) as total, COUNT(*) as count
+      FROM remboursements_ventes WHERE shift_id = ?
+    `).get(shiftId) as { total: number; count: number }
     const parMode = db.prepare(`
       SELECT mode_paiement, COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total
       FROM ventes WHERE shift_id = ? AND type = 'VENTE'
@@ -1277,10 +1281,12 @@ function setupIpcHandlers() {
     for (const row of cashOutRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Sortie caisse', direction: 'SORTIE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: String(row.note ?? '') })
     const exchangeRows = db.prepare(`SELECT id,type,montant,operateur,created_at,vente_id,ancien_total,nouveau_total FROM mouvements_echange WHERE shift_id=?`).all(shiftId) as Array<Record<string, unknown>>
     for (const row of exchangeRows) operations.push({ id: String(row.id), date: String(row.created_at), type: row.type === 'ENTREE' ? 'Échange · supplément reçu' : 'Échange · remboursement', direction: row.type as 'ENTREE' | 'SORTIE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: `Vente ${row.vente_id} · ${money3(row.ancien_total).toFixed(3)} → ${money3(row.nouveau_total).toFixed(3)} DT` })
+    const refundRows = db.prepare(`SELECT id,vente_id,montant,mode_paiement,operateur,motif,created_at FROM remboursements_ventes WHERE shift_id=?`).all(shiftId) as Array<Record<string, unknown>>
+    for (const row of refundRows) operations.push({ id: String(row.id), date: String(row.created_at), type: 'Annulation · remboursement client', direction: 'SORTIE', amount: money3(row.montant), operator: String(row.operateur ?? '—'), note: `Vente ${row.vente_id} · ${row.mode_paiement ?? ''}${row.motif ? ` · ${row.motif}` : ''}` })
     operations.sort((a, b) => a.date.localeCompare(b.date))
     const moneyIn = money3(ventes.total + reparations.total + creditsPercus.total + avancesClients.total + echanges.entrees)
-    const moneyOut = money3(sorties.total + echanges.sorties)
-    return { ventes, reparations, services, sorties, parMode, creditsPercus, avancesClients, echanges, operations, moneyIn, moneyOut, net: money3(moneyIn - moneyOut) }
+    const moneyOut = money3(sorties.total + echanges.sorties + remboursements.total)
+    return { ventes, reparations, services, sorties, remboursements, parMode, creditsPercus, avancesClients, echanges, operations, moneyIn, moneyOut, net: money3(moneyIn - moneyOut) }
   })
 
   ipcMain.handle('shifts:countClosedToday', () => {
@@ -2402,13 +2408,19 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('ventes:list', (_e, filters: { shiftId?: string; dateFrom?: string; dateTo?: string; limit?: number; search?: string } = {}) => {
-    let sql = 'SELECT * FROM ventes WHERE 1=1'
+    let sql = `SELECT v.*,
+      COALESCE((SELECT d.timbre FROM documents d
+        WHERE d.vente_id=v.id AND d.type_document='FACTURE_VENTE'
+          AND d.statut NOT IN ('ANNULE','REVOQUE')
+        ORDER BY d.created_at DESC LIMIT 1),0) AS timbre_fiscal,
+      COALESCE((SELECT r.montant FROM remboursements_ventes r WHERE r.vente_id=v.id LIMIT 1),0) AS montant_rembourse
+      FROM ventes v WHERE 1=1`
     const params: unknown[] = []
-    if (filters.shiftId) { sql += ' AND shift_id = ?'; params.push(filters.shiftId) }
-    if (filters.dateFrom) { sql += ' AND created_at >= ?'; params.push(filters.dateFrom.length === 10 ? filters.dateFrom + 'T00:00:00.000Z' : filters.dateFrom) }
-    if (filters.dateTo) { sql += ' AND created_at <= ?'; params.push(filters.dateTo.length === 10 ? filters.dateTo + 'T23:59:59.999Z' : filters.dateTo) }
-    if (filters.search) { sql += ' AND (numero LIKE ? OR client_nom LIKE ? OR client_tel LIKE ?)'; const s = `%${filters.search}%`; params.push(s, s, s) }
-    sql += ' ORDER BY created_at DESC'
+    if (filters.shiftId) { sql += ' AND v.shift_id = ?'; params.push(filters.shiftId) }
+    if (filters.dateFrom) { sql += ' AND v.created_at >= ?'; params.push(filters.dateFrom.length === 10 ? filters.dateFrom + 'T00:00:00.000Z' : filters.dateFrom) }
+    if (filters.dateTo) { sql += ' AND v.created_at <= ?'; params.push(filters.dateTo.length === 10 ? filters.dateTo + 'T23:59:59.999Z' : filters.dateTo) }
+    if (filters.search) { sql += ' AND (v.numero LIKE ? OR v.client_nom LIKE ? OR v.client_tel LIKE ?)'; const s = `%${filters.search}%`; params.push(s, s, s) }
+    sql += ' ORDER BY v.created_at DESC'
     if (filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit) }
     return db.prepare(sql).all(...params)
   })
@@ -3153,10 +3165,10 @@ function setupIpcHandlers() {
     const insertFacture = db.prepare(`
       INSERT INTO factures_fournisseurs (id, numero_facture, fournisseur_id, date_facture, date_echeance,
         statut_paiement, montant_ht, montant_tva, montant_ttc, montant_paye, notes, type, statut_reception, stock_applied,
-        exo, timbre, total_remise, ht_7, tva_7, ht_19, tva_19, created_at)
+        exo, timbre, total_remise, ht_7, tva_7, ht_19, tva_19, retenue_source_pct, retenue_source_montant, net_a_payer, created_at)
       VALUES (@id, @numero_facture, @fournisseur_id, @date_facture, @date_echeance,
         @statut_paiement, @montant_ht, @montant_tva, @montant_ttc, 0, @notes, @type, @statut_reception, @stock_applied,
-        @exo, @timbre, @total_remise, @ht_7, @tva_7, @ht_19, @tva_19, @created_at)
+        @exo, @timbre, @total_remise, @ht_7, @tva_7, @ht_19, @tva_19, @retenue_source_pct, @retenue_source_montant, @net_a_payer, @created_at)
     `)
     const insertLigne = db.prepare(`
       INSERT INTO lignes_facture_fournisseur (id, facture_id, produit_id, designation, quantite,
@@ -3179,9 +3191,15 @@ function setupIpcHandlers() {
       }
     }
     const isBL = f.type === 'FACTURE_ACHAT_BL'
-    const factureWithDefaults = {
+    const grossSupplierTotal = money3(factureData.montant_ttc)
+    const retenuePct = grossSupplierTotal >= 1000 ? 1 : 0
+    const retenueMontant = money3(grossSupplierTotal * retenuePct / 100)
+    const factureWithDefaults: Record<string, unknown> = {
       exo: null, timbre: 1, total_remise: null, ht_7: null, tva_7: null, ht_19: null, tva_19: null,
       ...factureData,
+      retenue_source_pct: retenuePct,
+      retenue_source_montant: retenueMontant,
+      net_a_payer: money3(grossSupplierTotal - retenueMontant),
       type: f.type ?? 'FACTURE_ACHAT',
       // A submitted BL represents goods that are now physically in the shop.
       // Draft BLs never affect stock; final BLs do, exactly like a supplier invoice.
@@ -3222,10 +3240,10 @@ function setupIpcHandlers() {
           }
         }
       }
-      updateSolde.run(factureWithDefaults.montant_ttc, factureWithDefaults.fournisseur_id)
+      updateSolde.run(factureWithDefaults.net_a_payer, factureWithDefaults.fournisseur_id)
     })
     transaction()
-    addActivityLog({ action: 'SUPPLIER_INVOICE_CREATED', montant: facture.montant_ttc, details: { numero: facture.numero_facture, type: factureWithDefaults.type } })
+    addActivityLog({ action: 'SUPPLIER_INVOICE_CREATED', montant: Number(factureWithDefaults.net_a_payer || 0), details: { numero: facture.numero_facture, type: factureWithDefaults.type, retenue_source_montant: retenueMontant } })
     enqueueSync('factures_fournisseurs', 'INSERT', factureWithDefaults)
     for (const l of lignes) enqueueSync('lignes_facture_fournisseur', 'INSERT', l)
     for (const l of lignes) if (l.produit_id) enqueueProductSnapshot(l.produit_id)
@@ -3246,7 +3264,7 @@ function setupIpcHandlers() {
           for (const line of lignes) revertAchatLineInventory(line)
         }
         db.prepare(`UPDATE factures_fournisseurs SET statut_paiement='ANNULE', stock_applied=0, updated_at=? WHERE id=?`).run(new Date().toISOString(), factureId)
-        db.prepare(`UPDATE fournisseurs SET solde_du=MAX(0, solde_du-?) WHERE id=?`).run(Number(facture.montant_ttc || 0), facture.fournisseur_id)
+        db.prepare(`UPDATE fournisseurs SET solde_du=MAX(0, solde_du-?) WHERE id=?`).run(Number(facture.net_a_payer ?? facture.montant_ttc ?? 0), facture.fournisseur_id)
       })()
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Annulation impossible' }
@@ -3260,7 +3278,7 @@ function setupIpcHandlers() {
   const FF_UPDATE_ALLOWED = new Set([
     'fournisseur_id', 'notes', 'exo', 'timbre', 'total_remise',
     'montant_ht', 'montant_tva', 'montant_ttc', 'ht_7', 'tva_7', 'ht_19', 'tva_19',
-    'date_echeance', 'updated_at',
+    'date_echeance', 'updated_at', 'retenue_source_pct', 'retenue_source_montant', 'net_a_payer',
   ])
 
   ipcMain.handle('facturesFournisseurs:update', (_e, id: string, data: Record<string, unknown>) => {
@@ -3270,7 +3288,15 @@ function setupIpcHandlers() {
     if (existing.statut_paiement === 'BROUILLON' || existing.statut_paiement === 'ANNULE') {
       return { success: false, error: 'Facture non modifiable' }
     }
-    const filtered = Object.fromEntries(Object.entries(data).filter(([k]) => FF_UPDATE_ALLOWED.has(k)))
+    const normalizedData = { ...data }
+    if ('montant_ttc' in normalizedData) {
+      const gross = money3(normalizedData.montant_ttc)
+      const pct = gross >= 1000 ? 1 : 0
+      normalizedData.retenue_source_pct = pct
+      normalizedData.retenue_source_montant = money3(gross * pct / 100)
+      normalizedData.net_a_payer = money3(gross - Number(normalizedData.retenue_source_montant))
+    }
+    const filtered = Object.fromEntries(Object.entries(normalizedData).filter(([k]) => FF_UPDATE_ALLOWED.has(k)))
     if (!Object.keys(filtered).length) return { success: false, error: 'Aucun champ valide' }
     const cols = Object.keys(filtered)
     const sets = cols.map(k => `${k}=@${k}`).join(',')
@@ -3321,12 +3347,16 @@ function setupIpcHandlers() {
             })
           }
         }
+        const gross = money3(totals.montant_ttc)
+        const retenuePct = gross >= 1000 ? 1 : 0
+        const retenueMontant = money3(gross * retenuePct / 100)
         db.prepare(`
           UPDATE factures_fournisseurs SET
             montant_ht=@montant_ht, montant_tva=@montant_tva, montant_ttc=@montant_ttc,
             ht_7=@ht_7, tva_7=@tva_7, ht_19=@ht_19, tva_19=@tva_19,
+            retenue_source_pct=@retenue_source_pct, retenue_source_montant=@retenue_source_montant, net_a_payer=@net_a_payer,
             updated_at=@updated_at WHERE id=@id
-        `).run({ id: factureId, updated_at: now, ...totals })
+        `).run({ id: factureId, updated_at: now, ...totals, retenue_source_pct: retenuePct, retenue_source_montant: retenueMontant, net_a_payer: money3(gross - retenueMontant) })
       })()
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Échec synchronisation stock' }
@@ -3540,7 +3570,7 @@ function setupIpcHandlers() {
     if (source === 'EXTERNE' && !shiftId) throw new Error('Ouvrez une caisse externe avant ce paiement')
     const factureBefore = db.prepare('SELECT * FROM factures_fournisseurs WHERE id = ?').get(p.facture_id) as Record<string, unknown> | undefined
     if (!factureBefore) throw new Error('Facture fournisseur introuvable')
-    const restant = money3(Number(factureBefore.montant_ttc) - Number(factureBefore.montant_paye))
+    const restant = money3(Number(factureBefore.net_a_payer ?? factureBefore.montant_ttc) - Number(factureBefore.montant_paye))
     const requestedAmount = money3(p.montant)
     const amount = paymentType === 'INSTANT' ? restant : requestedAmount
     if (amount <= 0 || amount > restant + 0.0001) throw new Error('Le paiement dépasse le montant restant')
@@ -3570,7 +3600,7 @@ function setupIpcHandlers() {
     const updateFacture = db.prepare(`
       UPDATE factures_fournisseurs SET montant_paye = montant_paye + ?,
         statut_paiement = CASE
-          WHEN montant_paye + ? >= montant_ttc THEN 'PAYE'
+          WHEN montant_paye + ? >= COALESCE(net_a_payer, montant_ttc) THEN 'PAYE'
           WHEN montant_paye + ? > 0 THEN 'PARTIEL'
           ELSE statut_paiement END
       WHERE id=?
@@ -4679,10 +4709,15 @@ function setupIpcHandlers() {
       throw new Error('Utilisez l’annulation avec avoir pour cette facture')
     }
     const affectsInventory = venteAffectsInventory(vente)
+    const refundAmount = Math.max(0, money3(data.montant_rembourse))
+    const refundShiftId = String(data.shift_id ?? '').trim()
+    if (refundAmount > 0 && !refundShiftId) throw new Error('Ouvrez une caisse pour enregistrer le remboursement client')
     let loyaltyClientId: string | null = null
     db.transaction(() => {
       db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par=@annule_par, annule_at=@annule_at, annule_motif=@annule_motif WHERE id=@id`)
         .run({ id, annule_par: data.annule_par, annule_at: now, annule_motif: data.annule_motif })
+      db.prepare(`INSERT OR IGNORE INTO remboursements_ventes (id,vente_id,shift_id,montant,mode_paiement,operateur,motif,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(randomUUID(), id, refundShiftId || null, refundAmount, String(data.mode_remboursement ?? 'ESPECES'), data.annule_par ?? null, data.annule_motif ?? null, now)
       const lignes = db.prepare(`SELECT produit_id, quantite, numero_serie FROM lignes_vente WHERE vente_id = ? AND produit_id IS NOT NULL`).all(id) as Record<string, unknown>[]
       if (affectsInventory) {
         for (const l of lignes) {
@@ -4740,7 +4775,7 @@ function setupIpcHandlers() {
         }
       }
     })()
-    addActivityLog({ action: 'SALE_CANCELLED', details: { id, ...data } })
+    addActivityLog({ shift_id: refundShiftId || undefined, operateur: String(data.annule_par ?? ''), action: 'SALE_CANCELLED', montant: refundAmount, details: { id, ...data } })
     enqueueSync('ventes', 'UPDATE', { id, statut: 'ANNULEE', annule_at: now, ...data })
     if (activeInvoice) {
       enqueueSync('documents', 'UPDATE', {
@@ -5182,7 +5217,7 @@ function setupIpcHandlers() {
     return parseInt(parts[parts.length - 1]) || 0
   })
 
-  ipcMain.handle('documents:annulerAvecAvoir', (_e, id: string, motif?: string) => {
+  ipcMain.handle('documents:annulerAvecAvoir', (_e, id: string, motif?: string, refundData: Record<string, unknown> = {}) => {
     const doc = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(id) as Record<string, unknown> | undefined
     if (!doc) return { success: false, error: 'Document introuvable' }
     const type = doc.type_document as string
@@ -5205,6 +5240,9 @@ function setupIpcHandlers() {
     const avoirId = randomUUID()
     const neg = (n: unknown) => -Math.abs(Number(n) || 0)
     const linkedVenteId = String(doc.vente_id ?? '').trim()
+    const refundAmount = Math.max(0, money3(refundData.montant_rembourse))
+    const refundShiftId = String(refundData.shift_id ?? '').trim()
+    if (refundAmount > 0 && !refundShiftId) return { success: false, error: 'Ouvrez une caisse pour enregistrer le remboursement client' }
     let cancelledLinkedSale = false
     const restoredProductIds = new Set<string>()
 
@@ -5286,6 +5324,8 @@ function setupIpcHandlers() {
           }
           db.prepare(`UPDATE ventes SET statut='ANNULEE', annule_par='FACTURE_AVOIR', annule_at=?, annule_motif=? WHERE id=?`)
             .run(now, motif?.trim() || `Facture ${doc.numero} annulée avec avoir`, linkedVenteId)
+          db.prepare(`INSERT OR IGNORE INTO remboursements_ventes (id,vente_id,shift_id,montant,mode_paiement,operateur,motif,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+            .run(randomUUID(), linkedVenteId, refundShiftId || null, refundAmount, String(refundData.mode_remboursement ?? 'ESPECES'), refundData.operateur ?? 'superadmin', motif?.trim() || null, now)
           const advanceDossierId = String(vente.avance_dossier_id ?? '').trim()
           if (advanceDossierId) {
             const advanceRows = db.prepare(`SELECT * FROM avances_clients WHERE dossier_id=? ORDER BY created_at`).all(advanceDossierId) as Record<string, unknown>[]
@@ -5310,9 +5350,11 @@ function setupIpcHandlers() {
     if (cancelledLinkedSale) enqueueSync('ventes', 'UPDATE', { id: linkedVenteId, statut: 'ANNULEE', annule_at: now, annule_par: 'FACTURE_AVOIR' })
     for (const productId of restoredProductIds) enqueueProductSnapshot(productId)
     addActivityLog({
+      shift_id: refundShiftId || undefined,
+      operateur: String(refundData.operateur ?? ''),
       action: 'FACTURE_ANNULEE_AVEC_AVOIR',
-      details: { facture_id: id, facture_numero: doc.numero, avoir_numero: avoirNumero, motif: motif?.trim() || null },
-      montant: Math.abs(Number(doc.total_ttc) || 0),
+      details: { facture_id: id, facture_numero: doc.numero, avoir_numero: avoirNumero, motif: motif?.trim() || null, montant_rembourse: refundAmount },
+      montant: refundAmount,
     })
     return { success: true, avoir: { id: avoirId, numero: avoirNumero } }
   })

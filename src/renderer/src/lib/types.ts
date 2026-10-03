@@ -127,6 +127,8 @@ export interface Vente {
   sous_total: number
   total_remises: number
   total_ttc: number
+  timbre_fiscal?: number
+  montant_rembourse?: number
   mode_paiement: ModePaiement
   montant_recu?: number
   monnaie_rendue?: number
@@ -285,6 +287,9 @@ export interface FactureFournisseur {
   montant_tva: number
   montant_ttc: number
   montant_paye: number
+  retenue_source_pct?: number
+  retenue_source_montant?: number
+  net_a_payer?: number
   montant_restant?: number
   notes?: string
   type?: 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL'
@@ -405,6 +410,8 @@ export interface Document {
   total_ht: number
   total_tva: number
   total_ttc: number
+  timbre?: number
+  total_remise?: number
   statut_paiement: StatutPaiement
   montant_paye: number
   date_echeance?: string
