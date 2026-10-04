@@ -1013,6 +1013,11 @@ function setupIpcHandlers() {
   const getTodayShiftStatus = () => {
     const shifts = getTodayShiftRows()
     const active = shifts.find(row => !row.ended_at) ?? null
+    const staleOpen = db.prepare(`
+      SELECT * FROM shifts
+      WHERE ended_at IS NULL AND date(started_at, 'localtime') < date('now', 'localtime')
+      ORDER BY started_at DESC LIMIT 1
+    `).get() as Record<string, unknown> | undefined
     const labelled: Array<Record<string, unknown>> = shifts.map((row, index) => ({
       ...row,
       session_type: row.session_type === 'MATIN' || row.session_type === 'SOIR'
@@ -1024,6 +1029,7 @@ function setupIpcHandlers() {
       openedCount: shifts.length,
       closedCount: shifts.filter(row => !!row.ended_at).length,
       active,
+      staleOpen: staleOpen ?? null,
       morningDone: labelled.some(row => row.session_type === 'MATIN' && !!row.ended_at),
       eveningDone: labelled.some(row => row.session_type === 'SOIR' && !!row.ended_at),
       nextSession: shifts.length === 0 ? 'MATIN' : shifts.length === 1 ? 'SOIR' : null,

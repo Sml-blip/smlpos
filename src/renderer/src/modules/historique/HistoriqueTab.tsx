@@ -17,6 +17,8 @@ import DocumentPrintModal from './DocumentPrintModal'
 import { ConvertVenteDocModal, VenteTicketPrintModal } from './VenteHistoriqueActions'
 import SaleExchangeModal, { type ExchangeResult } from './SaleExchangeModal'
 import { ACTIVITY_LABELS, formatActivityDetails } from '../../lib/activityLabels'
+import { printLabelHtml } from '../../lib/nativePrint'
+import { SML_TICKET_LOGO_DATA_URL } from '../../assets/sml-ticket-logo-data'
 
 const api = window.api
 const venteDisplayTotal = (vente: Vente) => Number(vente.total_ttc || 0) + Number(vente.timbre_fiscal || 0)
@@ -52,6 +54,14 @@ function getRepairPaymentInfo(repair: Reparation): RepairPaymentInfo | null {
   } catch {
     return null
   }
+}
+
+const escapeReceipt = (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+async function printRepairPaymentReceipt(repair: Reparation, amount: number, operator?: string) {
+  const paidAt = new Date().toLocaleString('fr-TN')
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Reçu ${escapeReceipt(repair.numero)}</title><style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}body{width:80mm;margin:0;padding:5mm 4mm;font-family:Arial,sans-serif;color:#111;font-size:11px}.header{text-align:center;border-bottom:1px dashed #777;padding-bottom:3mm}.logo{display:block;width:42mm;max-width:76%;height:auto;margin:0 auto}.brand{font-size:17px;font-weight:900;margin-top:1mm}.subtitle{font-size:10px;margin-top:1mm}.number{display:inline-block;margin-top:2mm;border:1px solid #111;border-radius:10px;padding:1mm 3mm;font-family:monospace;font-weight:700}.section{padding:3mm 0;border-bottom:1px dashed #aaa}.row{display:flex;justify-content:space-between;gap:3mm;margin:1.3mm 0}.row span:first-child{color:#666}.value{text-align:right;font-weight:700}.paid{margin-top:3mm;border:2px solid #111;border-radius:3mm;padding:3mm;text-align:center}.paid small{display:block;text-transform:uppercase;letter-spacing:.8px}.paid strong{display:block;font-size:21px;margin-top:1mm}.status{display:inline-block;margin-top:2mm;border-radius:10px;background:#111;color:#fff;padding:1.5mm 4mm;font-weight:800}.footer{text-align:center;margin-top:4mm;font-size:9px;color:#555}</style></head><body><div class="header"><img class="logo" src="${SML_TICKET_LOGO_DATA_URL}" alt="SML"><div class="brand">SML informatique</div><div class="subtitle">Reçu de paiement réparation</div><div class="number">${escapeReceipt(repair.numero)}</div></div><div class="section"><div class="row"><span>Client</span><span class="value">${escapeReceipt(repair.client_nom || 'Client')}</span></div><div class="row"><span>Téléphone</span><span class="value">${escapeReceipt(repair.client_tel || '—')}</span></div><div class="row"><span>Appareil</span><span class="value">${escapeReceipt([repair.type_appareil,repair.marque,repair.modele].filter(Boolean).join(' '))}</span></div><div class="row"><span>Date paiement</span><span class="value">${escapeReceipt(paidAt)}</span></div>${operator?`<div class="row"><span>Agent</span><span class="value">${escapeReceipt(operator)}</span></div>`:''}</div><div class="paid"><small>Montant reçu</small><strong>${amount.toFixed(3)} DT</strong><span class="status">PAYÉ</span></div><div class="footer">Merci pour votre confiance</div></body></html>`
+  await printLabelHtml(html, '80mm')
 }
 
 const STATUT_CONFIG: Record<StatutRep, { label: string; color: string; icon: ReactNode }> = {
@@ -971,7 +981,10 @@ function RepairPaymentModal({ repair, currentShift, onClose, onSaved }: { repair
       const result = await api.reparationsMarkPayment(repair.id, { paid: true, totalFinal: finalPrice, technicianSpent, shiftId: currentShift?.id, operateur: currentShift?.operateur_nom })
       if (!result?.success) throw new Error(result?.error || 'Confirmation impossible')
     }, { setSaving, onError: msg => setError(msg.replace(/^Paiement réparation : /, '')), successMessage: 'Paiement confirmé et bénéfice calculé' })
-    if (ok) onSaved()
+    if (ok) {
+      await printRepairPaymentReceipt(repair, finalPrice, currentShift?.operateur_nom)
+      onSaved()
+    }
   }
 
   return (

@@ -33,7 +33,7 @@ import {
   Plus, Search, Truck, FileText, Clock, CheckCircle,
   AlertTriangle, X, ChevronRight, ChevronDown, DollarSign, Package,
   RefreshCw, Edit2, PackageCheck, Inbox, InboxIcon, Printer,
-  Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle, ScanLine
+  Barcode, Tag, BarChart2, Hash, Download, ArrowUpCircle, ArrowDownCircle, ScanLine, SlidersHorizontal, ArrowUpDown
 } from 'lucide-react'
 
 const api = window.api
@@ -71,6 +71,8 @@ export default function AchatsTab() {
   const [showPaiementModal, setShowPaiementModal] = useState<FactureFournisseur | null>(null)
   const [balanceTarget, setBalanceTarget] = useState<{ fournisseur: Fournisseur; type: 'AJOUT' | 'RETRAIT' } | null>(null)
   const [factureFilter, setFactureFilter] = useState<'tous' | 'arrivees' | 'en_attente'>('tous')
+  const [supplierFilter, setSupplierFilter] = useState<'tous' | 'avec_solde' | 'soldes'>('tous')
+  const [supplierSort, setSupplierSort] = useState<'nom' | 'solde_desc' | 'solde_asc' | 'factures_desc'>('nom')
   const [alertsOpen, setAlertsOpen] = useState(false)
 
   const loadFournisseurs = useCallback(async () => {
@@ -98,6 +100,17 @@ export default function AchatsTab() {
   useEffect(() => { void loadDraftCount() }, [loadDraftCount])
 
   const totalDu = fournisseurs.reduce((s, f) => s + (f.solde_du || 0), 0)
+  const displayedSuppliers = useMemo(() => {
+    const invoiceCounts = new Map<string, number>()
+    for (const invoice of factures) invoiceCounts.set(invoice.fournisseur_id, (invoiceCounts.get(invoice.fournisseur_id) ?? 0) + 1)
+    const filtered = fournisseurs.filter(supplier => supplierFilter === 'tous' || (supplierFilter === 'avec_solde' ? Number(supplier.solde_du || 0) > 0.0001 : Number(supplier.solde_du || 0) <= 0.0001))
+    return [...filtered].sort((a, b) => {
+      if (supplierSort === 'solde_desc') return Number(b.solde_du || 0) - Number(a.solde_du || 0)
+      if (supplierSort === 'solde_asc') return Number(a.solde_du || 0) - Number(b.solde_du || 0)
+      if (supplierSort === 'factures_desc') return (invoiceCounts.get(b.id) ?? 0) - (invoiceCounts.get(a.id) ?? 0) || a.nom.localeCompare(b.nom, 'fr')
+      return a.nom.localeCompare(b.nom, 'fr')
+    })
+  }, [fournisseurs, factures, supplierFilter, supplierSort])
   const facturesEnRetard = factures.filter(f => {
     if (f.statut_paiement === 'PAYE') return false
     if (!f.date_echeance) return false
@@ -240,6 +253,14 @@ export default function AchatsTab() {
       </div>
 
       {/* Facture filter bar */}
+      {activeTab === 'fournisseurs' && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-white px-4 py-2 flex-shrink-0">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-text-secondary"><SlidersHorizontal size={13}/> Filtrer</div>
+          {([['tous','Tous'],['avec_solde','Avec solde dû'],['soldes','Soldés']] as const).map(([id,label])=><button key={id} type="button" onClick={()=>setSupplierFilter(id)} className={cn('rounded-full border px-3 py-1 text-xs font-semibold',supplierFilter===id?'border-accent-500 bg-accent-50 text-text-primary':'border-border bg-white text-text-secondary hover:bg-muted')}>{label}<span className="ml-1.5 rounded-full bg-black/5 px-1.5 py-0.5 text-[10px]">{id==='tous'?fournisseurs.length:id==='avec_solde'?fournisseurs.filter(f=>Number(f.solde_du||0)>0.0001).length:fournisseurs.filter(f=>Number(f.solde_du||0)<=0.0001).length}</span></button>)}
+          <div className="ml-auto flex items-center gap-2"><ArrowUpDown size={13} className="text-text-muted"/><label htmlFor="supplier-sort" className="text-xs font-bold text-text-secondary">Trier par</label><select id="supplier-sort" value={supplierSort} onChange={event=>setSupplierSort(event.target.value as typeof supplierSort)} className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-semibold outline-none focus:border-accent-500"><option value="nom">Nom A → Z</option><option value="solde_desc">Solde dû : plus élevé</option><option value="solde_asc">Solde dû : plus faible</option><option value="factures_desc">Nombre de factures</option></select><span className="text-[10px] text-text-muted">{displayedSuppliers.length} résultat(s)</span></div>
+        </div>
+      )}
+
       {activeTab === 'factures' && (
         <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-border flex-shrink-0">
           <span className="text-xs text-text-secondary font-semibold mr-1">Afficher :</span>
@@ -270,7 +291,7 @@ export default function AchatsTab() {
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'fournisseurs' && (
           <FournisseursTable
-            fournisseurs={fournisseurs}
+            fournisseurs={displayedSuppliers}
             factures={factures}
             onEdit={f => { setEditingFournisseur(f); setShowFournisseurModal(true) }}
             onAdjust={(f, type) => setBalanceTarget({ fournisseur: f, type })}

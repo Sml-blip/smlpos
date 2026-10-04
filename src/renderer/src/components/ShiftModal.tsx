@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { generateId } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
-import type { Operateur } from '../lib/types'
+import type { Operateur, Shift } from '../lib/types'
 import { Wallet, Play, AlertCircle, KeyRound, Eye, Sun, Moon, CheckCircle2, Lock } from 'lucide-react'
 import logoUrl from '../assets/logo.svg'
 
@@ -16,7 +16,8 @@ export default function ShiftModal() {
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState('')
-  const [dayStatus, setDayStatus] = useState<{ openedCount: number; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean } | null>(null)
+  const [dayStatus, setDayStatus] = useState<{ openedCount: number; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean; staleOpen?: Shift | null } | null>(null)
+  const [resumeStale, setResumeStale] = useState(false)
 
   const fondValue = parseFloat(fondCaisse.replace(',', '.')) || 0
 
@@ -40,6 +41,18 @@ export default function ShiftModal() {
     if (fondValue < 10) setAlert('Attention : fond de caisse inhabituellement bas.')
     else if (fondValue > 500) setAlert('Attention : fond de caisse inhabituellement élevé.')
     else setAlert('')
+
+    if (resumeStale && dayStatus?.staleOpen) {
+      if (selectedOp.id !== dayStatus.staleOpen.operateur_id && selectedOp.nom !== dayStatus.staleOpen.operateur_nom) {
+        setAlert(`Sélectionnez ${dayStatus.staleOpen.operateur_nom} pour reprendre cette caisse.`)
+        return
+      }
+      setCurrentShift(dayStatus.staleOpen)
+      setCurrentOperateur(selectedOp)
+      setPreviewMode(false)
+      setShowShiftModal(false)
+      return
+    }
 
     await runAction('Ouverture de caisse', async () => {
       const shift = {
@@ -99,6 +112,13 @@ export default function ShiftModal() {
           </div>
         </div>
 
+        {dayStatus?.staleOpen && (
+          <div className="mb-6 rounded-xl border border-orange-300 bg-orange-50 p-3 text-xs text-orange-950">
+            <div className="flex items-start gap-2"><AlertCircle size={15} className="mt-0.5 shrink-0 text-orange-700"/><div className="flex-1"><b>Caisse précédente non clôturée — données conservées</b><p className="mt-1">{dayStatus.staleOpen.operateur_nom} · ouverte le {new Date(dayStatus.staleOpen.started_at).toLocaleString('fr-TN')}. Les transactions ne sont pas supprimées.</p></div></div>
+            <button type="button" onClick={() => { const op = operateurs.find(item => item.id === dayStatus.staleOpen?.operateur_id || item.nom === dayStatus.staleOpen?.operateur_nom) || null; setSelectedOp(op); setPin(''); setResumeStale(true); setAlert('Saisissez le PIN de cet opérateur pour reprendre puis clôturer la caisse précédente.') }} className="mt-3 w-full rounded-lg border border-orange-300 bg-white px-3 py-2 font-bold text-orange-900 hover:bg-orange-100">Reprendre cette caisse pour la clôturer</button>
+          </div>
+        )}
+
         {dayStatus && !dayStatus.canOpen && (
           <div className="mb-6 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
             <Lock size={15} className="mt-0.5 flex-shrink-0"/>
@@ -113,7 +133,7 @@ export default function ShiftModal() {
             {operateurs.map(op => (
               <button
                 key={op.id}
-                onClick={() => { setSelectedOp(op); setPin(''); setAlert('') }}
+                onClick={() => { setSelectedOp(op); setPin(''); setResumeStale(false); setAlert('') }}
                 className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
                   selectedOp?.id === op.id
                     ? 'border-accent-500 bg-accent-50'
@@ -185,7 +205,7 @@ export default function ShiftModal() {
           className="w-full flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors text-base"
         >
           <Play size={18} />
-          {loading ? 'Démarrage...' : `Ouvrir la caisse ${dayStatus?.nextSession === 'SOIR' ? 'soir' : 'matin'}`}
+          {loading ? 'Démarrage...' : resumeStale ? 'Reprendre la caisse précédente' : `Ouvrir la caisse ${dayStatus?.nextSession === 'SOIR' ? 'soir' : 'matin'}`}
         </button>
 
         <button
