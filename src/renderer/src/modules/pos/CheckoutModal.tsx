@@ -74,6 +74,8 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
   const maxLoyaltyUse = round3(cleanTotal * loyaltyMaxUsePct / 100)
   const loyaltyRedeemed = Math.min(requestedLoyalty, availableLoyalty, maxLoyaltyUse)
   const payableTotal = round3(Math.max(0, cleanTotal - loyaltyRedeemed))
+  const fiscalStamp = typeVente === 'FACTURE' ? 1 : 0
+  const payableWithStamp = round3(payableTotal + fiscalStamp)
   const groupedProductAdvances = Array.from(productAdvances.reduce((map, row) => {
     if (row.type_avance !== 'PRODUIT' || row.statut === 'CONVERTI' || !row.produit_id) return map
     const dossierId = row.dossier_id || row.id
@@ -86,13 +88,13 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
       && (!group.root.numero_serie || String(item.numero_serie ?? '').split(',').map(sn => sn.trim().toLowerCase()).includes(group.root.numero_serie.trim().toLowerCase()))))
   const selectedAdvance = groupedProductAdvances.find(group => group.dossierId === selectedAdvanceDossier)
   const advanceUsed = typeVente === 'DEVIS' ? 0 : round3(selectedAdvance?.total ?? 0)
-  const advanceExceedsTotal = advanceUsed > payableTotal + 0.0001
-  const cashDue = round3(Math.max(0, payableTotal - advanceUsed))
+  const advanceExceedsTotal = advanceUsed > payableWithStamp + 0.0001
+  const cashDue = round3(Math.max(0, payableWithStamp - advanceUsed))
   const loyaltyEarnPreview = loyaltyClient && payableTotal >= loyaltyMinPurchase ? round3(payableTotal * loyaltyGainPct / 100) : 0
   const monnaieRendue = mode === 'ESPECES' ? round3(Math.max(0, montantRecuNum - cashDue)) : 0
   const hasItemsF = items.some(i => i.type_produit === 'F' && !i.is_service)
   const hasFreeItemDiscount = items.some(item => Number(item.remise_pct) >= 99.999)
-  const needsSaleReason = saleNoteFlags.gratuit || hasFreeItemDiscount
+  const needsSaleReason = saleNoteFlags.gratuit || saleNoteFlags.endommage || hasFreeItemDiscount
 
   useEffect(() => {
     api.settingsGetAll().then(settings => {
@@ -177,7 +179,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
 
   const handleConfirm = async () => {
     if (needsSaleReason && !saleReason.trim()) {
-      setErrorMsg('Un motif est obligatoire pour un produit gratuit ou une remise de 100%.')
+      setErrorMsg('Un motif est obligatoire pour un produit gratuit, endommagé ou une remise de 100%.')
       return
     }
     if (typeVente !== 'DEVIS' && mode === 'ESPECES' && montantRecuNum < cashDue) return
@@ -358,7 +360,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
             )}
             <div className="flex justify-between font-bold text-lg border-t border-border pt-2">
               <span>{loyaltyRedeemed > 0 ? 'Net à payer' : 'Total TTC'}</span>
-              <span className="font-price text-text-primary">{formatPrice(payableTotal)}</span>
+              <span className="font-price text-text-primary">{formatPrice(payableWithStamp)}</span>
             </div>
           </div>
 
@@ -369,7 +371,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
                 {groupedProductAdvances.map(group => <option key={group.dossierId} value={group.dossierId}>{group.root.produit_description}{group.root.numero_serie ? ` · S/N ${group.root.numero_serie}` : ''} — {formatPrice(group.total)} DT versés</option>)}
               </select>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
-                <div className="rounded-lg bg-white p-2"><div className="text-text-muted">Total document</div><b className="font-price">{formatPrice(payableTotal)}</b></div>
+                <div className="rounded-lg bg-white p-2"><div className="text-text-muted">Total document{fiscalStamp > 0 ? ' + timbre' : ''}</div><b className="font-price">{formatPrice(payableWithStamp)}</b></div>
                 <div className="rounded-lg bg-violet-100 p-2"><div className="text-violet-700">Déjà versé</div><b className="font-price text-violet-800">{formatPrice(advanceUsed)}</b></div>
                 <div className="rounded-lg bg-green-100 p-2"><div className="text-green-700">À encaisser</div><b className="font-price text-green-800">{formatPrice(cashDue)}</b></div>
               </div>

@@ -148,7 +148,13 @@ export default function App() {
 
     // Restore open shift so demo doesn't re-block on ShiftModal
     api.shiftsGetActive().then(async (shift) => {
-      if (!shift) return
+      if (!shift) {
+        setCurrentShift(null)
+        setCurrentOperateur(null)
+        setPreviewMode(false)
+        setShowShiftModal(true)
+        return
+      }
       const s = shift as Shift
       setCurrentShift(s)
       const ops = await api.operateursList() as Operateur[]

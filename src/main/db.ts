@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.6'
+export const SCHEMA_VERSION = '1.10.7'
 
 export function initDatabase() {
   const db = getDb()
@@ -925,6 +925,9 @@ export function initDatabase() {
       produit_id          TEXT REFERENCES produits(id),
       numero_serie        TEXT,
       prix_produit        REAL,
+      inclure_facture     INTEGER NOT NULL DEFAULT 0,
+      produits_json       TEXT,
+      facture_id          TEXT,
       statut              TEXT NOT NULL DEFAULT 'EN_COURS',
       vente_id            TEXT,
       created_at          TEXT DEFAULT (datetime('now'))
@@ -937,6 +940,9 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE avances_clients ADD COLUMN prix_produit REAL`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE avances_clients ADD COLUMN statut TEXT NOT NULL DEFAULT 'EN_COURS'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE avances_clients ADD COLUMN vente_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN inclure_facture INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN produits_json TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE avances_clients ADD COLUMN facture_id TEXT`) } catch { /* exists */ }
   db.exec(`
     UPDATE avances_clients SET type_avance = 'LIBRE' WHERE type_avance IS NULL OR trim(type_avance) = '';
     UPDATE avances_clients SET dossier_id = id WHERE dossier_id IS NULL OR trim(dossier_id) = '';

@@ -28,9 +28,16 @@ interface ShiftSummary {
 interface SavedCashReport {
   id: string
   numero: string
-  session_type: 'MATIN' | 'SOIR'
+  session_type: 'MATIN' | 'SOIR' | 'JOURNEE'
   date_journal: string
   ended_at: string
+  started_at: string
+  operateur: string
+  total_entrees: number
+  total_sorties: number
+  solde_theorique: number
+  operations_json: string
+  summary_json: string
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -93,16 +100,28 @@ export default function FermetureCaisseModal({ onClose }: Props) {
   const ecart = soldeCaisse ? soldeReel - drawerExpected : null
   const isMorningClosure = currentShift.session_type ? currentShift.session_type === 'MATIN' : closedShiftsToday === 0
 
+  const savedOperations = (() => {
+    if (!savedReport?.operations_json) return null
+    try { const rows = JSON.parse(savedReport.operations_json); return Array.isArray(rows) ? rows as ShiftSummary['operations'] : null } catch { return null }
+  })()
+  const displayedOperations = savedOperations ?? summary?.operations ?? []
+  const displayedMoneyIn = savedReport ? Number(savedReport.total_entrees || 0) : summary?.moneyIn ?? 0
+  const displayedMoneyOut = savedReport ? Number(savedReport.total_sorties || 0) : summary?.moneyOut ?? 0
+  const displayedNet = displayedMoneyIn - displayedMoneyOut
+  const printableFinalReport = savedReport?.session_type === 'JOURNEE'
+
   const reportData = () => {
-    if (!summary) return null
-    const subject = `${currentShift.operateur_nom} · ${new Date(currentShift.started_at).toLocaleString('fr-TN')} → ${new Date().toLocaleString('fr-TN')}`
+    if (!summary && !savedReport) return null
+    const subject = savedReport
+      ? `${savedReport.operateur} · Matin + Soir + Total · ${new Date(savedReport.ended_at).toLocaleString('fr-TN')}`
+      : `${currentShift.operateur_nom} · ${new Date(currentShift.started_at).toLocaleString('fr-TN')} → ${new Date().toLocaleString('fr-TN')}`
     const boxes: Array<[string, string]> = [
-      ['Total entrées', formatPrice(summary.moneyIn)],
-      ['Total sorties', formatPrice(summary.moneyOut)],
-      ['Résultat hors fond', formatPrice(reportNet)],
+      ['Total entrées', formatPrice(displayedMoneyIn)],
+      ['Total sorties', formatPrice(displayedMoneyOut)],
+      ['Résultat hors fond', formatPrice(displayedNet)],
       ['Réel hors fond', soldeReelHorsFond == null ? 'Non compté' : formatPrice(soldeReelHorsFond)],
     ]
-    const rows = summary.operations.map(operation => ({
+    const rows = displayedOperations.map(operation => ({
       date: operation.date,
       type: `${operation.direction === 'ENTREE' ? 'Entrée' : 'Sortie'} · ${operation.type}`,
       amount: operation.direction === 'SORTIE' ? -operation.amount : operation.amount,
@@ -149,7 +168,11 @@ export default function FermetureCaisseModal({ onClose }: Props) {
       await api.caisseInterneTransferShift(currentShift.id)
       const report = (result as { report?: SavedCashReport } | undefined)?.report
       if (!report) throw new Error('Le rapport de caisse n’a pas été enregistré')
-      setSavedReport(report)
+      if (isMorningClosure) setSavedReport(report)
+      else {
+        const daily = await api.rapportsCaisseGet(`journee-${report.date_journal}`) as SavedCashReport | null
+        setSavedReport(daily ?? report)
+      }
     }, { setLoading })
     if (succeeded) {
       playFeedback('success')
@@ -172,24 +195,24 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           <aside className="bg-gradient-to-b from-emerald-600 to-teal-700 text-white p-6 flex flex-col">
             <CheckCircle size={42} className="mb-4" />
             <p className="text-xs font-bold uppercase tracking-widest text-emerald-100">Clôture terminée</p>
-            <h2 className="text-2xl font-black mt-1">Rapport {savedReport.session_type === 'MATIN' ? 'Matin' : 'Soir'}</h2>
+            <h2 className="text-2xl font-black mt-1">Rapport {savedReport.session_type === 'MATIN' ? 'Matin' : savedReport.session_type === 'JOURNEE' ? 'Final journée' : 'Soir'}</h2>
             <p className="font-mono text-sm mt-2 text-emerald-50">{savedReport.numero}</p>
             <div className="mt-6 space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-emerald-100">Entrées</span><strong>{formatPrice(summary?.moneyIn ?? 0)}</strong></div>
-              <div className="flex justify-between"><span className="text-emerald-100">Sorties</span><strong>{formatPrice(summary?.moneyOut ?? 0)}</strong></div>
-              <div className="flex justify-between border-t border-white/25 pt-2"><span>Résultat hors fond</span><strong>{formatPrice(reportNet)}</strong></div>
+              <div className="flex justify-between"><span className="text-emerald-100">Entrées</span><strong>{formatPrice(displayedMoneyIn)}</strong></div>
+              <div className="flex justify-between"><span className="text-emerald-100">Sorties</span><strong>{formatPrice(displayedMoneyOut)}</strong></div>
+              <div className="flex justify-between border-t border-white/25 pt-2"><span>Résultat hors fond</span><strong>{formatPrice(displayedNet)}</strong></div>
             </div>
             <p className="mt-auto pt-6 text-xs text-emerald-100">Le rapport est conservé hors fonds dans Documents → Rapports de caisse.{!isMorningClosure && ' Le rapport Total journée a aussi été généré.'} La facture journalière reste indépendante.</p>
             <button onClick={finishClosure} className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-white text-teal-800 py-2.5 font-bold"><Play size={15}/> Continuer vers le choix</button>
           </aside>
           <section className="min-h-0 flex flex-col">
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
-              <div><h3 className="font-bold">Aperçu imprimable</h3><p className="text-xs text-text-muted">{new Date(savedReport.ended_at).toLocaleString('fr-TN')}</p></div>
-              <div className="flex gap-2"><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button><button onClick={finishClosure} className="p-2"><X size={18}/></button></div>
+              <div><h3 className="font-bold">{printableFinalReport ? 'Rapport final imprimable · Matin + Soir + Total' : 'Aperçu matin non imprimable'}</h3><p className="text-xs text-text-muted">{new Date(savedReport.ended_at).toLocaleString('fr-TN')}</p></div>
+              <div className="flex gap-2">{printableFinalReport&&<><button onClick={handlePrintReport} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Printer size={14}/> Imprimer</button><button onClick={handleDownloadReport} className="flex items-center gap-1.5 rounded-lg bg-red-50 text-red-700 border border-red-200 px-3 py-2 text-xs font-bold"><Download size={14}/> PDF</button></>}<button onClick={finishClosure} className="p-2"><X size={18}/></button></div>
             </div>
             <div className="overflow-auto p-5">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">{[['Entrées', summary?.moneyIn ?? 0], ['Sorties', summary?.moneyOut ?? 0], ['Résultat hors fond', reportNet]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>
-              <table className="w-full text-xs"><thead><tr className="bg-muted"><th className="p-2 text-left">Heure</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Détail</th></tr></thead><tbody>{summary?.operations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2">{new Date(operation.date).toLocaleTimeString('fr-TN', {hour:'2-digit',minute:'2-digit'})}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">{[['Entrées', displayedMoneyIn], ['Sorties', displayedMoneyOut], ['Résultat hors fond', displayedNet]].map(([label,value]) => <div key={String(label)} className="rounded-xl border border-border bg-muted p-3"><p className="text-[10px] uppercase text-text-muted">{label}</p><p className="font-price font-bold mt-1">{formatPrice(Number(value))}</p></div>)}</div>
+              <table className="w-full text-xs"><thead><tr className="bg-muted"><th className="p-2 text-left">Heure</th><th className="p-2 text-left">Opération</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-right">Entrée</th><th className="p-2 text-right">Sortie</th><th className="p-2 text-left">Détail</th></tr></thead><tbody>{displayedOperations.map(operation => <tr key={operation.id} className="border-b border-border"><td className="p-2">{new Date(operation.date).toLocaleTimeString('fr-TN', {hour:'2-digit',minute:'2-digit'})}</td><td className="p-2 font-semibold">{operation.type}</td><td className="p-2">{operation.operator}</td><td className="p-2 text-right text-green-700">{operation.direction === 'ENTREE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-right text-red-700">{operation.direction === 'SORTIE' ? formatPrice(operation.amount) : '—'}</td><td className="p-2 text-text-muted">{operation.note}</td></tr>)}</tbody></table>
             </div>
           </section>
         </div>
@@ -207,7 +230,6 @@ export default function FermetureCaisseModal({ onClose }: Props) {
             <h2 className="font-bold text-base">Fermeture caisse {isMorningClosure ? 'matin' : 'soir'}</h2>
           </div>
           <div className="flex items-center gap-2">
-            {summary && <><button onClick={handlePrintReport} title="Imprimer le bilan" className="p-2 rounded-lg hover:bg-muted text-text-secondary"><Printer size={16} /></button><button onClick={handleDownloadReport} title="Télécharger le bilan PDF" className="p-2 rounded-lg hover:bg-muted text-text-secondary"><Download size={16} /></button></>}
             {!confirmed && <button onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>}
           </div>
         </div>
@@ -216,7 +238,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           <div className={`lg:col-span-2 flex items-start gap-2 p-3 rounded-xl text-xs ${isMorningClosure ? 'bg-blue-50 border border-blue-200 text-blue-900' : 'bg-teal-50 border border-teal-200 text-teal-900'}`}>
             <FileText size={14} className="flex-shrink-0 mt-0.5" />
             <span>
-              <><strong>Rapport de caisse {isMorningClosure ? 'matin' : 'soir'}</strong> — il sera enregistré et affiché dans un aperçu imprimable. La facture journalière Client Passager est séparée et ne sera pas créée par cette clôture.</>
+              <><strong>Rapport de caisse {isMorningClosure ? 'matin' : 'soir'}</strong> — {isMorningClosure ? 'il sera conservé en aperçu non imprimable.' : 'la clôture crée le rapport final imprimable Matin + Soir + Total.'} La facture journalière Client Passager reste séparée.</>
             </span>
           </div>
 
@@ -245,7 +267,7 @@ export default function FermetureCaisseModal({ onClose }: Props) {
             <div className="lg:col-start-2 text-center py-8 text-text-muted text-sm bg-white border border-border rounded-2xl">Chargement du rapport...</div>
           ) : summary && (
             <div className="lg:col-start-2 space-y-3 rounded-2xl border border-border bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent-700">Aperçu rapport en direct</p><h3 className="text-sm font-bold">Rapport de caisse {isMorningClosure ? 'Matin' : 'Soir'}</h3></div><span className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold text-text-secondary">Imprimable après clôture</span></div>
+              <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent-700">Aperçu rapport en direct</p><h3 className="text-sm font-bold">Rapport de caisse {isMorningClosure ? 'Matin' : 'Soir'}</h3></div><span className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold text-text-secondary">{isMorningClosure?'Non imprimable':'Rapport final après clôture'}</span></div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-green-50 border border-green-200 rounded-xl p-3">

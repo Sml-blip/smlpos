@@ -995,22 +995,22 @@ export default function POSTab() {
         <ClientAdvanceModal
           currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
           onClose={() => { setShowClientAdvance(false); refocusScanner() }}
-          onSuccess={(clientNom, montant) => {
-            showNotif(`Avance de ${formatPrice(montant)} enregistrée — ${clientNom}`)
+          onSuccess={(clientNom, montant, invoiceNumber) => {
+            showNotif(invoiceNumber ? `Avance soldée — facture ${invoiceNumber} créée sans double encaissement` : `Avance de ${formatPrice(montant)} enregistrée — ${clientNom}`)
             setShowClientAdvance(false)
             refocusScanner()
           }}
-          onCheckoutAdvance={(client, product, dossierId, serial) => {
-            addItem({
-              produit_id: product.id,
-              designation: product.nom,
-              quantite: 1,
-              prix_unitaire: product.prix_vente,
+          onCheckoutAdvance={(client, items, dossierId) => {
+            for (const item of items) addItem({
+              produit_id: item.product.id,
+              designation: item.product.nom,
+              quantite: item.quantity,
+              prix_unitaire: item.product.prix_vente,
               remise_pct: 0,
-              total_ligne: product.prix_vente,
-              type_produit: product.type,
-              tva_taux: product.tva_taux ?? 0,
-              numero_serie: serial || undefined,
+              total_ligne: item.product.prix_vente * item.quantity,
+              type_produit: item.product.type,
+              tva_taux: item.product.tva_taux ?? 0,
+              numero_serie: item.serial || undefined,
               avance_dossier_id: dossierId,
             })
             const nextClient = { clientId: client.id, nom: client.nom, tel: client.telephone || '', adresse: client.adresse || '', matricule: '' }
@@ -1565,16 +1565,26 @@ interface ClientAdvanceRow {
   produit_id?: string
   numero_serie?: string
   prix_produit?: number
+  inclure_facture?: number
+  produits_json?: string
+  facture_id?: string
   statut?: 'EN_COURS' | 'SOLDE' | 'CONVERTI'
   vente_id?: string
   created_at: string
 }
 
+interface AdvanceProductSelection {
+  product: Produit
+  quantity: number
+  serial: string
+  serialOptions: string[]
+}
+
 function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvance }: {
   currentShift: { id?: string; operateur_nom?: string } | null
   onClose: () => void
-  onSuccess: (clientNom: string, montant: number) => void
-  onCheckoutAdvance: (client: ClientMin, product: Produit, dossierId: string, serial?: string) => void
+  onSuccess: (clientNom: string, montant: number, invoiceNumber?: string) => void
+  onCheckoutAdvance: (client: ClientMin, items: AdvanceProductSelection[], dossierId: string) => void
 }) {
   const [clients, setClients] = useState<ClientMin[]>([])
   const [selected, setSelected] = useState<ClientMin | null>(null)
@@ -1583,10 +1593,10 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvanc
   const [description, setDescription] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [products, setProducts] = useState<Produit[]>([])
-  const [selectedProduct, setSelectedProduct] = useState<Produit | null>(null)
-  const [availableProductSerials, setAvailableProductSerials] = useState<string[]>([])
-  const [serial, setSerial] = useState('')
+  const [selectedProducts, setSelectedProducts] = useState<AdvanceProductSelection[]>([])
+  const [includeInvoice, setIncludeInvoice] = useState(false)
   const [dossierId, setDossierId] = useState('')
+  const [paidDossierAmount, setPaidDossierAmount] = useState(0)
   const [montant, setMontant] = useState('')
   const [mode, setMode] = useState('ESPECES')
   const [reference, setReference] = useState('')
@@ -1605,21 +1615,23 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvanc
   useEffect(() => { void loadData('Chargement historique avances', () => api.avancesClientsList(), { silent: true }).then(rows => { if (rows) setGlobalHistoryRows(rows as ClientAdvanceRow[]); setGlobalHistoryLoading(false) }) }, [])
   useEffect(() => { const timer = setTimeout(() => { void loadData('Recherche clients', () => api.clientsList(search.trim() ? { search: search.trim() } : {}), { silent: true }).then(r => r && setClients(r as ClientMin[])) }, search.length >= 2 ? 180 : 0); return () => clearTimeout(timer) }, [search])
   useEffect(() => {
-    if (typeAvance !== 'PRODUIT' || selectedProduct || productSearch.trim().length < 2) { if (!selectedProduct) setProducts([]); return }
+    if (typeAvance !== 'PRODUIT' || productSearch.trim().length < 2) { setProducts([]); return }
     const timer = setTimeout(() => { void loadData('Recherche produit', () => api.produitsList({ search: productSearch.trim() }), { silent: true }).then(rows => rows && setProducts((rows as Produit[]).slice(0, 30))) }, 180)
     return () => clearTimeout(timer)
-  }, [productSearch, selectedProduct, typeAvance])
-  useEffect(() => {
-    if (!selectedProduct || !productTracksSerial(selectedProduct)) { setAvailableProductSerials([]); setSerial(''); return }
-    if (dossierId) return
-    void api.serialNumbersGetByProduit(selectedProduct.id).then(rows => {
-      const values = (rows as Array<{ numero_serie: string; statut: string }>).filter(row => row.statut === 'EN_STOCK').map(row => row.numero_serie)
-      setAvailableProductSerials(values)
-      if (values.length === 1) setSerial(values[0])
-    })
-  }, [selectedProduct, dossierId])
+  }, [productSearch, typeAvance])
   const amount = parseFloat(montant.replace(',', '.')) || 0
-  const price = selectedProduct?.prix_vente ?? 0
+  const productsTotal = selectedProducts.reduce((sum, item) => sum + item.product.prix_vente * item.quantity, 0)
+  const targetPrice = productsTotal + (includeInvoice ? 1 : 0)
+
+  const addAdvanceProduct = async (product: Produit) => {
+    if (dossierId || selectedProducts.some(item => item.product.id === product.id)) return
+    const serialOptions = productTracksSerial(product)
+      ? (await api.serialNumbersGetByProduit(product.id) as Array<{ numero_serie: string; statut: string }>).filter(row => row.statut === 'EN_STOCK').map(row => row.numero_serie)
+      : []
+    setSelectedProducts(items => [...items, { product, quantity: 1, serial: serialOptions.length === 1 ? serialOptions[0] : '', serialOptions }])
+    setProductSearch('')
+    setProducts([])
+  }
 
   const loadHistory = async (client: ClientMin) => {
     setSelected(client)
@@ -1637,40 +1649,52 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvanc
     return map
   }, new Map<string, { dossierId: string; root: ClientAdvanceRow; rows: ClientAdvanceRow[]; total: number }>())
 
-  const continueDossier = async (group: { dossierId: string; root: ClientAdvanceRow }) => {
+  const continueDossier = async (group: { dossierId: string; root: ClientAdvanceRow; total?: number }) => {
     if (!historyClient || !group.root.produit_id) return
-    const product = await api.produitsGet(group.root.produit_id) as Produit | null
-    if (!product) { setError('Produit introuvable'); return }
+    let stored: Array<{ produit_id: string; quantite?: number; numero_serie?: string }> = []
+    try { stored = JSON.parse(group.root.produits_json || '[]') } catch { stored = [] }
+    if (!stored.length) stored = [{ produit_id: group.root.produit_id, quantite: 1, numero_serie: group.root.numero_serie }]
+    const loaded = await Promise.all(stored.map(async item => ({ product: await api.produitsGet(item.produit_id) as Produit | null, item })))
+    const selections = loaded.filter(entry => entry.product).map(entry => ({ product: entry.product!, quantity: Math.max(1, Number(entry.item.quantite) || 1), serial: entry.item.numero_serie || '', serialOptions: entry.item.numero_serie ? [entry.item.numero_serie] : [] }))
+    if (!selections.length) { setError('Produits introuvables'); return }
     setSelected(historyClient)
     setTypeAvance('PRODUIT')
-    setSelectedProduct(product)
-    setProductSearch(product.nom)
+    setSelectedProducts(selections)
+    setIncludeInvoice(Boolean(group.root.inclure_facture))
+    setProductSearch('')
     setDossierId(group.dossierId)
-    setSerial(group.root.numero_serie || '')
+    setPaidDossierAmount(Number(group.total || 0))
     setHistoryClient(null)
     setMontant('')
   }
 
   const checkoutDossier = async (group: { dossierId: string; root: ClientAdvanceRow }) => {
     if (!historyClient || !group.root.produit_id) return
-    const product = await api.produitsGet(group.root.produit_id) as Produit | null
-    if (!product) { setError('Produit introuvable'); return }
-    onCheckoutAdvance(historyClient, { ...product, prix_vente: Number(group.root.prix_produit) || product.prix_vente }, group.dossierId, group.root.numero_serie)
+    let stored: Array<{ produit_id: string; quantite?: number; numero_serie?: string; prix_unitaire?: number }> = []
+    try { stored = JSON.parse(group.root.produits_json || '[]') } catch { stored = [] }
+    if (!stored.length) stored = [{ produit_id: group.root.produit_id, quantite: 1, numero_serie: group.root.numero_serie, prix_unitaire: group.root.prix_produit }]
+    const loaded = await Promise.all(stored.map(async item => ({ product: await api.produitsGet(item.produit_id) as Produit | null, item })))
+    const items = loaded.filter(entry => entry.product).map(entry => ({ product: { ...entry.product!, prix_vente: Number(entry.item.prix_unitaire) || entry.product!.prix_vente }, quantity: Math.max(1, Number(entry.item.quantite) || 1), serial: entry.item.numero_serie || '', serialOptions: [] }))
+    if (!items.length) { setError('Produits introuvables'); return }
+    onCheckoutAdvance(historyClient, items, group.dossierId)
   }
 
   const save = async () => {
-    if (!selected || amount <= 0 || (typeAvance === 'PRODUIT' && !selectedProduct)) return
+    if (!selected || amount <= 0 || (typeAvance === 'PRODUIT' && !selectedProducts.length)) return
+    if (typeAvance === 'PRODUIT' && selectedProducts.some(item => productTracksSerial(item.product) && !item.serial)) { setError('Choisissez le numéro de série de chaque produit concerné'); return }
     setError('')
     await runAction('Avance client', async () => {
       const now = new Date().toISOString()
       const numero = `AVC-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`
       const id = crypto.randomUUID()
-      const productDescription = typeAvance === 'PRODUIT' ? selectedProduct!.nom : (description.trim() || 'Avance libre')
-      const payload = { id, numero, client_id: selected.id, client_nom: selected.nom, client_tel: selected.telephone || null, client_adresse: selected.adresse || null, produit_description: productDescription, montant: amount, mode_paiement: mode, reference: reference.trim() || null, note: note.trim() || null, shift_id: currentShift?.id ?? null, operateur: currentShift?.operateur_nom ?? 'superadmin', type_avance: typeAvance, dossier_id: dossierId || id, produit_id: typeAvance === 'PRODUIT' ? selectedProduct!.id : null, numero_serie: typeAvance === 'PRODUIT' ? serial || null : null, prix_produit: typeAvance === 'PRODUIT' ? price : null, created_at: now }
-      await api.avancesClientsCreate(payload)
+      const productDescription = typeAvance === 'PRODUIT' ? selectedProducts.map(item => `${item.product.nom} ×${item.quantity}`).join(' + ') : (description.trim() || 'Avance libre')
+      const productRows = selectedProducts.map(item => ({ produit_id: item.product.id, designation: item.product.nom, quantite: item.quantity, prix_unitaire: item.product.prix_vente, numero_serie: item.serial || null, type_produit: item.product.type, tva_taux: item.product.tva_taux || 0 }))
+      const first = selectedProducts[0]
+      const payload = { id, numero, client_id: selected.id, client_nom: selected.nom, client_tel: selected.telephone || null, client_adresse: selected.adresse || null, produit_description: productDescription, montant: amount, mode_paiement: mode, reference: reference.trim() || null, note: note.trim() || null, shift_id: currentShift?.id ?? null, operateur: currentShift?.operateur_nom ?? 'superadmin', type_avance: typeAvance, dossier_id: dossierId || id, produit_id: typeAvance === 'PRODUIT' ? first?.product.id : null, numero_serie: typeAvance === 'PRODUIT' ? first?.serial || null : null, prix_produit: typeAvance === 'PRODUIT' ? targetPrice : null, inclure_facture: typeAvance === 'PRODUIT' && includeInvoice ? 1 : 0, produits_json: typeAvance === 'PRODUIT' ? JSON.stringify(productRows) : null, created_at: now }
+      const result = await api.avancesClientsCreate(payload) as { auto_invoice?: { facture_numero?: string } }
       setGlobalHistoryRows(rows => [{ ...payload, montant: amount } as ClientAdvanceRow, ...rows])
       await printAdvanceReceipt({ numero, clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse, operateur: payload.operateur, date: now, note, produit: productDescription, montant: amount, modePaiement: mode, reference })
-      onSuccess(selected.nom, amount)
+      onSuccess(selected.nom, amount, result.auto_invoice?.facture_numero)
     }, { setLoading, silent: true, onError: setError })
   }
   return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[94vh] flex flex-col animate-slide-in">
@@ -1678,13 +1702,22 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvanc
     <div className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]"><div className="p-5 space-y-3 overflow-y-auto">{error && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
       {!selected ? <><div className="flex items-center justify-between"><label className="text-xs font-semibold">Client *</label><button type="button" onClick={()=>setShowCreateClient(true)} className="text-xs font-semibold text-accent-700 flex items-center gap-1"><Plus size={13}/>Nouveau client</button></div><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nom ou téléphone..." className="w-full border border-border rounded-xl px-3 py-2.5 outline-none focus:border-accent-500"/><div className="max-h-52 overflow-y-auto space-y-1">{clients.map(c=><div key={c.id} className="flex items-center gap-1 rounded-lg hover:bg-violet-50"><button onClick={()=>void loadHistory(c)} className="min-w-0 flex-1 text-left px-3 py-2"><b>{c.nom}</b><span className="ml-2 text-xs text-text-muted">{c.telephone}</span></button><button type="button" onClick={()=>void loadHistory(c)} title="Historique des avances" className="mr-2 rounded-lg border border-violet-200 bg-white p-2 text-violet-700 hover:bg-violet-100"><History size={15}/></button></div>)}{clients.length===0&&<div className="text-xs text-text-muted text-center py-3">Aucun client trouvé</div>}</div></> : <div className="flex justify-between bg-violet-50 border border-violet-200 rounded-xl p-3"><div><b>{selected.nom}</b><div className="text-xs text-text-muted">{selected.telephone || 'Sans téléphone'}</div></div><div className="flex gap-1"><button title="Historique" onClick={()=>void loadHistory(selected)} className="rounded-lg p-1.5 text-violet-700 hover:bg-violet-100"><History size={16}/></button><button onClick={()=>{setSelected(null);setHistoryOpen(false)}}><XIcon size={15}/></button></div></div>}
       {selected && historyOpen && <section className="rounded-xl border border-violet-200 bg-violet-50/50 overflow-hidden"><div className="flex items-center justify-between border-b border-violet-100 px-3 py-2"><div className="flex items-center gap-2 text-xs font-bold text-violet-900"><History size={14}/>Historique des avances · {selected.nom}</div><button type="button" onClick={()=>setHistoryOpen(false)} className="text-xs font-semibold text-violet-700">Masquer</button></div><div className="max-h-44 overflow-y-auto p-2 space-y-2">{historyLoading?<div className="py-4 text-center text-xs text-text-muted">Chargement…</div>:historyRows.length===0?<div className="py-4 text-center text-xs text-text-muted">Aucune avance pour ce client</div>:historyRows.map(row=><div key={row.id} className="rounded-lg bg-white border border-violet-100 px-3 py-2 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{row.client_nom || selected.nom} · {row.produit_description}</span><b className="font-price text-violet-800">+{formatPrice(row.montant)}</b></div><div className="mt-1 flex justify-between gap-2 text-[10px] text-text-muted"><span>{new Date(row.created_at).toLocaleString('fr-FR')} · {row.mode_paiement}</span><span className="truncate">{row.note || 'Sans note'}</span></div></div>)}</div></section>}
-      {selected && <><div className="grid grid-cols-2 gap-2 rounded-xl bg-muted p-1"><button onClick={()=>{setTypeAvance('LIBRE');setDossierId('')}} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='LIBRE'?'bg-white shadow text-violet-800':'text-text-muted')}>Avance libre</button><button onClick={()=>setTypeAvance('PRODUIT')} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='PRODUIT'?'bg-violet-600 text-white shadow':'text-text-muted')}>Avance sur produit</button></div>
-      {typeAvance==='LIBRE' ? <><label className="text-xs font-semibold">Objet / description (optionnel)</label><textarea value={description} onChange={e=>setDescription(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Commande, réservation ou avance libre..."/></> : <div className="space-y-2"><label className="text-xs font-semibold">Produit lié *</label>{!selectedProduct ? <><input value={productSearch} onChange={e=>setProductSearch(e.target.value)} placeholder="Chercher produit, référence ou code-barres..." className="w-full border border-violet-300 rounded-xl px-3 py-2.5 outline-none"/><div className="max-h-40 overflow-y-auto rounded-xl border border-border">{products.map(product=><button key={product.id} onClick={()=>{setSelectedProduct(product);setProductSearch(product.nom)}} className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left last:border-0 hover:bg-violet-50"><span><b className="text-xs">{product.nom}</b><small className="block text-text-muted">{product.reference}</small></span><span className="font-price text-xs font-bold">{formatPrice(product.prix_vente)}</span></button>)}</div></> : <div className="rounded-xl border-2 border-violet-300 bg-violet-50 p-3"><div className="flex justify-between gap-2"><div><b>{selectedProduct.nom}</b><div className="text-xs text-text-muted">{selectedProduct.reference}</div></div>{!dossierId&&<button onClick={()=>{setSelectedProduct(null);setProductSearch('');setSerial('')}}><XIcon size={15}/></button>}</div><div className="mt-2 flex justify-between text-xs"><span>Prix client</span><b className="font-price">{formatPrice(price)}</b></div>{dossierId&&<div className="mt-2 text-[10px] font-bold text-violet-700">Nouvelle tranche sur dossier existant</div>}</div>}{selectedProduct&&productTracksSerial(selectedProduct)&&<div><label className="text-xs font-semibold">Numéro de série réservé *</label><select value={serial} disabled={!!dossierId} onChange={e=>setSerial(e.target.value)} className="mt-1 w-full rounded-xl border border-violet-300 bg-white px-3 py-2.5"><option value="">Choisir un S/N disponible</option>{availableProductSerials.map(sn=><option key={sn} value={sn}>{sn}</option>)}{dossierId&&serial&&<option value={serial}>{serial}</option>}</select></div>}</div>}
-      <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-semibold">Montant (DT) *</label><input value={montant} onChange={e=>setMontant(e.target.value.replace(/[^0-9.,]/g,''))} inputMode="decimal" className="w-full border border-border rounded-xl px-3 py-2.5 font-price font-bold outline-none" placeholder="0.000"/></div><div><label className="text-xs font-semibold">Mode</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5"><option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="VIREMENT">Virement</option></select></div></div>
+      {selected && <><div className="grid grid-cols-2 gap-2 rounded-xl bg-muted p-1"><button onClick={()=>{setTypeAvance('LIBRE');setDossierId('');setPaidDossierAmount(0);setSelectedProducts([]);setIncludeInvoice(false)}} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='LIBRE'?'bg-white shadow text-violet-800':'text-text-muted')}>Avance libre</button><button onClick={()=>setTypeAvance('PRODUIT')} className={cn('rounded-lg py-2 text-xs font-bold',typeAvance==='PRODUIT'?'bg-violet-600 text-white shadow':'text-text-muted')}>Avance sur produit</button></div>
+      {typeAvance==='LIBRE' ? <><label className="text-xs font-semibold">Objet / description (optionnel)</label><textarea value={description} onChange={e=>setDescription(e.target.value)} rows={2} className="w-full border border-border rounded-xl px-3 py-2 outline-none focus:border-accent-500" placeholder="Commande, réservation ou avance libre..."/></> : <div className="space-y-3">
+        <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+          <div className="flex items-center justify-between gap-3"><div><b className="text-xs">Document à la fin du paiement</b><p className="text-[10px] text-text-muted">La facture reste en attente puis se crée automatiquement au solde, sans nouvel encaissement.</p></div><button type="button" disabled={!!dossierId} onClick={()=>setIncludeInvoice(value=>!value)} className={cn('shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold',includeInvoice?'border-green-300 bg-green-100 text-green-800':'border-gray-300 bg-white text-gray-700')}>{includeInvoice?'Facture incluse':'Sans facture'}</button></div>
+          {includeInvoice&&<div className="mt-2 text-[10px] font-semibold text-green-700">+ 1.000 DT de timbre fiscal inclus dans le montant à solder</div>}
+        </div>
+        {!dossierId&&<><label className="text-xs font-semibold">Produits liés *</label><input value={productSearch} onChange={e=>setProductSearch(e.target.value)} placeholder="Nom, référence, code-barres ou scanner..." className="w-full border border-violet-300 rounded-xl px-3 py-2.5 outline-none"/>{products.length>0&&<div className="max-h-40 overflow-y-auto rounded-xl border border-border">{products.filter(product=>!selectedProducts.some(item=>item.product.id===product.id)).map(product=><button key={product.id} type="button" onClick={()=>void addAdvanceProduct(product)} className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left last:border-0 hover:bg-violet-50"><span><b className="text-xs">{product.nom}</b><small className="block text-text-muted">{product.reference} · {product.code_barre || 'sans code'}</small></span><span className="font-price text-xs font-bold">{formatPrice(product.prix_vente)}</span></button>)}</div>}</>}
+        <div className="space-y-2">{selectedProducts.map((item,index)=><div key={`${item.product.id}-${item.serial}`} className="rounded-xl border-2 border-violet-200 bg-white p-3"><div className="flex items-start justify-between gap-2"><div><b className="text-sm">{item.product.nom}</b><div className="text-[10px] text-text-muted">{item.product.reference} · {formatPrice(item.product.prix_vente)}</div></div>{!dossierId&&<button type="button" onClick={()=>setSelectedProducts(items=>items.filter((_,i)=>i!==index))} className="rounded-lg p-1 text-red-500 hover:bg-red-50"><XIcon size={15}/></button>}</div><div className="mt-2 flex items-center gap-2">{!productTracksSerial(item.product)&&<><span className="text-[10px] font-semibold">Qté</span><button type="button" disabled={!!dossierId||item.quantity<=1} onClick={()=>setSelectedProducts(items=>items.map((entry,i)=>i===index?{...entry,quantity:Math.max(1,entry.quantity-1)}:entry))} className="h-7 w-7 rounded border">−</button><b className="text-xs">{item.quantity}</b><button type="button" disabled={!!dossierId||item.quantity>=Math.max(1,item.product.stock_actuel)} onClick={()=>setSelectedProducts(items=>items.map((entry,i)=>i===index?{...entry,quantity:entry.quantity+1}:entry))} className="h-7 w-7 rounded border">+</button></>}{productTracksSerial(item.product)&&<select value={item.serial} disabled={!!dossierId} onChange={e=>setSelectedProducts(items=>items.map((entry,i)=>i===index?{...entry,serial:e.target.value}:entry))} className="w-full rounded-lg border border-violet-300 bg-white px-2 py-1.5 text-xs"><option value="">Choisir le S/N à réserver</option>{item.serialOptions.map(sn=><option key={sn} value={sn}>{sn}</option>)}</select>}<b className="ml-auto font-price text-xs">{formatPrice(item.product.prix_vente*item.quantity)}</b></div></div>)}</div>
+        {selectedProducts.length>0&&<div className="rounded-xl bg-violet-100 px-3 py-3"><div className="flex justify-between text-xs"><span>Montant à solder {includeInvoice?'(timbre inclus)':''}</span><b className="font-price text-violet-900">{formatPrice(targetPrice)}</b></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-violet-600 transition-all" style={{width:`${Math.min(100, targetPrice > 0 ? ((paidDossierAmount + amount) / targetPrice) * 100 : 0)}%`}}/></div><div className="mt-1 flex justify-between text-[10px] text-violet-800"><span>Déjà payé {formatPrice(paidDossierAmount)}</span><span>Après ce versement : reste {formatPrice(Math.max(0,targetPrice-paidDossierAmount-amount))}</span></div></div>}
+        {dossierId&&<div className="text-[10px] font-bold text-violet-700">Nouvelle tranche sur dossier existant — produits et choix de facture verrouillés</div>}
+      </div>}
+      <div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-semibold">{typeAvance==='PRODUIT'?'Versement sur produit (DT) *':'Montant (DT) *'}</label><input value={montant} onChange={e=>setMontant(e.target.value.replace(/[^0-9.,]/g,''))} inputMode="decimal" className="w-full border border-violet-300 rounded-xl px-3 py-2.5 font-price font-bold outline-none focus:ring-2 focus:ring-violet-200" placeholder="0.000"/></div><div><label className="text-xs font-semibold">Mode</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5"><option value="ESPECES">Espèces</option><option value="CARTE">Carte</option><option value="CHEQUE">Chèque</option><option value="VIREMENT">Virement</option></select></div></div>
       <input value={reference} onChange={e=>setReference(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Référence de paiement (optionnel)"/><input value={note} onChange={e=>setNote(e.target.value)} className="w-full border border-border rounded-xl px-3 py-2.5" placeholder="Note (optionnel)"/></>}
-    </div><aside className="hidden lg:flex min-h-0 flex-col border-l border-violet-100 bg-violet-50/40"><div className="flex items-center gap-2 border-b border-violet-100 px-4 py-4"><History size={16} className="text-violet-700"/><div><h3 className="text-sm font-bold text-violet-950">Historique global</h3><p className="text-[10px] text-violet-700">Toutes les avances clients</p></div><span className="ml-auto rounded-full bg-white px-2 py-1 text-[10px] font-bold text-violet-800">{globalHistoryRows.length}</span></div><div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">{globalHistoryLoading?<div className="py-8 text-center text-xs text-text-muted">Chargement…</div>:globalHistoryRows.length===0?<div className="py-8 text-center text-xs text-text-muted">Aucune avance enregistrée</div>:globalHistoryRows.map(row=><div key={row.id} className="rounded-xl border border-violet-100 bg-white p-3 text-xs shadow-sm"><div className="flex justify-between gap-2"><b className="truncate">{row.client_nom}</b><b className="shrink-0 font-price text-violet-800">+{formatPrice(row.montant)}</b></div><p className="mt-1 truncate text-[11px] text-text-secondary">{row.produit_description}</p><div className="mt-2 flex justify-between gap-2 text-[10px] text-text-muted"><span>{new Date(row.created_at).toLocaleDateString('fr-FR')}</span><span>{row.mode_paiement}</span></div>{row.note&&<p className="mt-1 truncate rounded bg-violet-50 px-1.5 py-1 text-[10px] text-violet-900">{row.note}</p>}</div>)}</div></aside></div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || amount<=0 || (typeAvance==='PRODUIT'&&(!selectedProduct||(productTracksSerial(selectedProduct)&&!serial)))} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
+    </div><aside className="hidden lg:flex min-h-0 flex-col border-l border-violet-100 bg-violet-50/40"><div className="flex items-center gap-2 border-b border-violet-100 px-4 py-4"><History size={16} className="text-violet-700"/><div><h3 className="text-sm font-bold text-violet-950">Historique global</h3><p className="text-[10px] text-violet-700">Toutes les avances clients</p></div><span className="ml-auto rounded-full bg-white px-2 py-1 text-[10px] font-bold text-violet-800">{globalHistoryRows.length}</span></div><div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">{globalHistoryLoading?<div className="py-8 text-center text-xs text-text-muted">Chargement…</div>:globalHistoryRows.length===0?<div className="py-8 text-center text-xs text-text-muted">Aucune avance enregistrée</div>:globalHistoryRows.map(row=><div key={row.id} className="rounded-xl border border-violet-100 bg-white p-3 text-xs shadow-sm"><div className="flex justify-between gap-2"><b className="truncate">{row.client_nom}</b><b className="shrink-0 font-price text-violet-800">+{formatPrice(row.montant)}</b></div><p className="mt-1 truncate text-[11px] text-text-secondary">{row.produit_description}</p><div className="mt-2 flex justify-between gap-2 text-[10px] text-text-muted"><span>{new Date(row.created_at).toLocaleDateString('fr-FR')}</span><span>{row.mode_paiement}</span></div>{row.note&&<p className="mt-1 truncate rounded bg-violet-50 px-1.5 py-1 text-[10px] text-violet-900">{row.note}</p>}</div>)}</div></aside></div><div className="flex gap-3 px-5 py-4 border-t border-border"><button onClick={onClose} className="flex-1 bg-muted rounded-xl py-2.5 font-semibold">Annuler</button><button onClick={save} disabled={loading || !selected || amount<=0 || (typeAvance==='PRODUIT'&&(selectedProducts.length===0||selectedProducts.some(item=>productTracksSerial(item.product)&&!item.serial)))} className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 text-white rounded-xl py-2.5 font-bold">{loading?'Enregistrement...':`Enregistrer ${formatPrice(amount)}`}</button></div>
     {showCreateClient && <QuickClientCreateModal organisations={organisations} onClose={()=>setShowCreateClient(false)} onCreated={c=>{setClients(prev=>[...prev,c].sort((a,b)=>a.nom.localeCompare(b.nom)));setSelected(c);setShowCreateClient(false)}}/>}
-    {historyClient&&<div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"><div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold flex items-center gap-2"><History size={17} className="text-violet-600"/>Historique des avances</h3><p className="text-xs text-text-muted">{historyClient.nom} · timeline complète</p></div><button onClick={()=>setHistoryClient(null)}><XIcon size={18}/></button></div><div className="overflow-y-auto p-5">{historyLoading?<div className="py-8 text-center text-sm text-text-muted">Chargement...</div>:groupedHistory.size===0?<div className="py-8 text-center text-sm text-text-muted">Aucune avance</div>:<div className="relative ml-3 border-l-2 border-violet-200 pl-5 space-y-4">{Array.from(groupedHistory.values()).map(group=>{const active=group.root.type_avance==='PRODUIT'&&group.root.statut!=='CONVERTI';const price=Number(group.root.prix_produit||0);const progress=price>0?Math.min(100,(group.total/price)*100):0;return <div key={group.dossierId} className="relative rounded-xl border border-border p-3"><span className="absolute -left-[29px] top-4 h-3 w-3 rounded-full bg-violet-500 ring-4 ring-violet-100"/><div className="flex justify-between gap-3"><div><span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',group.root.type_avance==='PRODUIT'?'bg-violet-100 text-violet-800':'bg-gray-100 text-gray-700')}>{group.root.type_avance==='PRODUIT'?'SUR PRODUIT':'LIBRE'}</span><h4 className="mt-1 text-sm font-bold">{group.root.produit_description}</h4>{group.root.numero_serie&&<p className="text-[10px] text-text-muted">S/N {group.root.numero_serie}</p>}</div><div className="text-right"><b className="font-price text-violet-700">{formatPrice(group.total)}</b><div className="text-[10px] text-text-muted">{group.rows.length} versement(s)</div></div></div>{group.root.type_avance==='PRODUIT'&&<><div className="mt-3 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-violet-500" style={{width:`${progress}%`}}/></div><div className="mt-1 flex justify-between text-[10px]"><span>{Math.round(progress)}% payé</span><span>Reste {formatPrice(Math.max(0,price-group.total))}</span></div></>}<div className="mt-3 space-y-1">{[...group.rows].reverse().map(row=><div key={row.id} className="flex justify-between rounded-lg bg-muted px-2 py-1.5 text-[10px]"><span>{new Date(row.created_at).toLocaleString('fr-FR')} · {row.mode_paiement}</span><b className="font-price">+{formatPrice(row.montant)}</b></div>)}</div>{active&&<div className="mt-3 grid grid-cols-2 gap-2"><button onClick={()=>void continueDossier(group)} className="rounded-lg border border-violet-300 py-2 text-xs font-bold text-violet-800 hover:bg-violet-50">+ Nouvelle tranche</button><button onClick={()=>void checkoutDossier(group)} className="flex items-center justify-center gap-1 rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-700"><PackageCheck size={13}/>Encaisser / vendre</button></div>}{group.root.statut==='CONVERTI'&&<div className="mt-2 rounded-lg bg-green-50 px-2 py-1.5 text-[10px] font-bold text-green-700">Converti en vente · {group.root.vente_id}</div>}</div>})}</div>}</div></div></div>}
+    {historyClient&&<div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"><div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold flex items-center gap-2"><History size={17} className="text-violet-600"/>Historique des avances</h3><p className="text-xs text-text-muted">{historyClient.nom} · timeline complète</p></div><button onClick={()=>setHistoryClient(null)}><XIcon size={18}/></button></div><div className="overflow-y-auto p-5">{historyLoading?<div className="py-8 text-center text-sm text-text-muted">Chargement...</div>:groupedHistory.size===0?<div className="py-8 text-center text-sm text-text-muted">Aucune avance</div>:<div className="relative ml-3 border-l-2 border-violet-200 pl-5 space-y-4">{Array.from(groupedHistory.values()).map(group=>{const active=group.root.type_avance==='PRODUIT'&&group.root.statut!=='CONVERTI';const price=Number(group.root.prix_produit||0);const progress=price>0?Math.min(100,(group.total/price)*100):0;const invoicePending=Boolean(group.root.inclure_facture)&&active;return <div key={group.dossierId} className="relative rounded-xl border border-border p-3"><span className="absolute -left-[29px] top-4 h-3 w-3 rounded-full bg-violet-500 ring-4 ring-violet-100"/><div className="flex justify-between gap-3"><div><span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',group.root.type_avance==='PRODUIT'?'bg-violet-100 text-violet-800':'bg-gray-100 text-gray-700')}>{group.root.type_avance==='PRODUIT'?'SUR PRODUIT':'LIBRE'}</span>{invoicePending&&<span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">FACTURE EN ATTENTE</span>}<h4 className="mt-1 text-sm font-bold">{group.root.produit_description}</h4>{group.root.numero_serie&&<p className="text-[10px] text-text-muted">S/N {group.root.numero_serie}</p>}</div><div className="text-right"><b className="font-price text-violet-700">{formatPrice(group.total)}</b><div className="text-[10px] text-text-muted">{group.rows.length} versement(s)</div></div></div>{group.root.type_avance==='PRODUIT'&&<><div className="mt-3 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-violet-500" style={{width:`${progress}%`}}/></div><div className="mt-1 flex justify-between text-[10px]"><span>{Math.round(progress)}% payé</span><span>Reste {formatPrice(Math.max(0,price-group.total))}</span></div></>}<div className="mt-3 space-y-1">{[...group.rows].reverse().map(row=><div key={row.id} className="flex justify-between rounded-lg bg-muted px-2 py-1.5 text-[10px]"><span>{new Date(row.created_at).toLocaleString('fr-FR')} · {row.mode_paiement}</span><b className="font-price">+{formatPrice(row.montant)}</b></div>)}</div>{active&&<div className={cn('mt-3 grid gap-2',invoicePending?'grid-cols-1':'grid-cols-2')}><button onClick={()=>void continueDossier(group)} className="rounded-lg border border-violet-300 py-2 text-xs font-bold text-violet-800 hover:bg-violet-50">+ Nouvelle tranche</button>{!invoicePending&&<button onClick={()=>void checkoutDossier(group)} className="flex items-center justify-center gap-1 rounded-lg bg-green-600 py-2 text-xs font-bold text-white hover:bg-green-700"><PackageCheck size={13}/>Encaisser / vendre</button>}</div>}{group.root.statut==='CONVERTI'&&<div className="mt-2 rounded-lg bg-green-50 px-2 py-1.5 text-[10px] font-bold text-green-700">Facture créée · {group.root.facture_id || group.root.vente_id}</div>}</div>})}</div>}</div></div></div>}
   </div></div>
 }
 
