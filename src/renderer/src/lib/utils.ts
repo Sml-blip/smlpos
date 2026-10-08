@@ -25,10 +25,7 @@ export function generateId(): string {
 }
 
 export function generateReference(): string {
-  const now = new Date()
-  const dateStr = format(now, 'yyMMdd')
-  const rand = Math.floor(Math.random() * 99999).toString().padStart(5, '0')
-  return `PRD-${dateStr}-${rand}`
+  return `PRD-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
 }
 
 export function generateVenteNumber(lastNum: number): string {

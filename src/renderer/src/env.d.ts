@@ -52,8 +52,11 @@ interface Window {
     shiftsClose: (id: string, data: unknown) => Promise<unknown>
     shiftsGetActive: () => Promise<unknown>
     shiftsGetToday: () => Promise<unknown[]>
+    shiftsGetTodayStatus: () => Promise<{ shifts: unknown[]; openedCount: number; closedCount: number; active: unknown | null; staleOpen?: unknown | null; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean }>
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
     shiftsCountClosedToday?: () => Promise<number>
+    rapportsCaisseList: (filters?: unknown) => Promise<unknown[]>
+    rapportsCaisseGet: (id: string) => Promise<unknown>
 
     // Saved POS carts
     savedPaniersList: () => Promise<unknown[]>
@@ -106,6 +109,15 @@ interface Window {
     ventesList: (filters?: unknown) => Promise<unknown[]>
     ventesGetLignes: (venteId: string) => Promise<unknown[]>
     ventesGetLastNumber: (prefix: string) => Promise<number>
+    ventesListFreeReasons?: () => Promise<string[]>
+    ventesExchange: (venteId: string, data: unknown) => Promise<{
+      success?: boolean
+      error?: string
+      oldTotal?: number
+      newTotal?: number
+      difference?: number
+      updatedDocuments?: Array<{ id: string; numero: string; type: string }>
+    }>
 
     // Factures clients
     facturesClientsList: (filters?: unknown) => Promise<unknown[]>
@@ -117,6 +129,7 @@ interface Window {
     reparationsList: (filters?: unknown) => Promise<unknown[]>
     reparationsUpdateStatut: (id: string, statut: string) => Promise<unknown>
     reparationsFinalize: (id: string, totalFinal: number) => Promise<{ success?: boolean; error?: string; benefice?: number }>
+    reparationsMarkPayment: (id: string, data: { paid: boolean; totalFinal?: number; technicianSpent?: number; shiftId?: string; operateur?: string }) => Promise<{ success?: boolean; error?: string; benefice?: number }>
     reparationsGetPieces: (repId: string) => Promise<unknown[]>
     reparationsGetLastNumber: (prefix: string) => Promise<number>
     reparationsGetBeneficeStats: (mois?: string) => Promise<unknown>
@@ -183,6 +196,7 @@ interface Window {
     // Crédits Clients
     creditsList: (clientId?: string) => Promise<unknown[]>
     creditsCreate: (credit: unknown) => Promise<unknown>
+    creditsUpdate: (id: string, patch: unknown) => Promise<unknown>
     avancesClientsCreate: (advance: unknown) => Promise<unknown>
     avancesClientsList: (clientId?: string) => Promise<unknown[]>
 
@@ -211,16 +225,19 @@ interface Window {
     // Documents (Facture/Devis/BL)
     documentsList: (filters?: unknown) => Promise<unknown[]>
     documentsListAll?: (filters?: unknown) => Promise<unknown[]>
+    documentsExportSalesBilan: (filters?: unknown) => Promise<unknown[]>
+    documentsExportSalesTva: (filters?: unknown) => Promise<unknown[]>
     documentsGet?: (id: string) => Promise<Record<string, unknown> | null | undefined>
     documentsCreate: (doc: unknown, lignes: unknown[]) => Promise<unknown>
     documentsCreateDailyFactureF?: (localDate?: string) => Promise<{ success?: boolean; skipped?: boolean; updated?: boolean; documentId?: string; numero?: string; lineCount?: number; reason?: string; error?: string }>
     documentsListMissingDailyFactureFDays?: (from?: string, to?: string) => Promise<unknown[]>
     documentsUpdate: (id: string, data: unknown) => Promise<{ success?: boolean; error?: string }>
     documentsRevoquer?: (id: string, motif: string, par: string) => Promise<{ success?: boolean }>
-    documentsAnnulerAvecAvoir?: (id: string, motif?: string) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>
+    documentsAnnulerAvecAvoir?: (id: string, motif?: string, refund?: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; avoir?: { id: string; numero: string } }>
     documentsGetLignes: (documentId: string) => Promise<unknown[]>
     documentsReplaceLignes?: (documentId: string, lignes: unknown[], totals: Record<string, unknown>) => Promise<{ success?: boolean; error?: string }>
     documentsGetLastNumber: (prefix: string) => Promise<number>
+    exportsSaveExcel?: (base64: string, suggestedName?: string) => Promise<{ success?: boolean; canceled?: boolean; path?: string; error?: string }>
 
     // Paramètres App
     settingsGetAll: () => Promise<Record<string, string>>

@@ -190,8 +190,8 @@ export default function PrintManagerModal({
 
   const [opts, setOpts] = useState<PrintOptions>({
     printerName: '',
-    pageSize: kind === 'document' ? 'A4' : defaultPageSize,
-    orientation: 'portrait',
+    pageSize: kind === 'document' ? defaultPageSize : defaultPageSize,
+    orientation: defaultPageSize === 'A5' ? 'landscape' : 'portrait',
     color: kind !== 'ticket',
     printBackground: true,
     silent: true,
@@ -293,7 +293,7 @@ export default function PrintManagerModal({
       const base = PAGE_DIMS_MM[ticketWidthMm === 58 ? '58mm' : '80mm']
       return base
     }
-    const base = PAGE_DIMS_MM.A4
+    const base = PAGE_DIMS_MM[opts.pageSize]
     return opts.orientation === 'landscape'
       ? { w: base.h, h: base.w }
       : base
@@ -322,7 +322,7 @@ export default function PrintManagerModal({
       return html
     }
     if (kind === 'document') {
-      return wrapFragment(html, opts.margins, 'A4')
+      return wrapFragment(html, opts.margins, opts.pageSize)
     }
     return html
   }, [kind, labelSource, labelCfg, html, opts.margins, opts.copies])
@@ -522,7 +522,8 @@ export default function PrintManagerModal({
       } else if (kind === 'document') {
         printOptions = {
           ...printOptions,
-          pageSize: 'A4',
+          pageSize: opts.pageSize,
+          landscape: opts.orientation === 'landscape',
           margins: opts.margins,
           scaleFactor: opts.scale,
         }

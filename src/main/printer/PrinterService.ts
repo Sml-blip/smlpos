@@ -22,6 +22,7 @@ export interface PrintWindowOptions {
   color?: boolean;
   copies?: number;
   scaleFactor?: number;
+  landscape?: boolean;
   dpi?: { horizontal: number; vertical: number };
 }
 
@@ -366,6 +367,7 @@ export class PrinterService {
     pageSize?: string | ElectronPageSize | CustomPageSizeMm
   ): ElectronPageSize {
     if (!pageSize || pageSize === 'A4') return 'A4';
+    if (pageSize === 'A5') return { width: 148000, height: 210000 };
     if (typeof pageSize === 'object') {
       if ('widthMm' in pageSize && 'heightMm' in pageSize) {
         return {
@@ -428,14 +430,41 @@ export class PrinterService {
         resolve({ success: false, error: 'Échec chargement HTML impression' });
       });
 
-      win.webContents.once('did-finish-load', () => {
+      win.webContents.once('did-finish-load', async () => {
+        // Electron can finish loading the HTML before a thermal-ticket image is
+        // decoded. Waiting here prevents Epson drivers from receiving a blank or
+        // partially rasterized logo. The timeout keeps printing available if an
+        // unrelated remote image cannot be loaded.
+        try {
+          await win.webContents.executeJavaScript(`
+            Promise.race([
+              Promise.all(Array.from(document.images).map(async (image) => {
+                if (!image.complete) {
+                  await new Promise((resolve) => {
+                    image.addEventListener('load', resolve, { once: true });
+                    image.addEventListener('error', resolve, { once: true });
+                  });
+                }
+                if (typeof image.decode === 'function') {
+                  try { await image.decode(); } catch { /* keep printing */ }
+                }
+              })),
+              new Promise((resolve) => setTimeout(resolve, 2000)),
+            ]).then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+          `)
+        } catch {
+          // Continue with printing if readiness detection is unavailable.
+        }
+        if (win.isDestroyed()) return
         const printOpts: Electron.WebContentsPrintOptions = {
           deviceName: options.printerName || undefined,
           silent: options.silent === true,
           printBackground: options.printBackground !== false,
           color: options.color !== false,
           copies: typeof options.copies === 'number' ? options.copies : 1,
-          pageSize: this.resolveElectronPageSize(options.pageSize),
+          pageSize: options.pageSize === 'A5' && options.landscape
+            ? { width: 210000, height: 148000 }
+            : this.resolveElectronPageSize(options.pageSize),
         };
         if (typeof options.scaleFactor === 'number') {
           printOpts.scaleFactor = options.scaleFactor;
