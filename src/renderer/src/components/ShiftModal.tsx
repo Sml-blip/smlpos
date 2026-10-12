@@ -2,26 +2,31 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { generateId } from '../lib/utils'
 import { runAction } from '../lib/apiCall'
-import type { Operateur } from '../lib/types'
-import { Wallet, Play, AlertCircle, KeyRound } from 'lucide-react'
+import type { Operateur, Shift } from '../lib/types'
+import { Wallet, Play, AlertCircle, KeyRound, Eye, Sun, Moon, CheckCircle2, Lock } from 'lucide-react'
 import logoUrl from '../assets/logo.svg'
 
 const api = window.api
 
 export default function ShiftModal() {
-  const { operateurs, setCurrentShift, setCurrentOperateur, setShowShiftModal } = useAppStore()
+  const { operateurs, setCurrentShift, setCurrentOperateur, setShowShiftModal, setPreviewMode } = useAppStore()
   const [selectedOp, setSelectedOp] = useState<Operateur | null>(null)
   const [fondCaisse, setFondCaisse] = useState('100.000')
   const [pin, setPin] = useState('')
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState('')
+  const [dayStatus, setDayStatus] = useState<{ openedCount: number; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean; staleOpen?: Shift | null } | null>(null)
+  const [resumeStale, setResumeStale] = useState(false)
 
   const fondValue = parseFloat(fondCaisse.replace(',', '.')) || 0
 
   useEffect(() => {
-    api.settingsGetAll()
-      .then((s) => setSettings((s ?? {}) as Record<string, string>))
+    Promise.all([api.settingsGetAll(), api.shiftsGetTodayStatus()])
+      .then(([s, status]) => {
+        setSettings((s ?? {}) as Record<string, string>)
+        setDayStatus(status)
+      })
       .catch(() => setSettings({}))
   }, [])
 
@@ -37,6 +42,18 @@ export default function ShiftModal() {
     else if (fondValue > 500) setAlert('Attention : fond de caisse inhabituellement élevé.')
     else setAlert('')
 
+    if (resumeStale && dayStatus?.staleOpen) {
+      if (selectedOp.id !== dayStatus.staleOpen.operateur_id && selectedOp.nom !== dayStatus.staleOpen.operateur_nom) {
+        setAlert(`Sélectionnez ${dayStatus.staleOpen.operateur_nom} pour reprendre cette caisse.`)
+        return
+      }
+      setCurrentShift(dayStatus.staleOpen)
+      setCurrentOperateur(selectedOp)
+      setPreviewMode(false)
+      setShowShiftModal(false)
+      return
+    }
+
     await runAction('Ouverture de caisse', async () => {
       const shift = {
         id: generateId(),
@@ -45,15 +62,23 @@ export default function ShiftModal() {
         fond_de_caisse: fondValue,
         started_at: new Date().toISOString(),
       }
-      await api.shiftsOpen(shift)
-      setCurrentShift(shift)
+      const opened = await api.shiftsOpen(shift) as typeof shift & { session_type?: 'MATIN' | 'SOIR' }
+      setCurrentShift(opened)
       setCurrentOperateur(selectedOp)
+      setPreviewMode(false)
       setShowShiftModal(false)
     }, {
       setLoading,
       successMessage: `Shift ouvert — ${selectedOp.nom}`,
-      onError: () => setAlert('Erreur lors du démarrage du shift.'),
+      onError: (message) => setAlert(message),
     })
+  }
+
+  const enterPreview = () => {
+    setCurrentShift(null)
+    setCurrentOperateur(null)
+    setPreviewMode(true)
+    setShowShiftModal(false)
   }
 
   const avatarColors: Record<string, string> = {
@@ -64,7 +89,7 @@ export default function ShiftModal() {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[480px] p-8 animate-slide-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-[520px] max-h-[calc(100vh-2rem)] overflow-y-auto p-8 animate-slide-in">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
           <div className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center">
@@ -76,6 +101,31 @@ export default function ShiftModal() {
           </div>
         </div>
 
+        <div className="mb-6 grid grid-cols-2 gap-3">
+          <div className={`rounded-xl border p-3 ${dayStatus?.morningDone ? 'border-emerald-200 bg-emerald-50' : dayStatus?.nextSession === 'MATIN' ? 'border-amber-300 bg-amber-50' : 'border-border bg-muted'}`}>
+            <div className="flex items-center gap-2 text-sm font-bold"><Sun size={15} className="text-amber-600"/> Caisse matin {dayStatus?.morningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
+            <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.morningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'MATIN' ? 'Prochaine ouverture' : 'Non disponible'}</p>
+          </div>
+          <div className={`rounded-xl border p-3 ${dayStatus?.eveningDone ? 'border-emerald-200 bg-emerald-50' : dayStatus?.nextSession === 'SOIR' ? 'border-indigo-300 bg-indigo-50' : 'border-border bg-muted'}`}>
+            <div className="flex items-center gap-2 text-sm font-bold"><Moon size={15} className="text-indigo-600"/> Caisse soir {dayStatus?.eveningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
+            <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.eveningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'SOIR' ? 'Prochaine ouverture' : dayStatus?.nextSession === 'MATIN' ? 'Après la caisse matin' : 'Non disponible'}</p>
+          </div>
+        </div>
+
+        {dayStatus?.staleOpen && (
+          <div className="mb-6 rounded-xl border border-orange-300 bg-orange-50 p-3 text-xs text-orange-950">
+            <div className="flex items-start gap-2"><AlertCircle size={15} className="mt-0.5 shrink-0 text-orange-700"/><div className="flex-1"><b>Caisse précédente non clôturée — données conservées</b><p className="mt-1">{dayStatus.staleOpen.operateur_nom} · ouverte le {new Date(dayStatus.staleOpen.started_at).toLocaleString('fr-TN')}. Les transactions ne sont pas supprimées.</p></div></div>
+            <button type="button" onClick={() => { const op = operateurs.find(item => item.id === dayStatus.staleOpen?.operateur_id || item.nom === dayStatus.staleOpen?.operateur_nom) || null; setSelectedOp(op); setPin(''); setResumeStale(true); setAlert('Saisissez le PIN de cet opérateur pour reprendre puis clôturer la caisse précédente.') }} className="mt-3 w-full rounded-lg border border-orange-300 bg-white px-3 py-2 font-bold text-orange-900 hover:bg-orange-100">Reprendre cette caisse pour la clôturer</button>
+          </div>
+        )}
+
+        {dayStatus && !dayStatus.canOpen && (
+          <div className="mb-6 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+            <Lock size={15} className="mt-0.5 flex-shrink-0"/>
+            <span>Les deux ouvertures autorisées aujourd’hui sont terminées. Une nouvelle caisse sera disponible demain.</span>
+          </div>
+        )}
+
         {/* Operator selection */}
         <div className="mb-6">
           <label className="block text-sm font-semibold text-text-primary mb-3">Opérateur</label>
@@ -83,7 +133,7 @@ export default function ShiftModal() {
             {operateurs.map(op => (
               <button
                 key={op.id}
-                onClick={() => { setSelectedOp(op); setPin(''); setAlert('') }}
+                onClick={() => { setSelectedOp(op); setPin(''); setResumeStale(false); setAlert('') }}
                 className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
                   selectedOp?.id === op.id
                     ? 'border-accent-500 bg-accent-50'
@@ -151,11 +201,22 @@ export default function ShiftModal() {
           type="button"
           onClick={handleStart}
           disabled={!selectedOp || !pin || loading}
+          style={{ display: dayStatus?.canOpen === false ? 'none' : undefined }}
           className="w-full flex items-center justify-center gap-2 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-3.5 rounded-xl transition-colors text-base"
         >
           <Play size={18} />
-          {loading ? 'Démarrage...' : 'Démarrer le Shift'}
+          {loading ? 'Démarrage...' : resumeStale ? 'Reprendre la caisse précédente' : `Ouvrir la caisse ${dayStatus?.nextSession === 'SOIR' ? 'soir' : 'matin'}`}
         </button>
+
+        <button
+          type="button"
+          onClick={enterPreview}
+          className="mt-3 w-full flex items-center justify-center gap-2 border border-border bg-white hover:bg-muted text-text-primary font-bold py-3 rounded-xl transition-colors text-sm"
+        >
+          <Eye size={17}/>
+          Entrer en mode aperçu (lecture seule)
+        </button>
+        <p className="mt-2 text-center text-[10px] text-text-muted">Navigation autorisée, aucune création ni modification possible.</p>
       </div>
     </div>
   )

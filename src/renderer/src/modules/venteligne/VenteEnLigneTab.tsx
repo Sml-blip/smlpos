@@ -416,6 +416,7 @@ function ActionModal({ cmd, action, onClose, onSaved, shift }: { cmd: CommandeLi
       if (action === 'LIVRE') extra.montant_recu = parseFloat(montantRecu) || 0
       if (action === 'REGLE') extra.montant_net = parseFloat(montantNet) || 0
       await api.ventesLigneUpdateStatut(cmd.id, action, extra)
+      if (action === 'RETOUR' || action === 'REGLE') window.dispatchEvent(new CustomEvent('smlpos:treasury-movements-changed'))
       onSaved()
     }, { setLoading, successMessage: 'Commande mise à jour' })
   }
