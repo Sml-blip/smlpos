@@ -455,6 +455,10 @@ const mockApi = {
     CAISSE_INTERNE.solde_actuel = +(CAISSE_INTERNE.solde_actuel + montant).toFixed(3)
     return { success: true, shift_id, montant }
   },
+  caisseInternePendingCount: async () => 0,
+  caisseInternePendingList: async () => [],
+  caisseInterneAcceptPending: async () => ({ success: true }),
+  caisseInterneAcceptAllPending: async () => ({ success: true, accepted: 0 }),
 
   // Logs
   logsAdd: async () => ({ success: true }),

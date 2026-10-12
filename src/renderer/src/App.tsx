@@ -63,6 +63,7 @@ export default function App() {
   const [appVersion, setAppVersion] = useState('1.9.2')
   const [pendingDemandes, setPendingDemandes] = useState(0)
   const [pendingSupplierPayments, setPendingSupplierPayments] = useState(0)
+  const [pendingTreasuryMovements, setPendingTreasuryMovements] = useState(0)
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { status: updateStatus, showModal: showUpdateModal, isManualChecking, checkForUpdates, installUpdate, dismissError } = useAppUpdater(appVersion)
 
@@ -119,6 +120,23 @@ export default function App() {
       active = false
       window.clearInterval(timer)
       window.removeEventListener('smlpos:supplier-payments-changed', refresh)
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void api.caisseInternePendingCount()
+        .then(count => { if (active) setPendingTreasuryMovements(Number(count) || 0) })
+        .catch(() => { /* migration may still be starting */ })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 10_000)
+    window.addEventListener('smlpos:treasury-movements-changed', refresh)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('smlpos:treasury-movements-changed', refresh)
     }
   }, [])
 
@@ -242,6 +260,11 @@ export default function App() {
               {tab.id === 'achats' && pendingSupplierPayments > 0 && (
                 <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white shadow-sm">
                   {pendingSupplierPayments > 99 ? '99+' : pendingSupplierPayments}
+                </span>
+              )}
+              {tab.id === 'caisse_interne' && pendingTreasuryMovements > 0 && (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white shadow-sm animate-pulse">
+                  {pendingTreasuryMovements > 99 ? '99+' : pendingTreasuryMovements}
                 </span>
               )}
             </button>

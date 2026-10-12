@@ -165,7 +165,11 @@ export default function FermetureCaisseModal({ onClose }: Props) {
           operations: summary?.operations ?? [],
         },
       })
-      await api.caisseInterneTransferShift(currentShift.id)
+      const treasuryTransfer = await api.caisseInterneTransferShift(currentShift.id) as { pending?: boolean; montant?: number }
+      if (treasuryTransfer?.pending) {
+        window.dispatchEvent(new CustomEvent('smlpos:treasury-movements-changed'))
+        showToast('info', `Total caisse envoyé à la Trésorerie pour acceptation : ${formatPrice(Number(treasuryTransfer.montant) || 0)}`)
+      }
       const report = (result as { report?: SavedCashReport } | undefined)?.report
       if (!report) throw new Error('Le rapport de caisse n’a pas été enregistré')
       if (isMorningClosure) setSavedReport(report)

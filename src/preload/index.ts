@@ -151,6 +151,10 @@ const api = {
   caisseInterneGetStats: (dateFrom: string, dateTo: string) => ipcRenderer.invoke('caisseInterne:getStats', dateFrom, dateTo),
   caisseInterneAddMouvement: (m: unknown) => ipcRenderer.invoke('caisseInterne:addMouvement', m),
   caisseInterneTransferShift: (shiftId: string) => ipcRenderer.invoke('caisseInterne:transferShift', shiftId),
+  caisseInternePendingCount: () => ipcRenderer.invoke('caisseInterne:pendingCount'),
+  caisseInternePendingList: () => ipcRenderer.invoke('caisseInterne:pendingList'),
+  caisseInterneAcceptPending: (id: string) => ipcRenderer.invoke('caisseInterne:acceptPending', id),
+  caisseInterneAcceptAllPending: () => ipcRenderer.invoke('caisseInterne:acceptAllPending'),
 
   // Logs
   logsAdd: (log: unknown) => ipcRenderer.invoke('logs:add', log),

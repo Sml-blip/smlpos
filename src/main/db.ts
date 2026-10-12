@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.7'
+export const SCHEMA_VERSION = '1.10.8'
 
 export function initDatabase() {
   const db = getDb()
@@ -350,6 +350,25 @@ export function initDatabase() {
       operateur    TEXT DEFAULT 'superadmin',
       created_at   TEXT DEFAULT (datetime('now'))
     );
+
+    -- Movements produced outside the treasury screen are reviewed here before
+    -- being applied. impact_applique=1 means the ledger was already updated
+    -- (for example a POS withdrawal explicitly charged to internal cash).
+    CREATE TABLE IF NOT EXISTS mouvements_tresorerie_attente (
+      id               TEXT PRIMARY KEY,
+      direction        TEXT NOT NULL CHECK (direction IN ('ENTREE','SORTIE')),
+      categorie        TEXT NOT NULL,
+      montant          REAL NOT NULL,
+      reference_id     TEXT NOT NULL,
+      note             TEXT,
+      operateur        TEXT DEFAULT 'superadmin',
+      impact_applique  INTEGER NOT NULL DEFAULT 0,
+      statut           TEXT NOT NULL DEFAULT 'EN_ATTENTE' CHECK (statut IN ('EN_ATTENTE','ACCEPTE')),
+      created_at       TEXT DEFAULT (datetime('now')),
+      accepted_at      TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tresorerie_attente_reference
+      ON mouvements_tresorerie_attente(categorie, reference_id);
 
     -- ── Activity Logs ────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS activity_logs (

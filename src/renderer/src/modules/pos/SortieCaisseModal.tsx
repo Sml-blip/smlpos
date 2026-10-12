@@ -66,6 +66,7 @@ export default function SortieCaisseModal({ onClose }: { onClose: () => void }) 
         if (!note.trim()) throw new Error('Le motif est obligatoire')
         await api.sortiesCreate({ id: generateId(), montant: amount, note: note.trim(), ...base })
       }
+      window.dispatchEvent(new CustomEvent('smlpos:treasury-movements-changed'))
       onClose()
     }, { setLoading, successMessage: kind === 'FOURNISSEUR' ? 'Paiement fournisseur et sortie liés' : kind === 'PERSONNEL' ? 'Crédit personnel et sortie liés' : 'Sortie de caisse enregistrée' })
   }

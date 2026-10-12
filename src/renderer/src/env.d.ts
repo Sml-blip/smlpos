@@ -169,6 +169,10 @@ interface Window {
     caisseInterneGetStats: (dateFrom: string, dateTo: string) => Promise<unknown>
     caisseInterneAddMouvement: (m: unknown) => Promise<unknown>
     caisseInterneTransferShift: (shiftId: string) => Promise<unknown>
+    caisseInternePendingCount: () => Promise<number>
+    caisseInternePendingList: () => Promise<unknown[]>
+    caisseInterneAcceptPending: (id: string) => Promise<{ success?: boolean; alreadyAccepted?: boolean }>
+    caisseInterneAcceptAllPending: () => Promise<{ success?: boolean; accepted?: number }>
 
     // Logs
     logsAdd: (log: unknown) => Promise<unknown>

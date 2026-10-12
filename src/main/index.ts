@@ -577,8 +577,7 @@ app.on('window-all-closed', () => {
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
 
 function setupIpcHandlers() {
-  const applyInternalCashOut = (amountInput: unknown, createdAt?: unknown) => {
-    const amount = money3(amountInput)
+  const ensureInternalCashJournal = (createdAt?: unknown) => {
     const parsed = new Date(String(createdAt ?? new Date().toISOString()))
     const date = Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString('en-CA') : new Date().toLocaleDateString('en-CA')
     let cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown> | undefined
@@ -586,10 +585,90 @@ function setupIpcHandlers() {
       const previous = db.prepare('SELECT solde_ouverture,total_entrees,total_sorties FROM caisse_interne WHERE date_journal < ? ORDER BY date_journal DESC LIMIT 1').get(date) as { solde_ouverture?: number; total_entrees?: number; total_sorties?: number } | undefined
       const opening = previous ? money3(Number(previous.solde_ouverture) + Number(previous.total_entrees) - Number(previous.total_sorties)) : 100
       db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(`ci-${date}`, date, opening)
+      cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown>
     }
-    db.prepare('UPDATE caisse_interne SET total_sorties = total_sorties + ? WHERE date_journal = ?').run(amount, date)
-    cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown>
+    return { date, cash }
+  }
+
+  const applyInternalCashMovement = (direction: 'ENTREE' | 'SORTIE', amountInput: unknown, createdAt?: unknown) => {
+    const amount = money3(amountInput)
+    const { date } = ensureInternalCashJournal(createdAt)
+    const column = direction === 'ENTREE' ? 'total_entrees' : 'total_sorties'
+    db.prepare(`UPDATE caisse_interne SET ${column} = ${column} + ? WHERE date_journal = ?`).run(amount, date)
+    const cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown>
     enqueueSync('caisse_interne', 'UPDATE', cash)
+    return { date, cash }
+  }
+
+  const applyInternalCashOut = (amountInput: unknown, createdAt?: unknown) => {
+    return applyInternalCashMovement('SORTIE', amountInput, createdAt)
+  }
+
+  const queueTreasuryMovement = (input: {
+    direction: 'ENTREE' | 'SORTIE'
+    categorie: string
+    montant: unknown
+    referenceId: unknown
+    note?: unknown
+    operateur?: unknown
+    createdAt?: unknown
+    impactApplied?: boolean
+  }) => {
+    const montant = money3(input.montant)
+    const referenceId = String(input.referenceId ?? '').trim()
+    if (montant <= 0 || !referenceId) return null
+    const existing = db.prepare(`SELECT id FROM mouvements_tresorerie_attente WHERE reference_id=? LIMIT 1`).get(referenceId) as { id: string } | undefined
+    if (existing) return existing.id
+    const id = `treasury-${input.categorie.toLowerCase()}-${referenceId}`
+    db.prepare(`
+      INSERT OR IGNORE INTO mouvements_tresorerie_attente
+        (id,direction,categorie,montant,reference_id,note,operateur,impact_applique,statut,created_at)
+      VALUES (?,?,?,?,?,?,?,?, 'EN_ATTENTE', ?)
+    `).run(
+      id, input.direction, input.categorie, montant, referenceId,
+      input.note == null ? null : String(input.note),
+      input.operateur == null ? 'superadmin' : String(input.operateur),
+      input.impactApplied ? 1 : 0,
+      input.createdAt == null ? new Date().toISOString() : String(input.createdAt),
+    )
+    return id
+  }
+
+  const acceptTreasuryPending = (id: string) => {
+    const pending = db.prepare(`SELECT * FROM mouvements_tresorerie_attente WHERE id=?`).get(id) as Record<string, unknown> | undefined
+    if (!pending) throw new Error('Mouvement de trésorerie introuvable')
+    if (pending.statut === 'ACCEPTE') return { success: true, alreadyAccepted: true }
+    const now = new Date().toISOString()
+    let insertedMovement: Record<string, unknown> | null = null
+    db.transaction(() => {
+      if (!Number(pending.impact_applique)) {
+        const movementId = `mci-${id}`
+        const parsed = new Date(String(pending.created_at ?? now))
+        const date = Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString('en-CA') : new Date().toLocaleDateString('en-CA')
+        insertedMovement = {
+          id: movementId,
+          date_journal: date,
+          type: String(pending.direction),
+          categorie: String(pending.categorie),
+          montant: money3(pending.montant),
+          reference_id: String(pending.reference_id),
+          note: pending.note == null ? null : String(pending.note),
+          operateur: String(pending.operateur ?? 'superadmin'),
+          created_at: String(pending.created_at ?? now),
+        }
+        db.prepare(`INSERT OR IGNORE INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (@id,@date_journal,@type,@categorie,@montant,@reference_id,@note,@operateur,@created_at)`).run(insertedMovement)
+        applyInternalCashMovement(String(pending.direction) === 'ENTREE' ? 'ENTREE' : 'SORTIE', pending.montant, pending.created_at)
+      }
+      db.prepare(`UPDATE mouvements_tresorerie_attente SET statut='ACCEPTE', accepted_at=? WHERE id=? AND statut='EN_ATTENTE'`).run(now, id)
+    })()
+    if (insertedMovement) enqueueSync('mouvements_caisse_interne', 'INSERT', insertedMovement)
+    addActivityLog({
+      operateur: String(pending.operateur ?? 'superadmin'),
+      action: 'TREASURY_MOVEMENT_ACCEPTED',
+      montant: Number(pending.montant),
+      details: { pending_id: id, direction: pending.direction, categorie: pending.categorie, reference_id: pending.reference_id },
+    })
+    return { success: true }
   }
 
   type SavedPanierPayload = {
@@ -2735,11 +2814,23 @@ function setupIpcHandlers() {
       db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (@id,@date_journal,@type,@categorie,@montant,@reference_id,@note,@operateur,@created_at)`).run(internalRow)
       applyInternalCashOut(montant, now)
       enqueueSync('mouvements_caisse_interne', 'INSERT', internalRow)
+      queueTreasuryMovement({
+        direction: 'SORTIE', categorie: 'SORTIE_POS_INTERNE', montant,
+        referenceId: sortie.id, note: String(s.note).trim(), operateur: s.operateur,
+        createdAt: now, impactApplied: true,
+      })
     }
     db.prepare(`
       INSERT INTO sorties_caisse (id, shift_id, montant, note, operateur, mouvement_interne_id, created_at)
       VALUES (@id, @shift_id, @montant, @note, @operateur, @mouvement_interne_id, @created_at)
     `).run(sortie)
+    if (source === 'EXTERNE') {
+      queueTreasuryMovement({
+        direction: 'SORTIE', categorie: 'SORTIE_CAISSE_EXTERNE', montant,
+        referenceId: sortie.id, note: String(s.note).trim(), operateur: s.operateur,
+        createdAt: now,
+      })
+    }
     addActivityLog({ shift_id: sortie.shift_id, operateur: s.operateur, action: 'CASH_OUT_CREATED', montant, details: { note: s.note, caisse_source: source } })
     enqueueSync('sorties_caisse', 'INSERT', sortie)
     return { success: true }
@@ -3641,9 +3732,11 @@ function setupIpcHandlers() {
         db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE','PAIEMENT_FOURNISSEUR',?,?,?,?,?)`)
           .run(`mci-${row.id}`, row.montant, row.facture_id, `Paiement fournisseur ${factureBefore.numero_facture}`, operateur, row.created_at)
         applyInternalCashOut(row.montant, row.created_at)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'PAIEMENT_FOURNISSEUR', montant: row.montant, referenceId: `supplier-${row.id}`, note: `Paiement fournisseur ${factureBefore.numero_facture}`, operateur, createdAt: row.created_at, impactApplied: true })
       } else {
         db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
           .run(`supplier-${row.id}`, shiftId, row.montant, `[CAISSE:EXTERNE] Paiement fournisseur ${factureBefore.numero_facture}`, operateur, row.created_at)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'PAIEMENT_FOURNISSEUR_EXTERNE', montant: row.montant, referenceId: `supplier-${row.id}`, note: `Paiement fournisseur ${factureBefore.numero_facture}`, operateur, createdAt: row.created_at })
       }
     })
     transaction()
@@ -3692,8 +3785,12 @@ function setupIpcHandlers() {
       if (type === 'RETRAIT' && source === 'INTERNE') {
         db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE','AJUSTEMENT_FOURNISSEUR',?,?,?,?,?)`).run(`mci-aj-${id}`, montant, id, `Ajustement fournisseur: ${String(input.motif).trim()}`, input.operateur ?? 'superadmin', now)
         applyInternalCashOut(montant, now)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'AJUSTEMENT_FOURNISSEUR', montant, referenceId: id, note: `Ajustement fournisseur: ${String(input.motif).trim()}`, operateur: input.operateur, createdAt: now, impactApplied: true })
       }
-      if (type === 'RETRAIT' && source === 'EXTERNE') db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`).run(`supplier-adjust-${id}`, input.shift_id, montant, `[CAISSE:EXTERNE] Ajustement fournisseur: ${String(input.motif).trim()}`, input.operateur ?? 'superadmin', now)
+      if (type === 'RETRAIT' && source === 'EXTERNE') {
+        db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`).run(`supplier-adjust-${id}`, input.shift_id, montant, `[CAISSE:EXTERNE] Ajustement fournisseur: ${String(input.motif).trim()}`, input.operateur ?? 'superadmin', now)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'AJUSTEMENT_FOURNISSEUR_EXTERNE', montant, referenceId: `supplier-adjust-${id}`, note: `Ajustement fournisseur: ${String(input.motif).trim()}`, operateur: input.operateur, createdAt: now })
+      }
     })()
     const snapshot = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(input.fournisseur_id) as Record<string, unknown>
     enqueueSync('fournisseurs', 'UPDATE', snapshot)
@@ -3795,69 +3892,98 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
+  ipcMain.handle('caisseInterne:pendingCount', () => {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM mouvements_tresorerie_attente WHERE statut='EN_ATTENTE'`).get() as { count: number }
+    return Number(row.count) || 0
+  })
+
+  ipcMain.handle('caisseInterne:pendingList', () => {
+    return db.prepare(`
+      SELECT * FROM mouvements_tresorerie_attente
+      WHERE statut='EN_ATTENTE'
+      ORDER BY created_at ASC
+    `).all()
+  })
+
+  ipcMain.handle('caisseInterne:acceptPending', (_e, id: string) => {
+    return acceptTreasuryPending(String(id))
+  })
+
+  ipcMain.handle('caisseInterne:acceptAllPending', () => {
+    const rows = db.prepare(`SELECT id FROM mouvements_tresorerie_attente WHERE statut='EN_ATTENTE' ORDER BY created_at ASC`).all() as Array<{ id: string }>
+    for (const row of rows) acceptTreasuryPending(row.id)
+    return { success: true, accepted: rows.length }
+  })
+
   ipcMain.handle('caisseInterne:transferShift', (_e, shiftId: string) => {
     const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shiftId) as Record<string, unknown> | undefined
     if (!shift) return { error: 'Shift not found' }
     if (shift.transfere_caisse_interne) return { success: true, montant: 0, alreadyDone: true }
 
-    const ventesTotal = db.prepare(`
-      SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
-      WHERE shift_id = ? AND type = 'VENTE'
-        AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
-        AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
-    `).get(shiftId) as { total: number }
-    const repairFinalTotal = db.prepare(`
-      SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total FROM reparations
-      WHERE statut IN ('TERMINE', 'RENDU') AND (
-        (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' AND notes_technicien LIKE ?)
-        OR ((notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL) AND shift_id = ?)
-      )
-    `).get(`%"paymentShiftId":"${shiftId}"%`, shiftId) as { total: number }
-    const repairDepositTotal = db.prepare(`SELECT COALESCE(SUM(acompte),0) as total FROM reparations WHERE shift_id = ? AND statut != 'ANNULE'`).get(shiftId) as { total: number }
-    const repsTotal = { total: money3(repairFinalTotal.total + repairDepositTotal.total) }
-    const creditsTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'`).get(shiftId) as { total: number }
-    const advancesTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM avances_clients WHERE shift_id = ?`).get(shiftId) as { total: number }
-    const cashOutTotal = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM sorties_caisse WHERE shift_id = ?`).get(shiftId) as { total: number }
-    const exchangeTotal = db.prepare(`
-      SELECT COALESCE(SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END),0) AS entrees,
-             COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties
-      FROM mouvements_echange WHERE shift_id=?
-    `).get(shiftId) as { entrees: number; sorties: number }
-    // Service transactions are also NF lines inside ventes.total_ttc; do not count them twice.
-    const total = money3(ventesTotal.total + repsTotal.total + creditsTotal.total + advancesTotal.total + exchangeTotal.entrees - cashOutTotal.total - exchangeTotal.sorties)
-    if (total <= 0) {
+    // Morning closing only stores its report. Treasury receives one combined
+    // Matin + Soir total when the evening caisse closes.
+    if (shift.session_type === 'MATIN') {
       db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
       enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
+      return { success: true, montant: 0, deferred: true }
+    }
+
+    const dateJournal = new Date(String(shift.ended_at ?? new Date().toISOString())).toLocaleDateString('en-CA')
+    const reportShifts = db.prepare(`SELECT shift_id FROM rapports_caisse WHERE date_journal=? AND session_type IN ('MATIN','SOIR') ORDER BY started_at ASC`).all(dateJournal) as Array<{ shift_id: string }>
+    const shiftIds = [...new Set([...(reportShifts.map(row => row.shift_id)), shiftId])]
+    for (const targetShiftId of shiftIds) {
+      const exits = db.prepare(`SELECT id,montant,note,operateur,created_at FROM sorties_caisse WHERE shift_id=?`).all(targetShiftId) as Array<{ id: string; montant: number; note?: string; operateur?: string; created_at: string }>
+      for (const exit of exits) {
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'SORTIE_CAISSE_EXTERNE', montant: exit.montant, referenceId: exit.id, note: exit.note, operateur: exit.operateur, createdAt: exit.created_at })
+      }
+    }
+    const shiftGross = (targetShiftId: string) => {
+      const ventes = db.prepare(`
+        SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
+        WHERE shift_id = ? AND type = 'VENTE'
+          AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
+          AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
+      `).get(targetShiftId) as { total: number }
+      const repairsFinal = db.prepare(`
+        SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total FROM reparations
+        WHERE statut IN ('TERMINE', 'RENDU') AND (
+          (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' AND notes_technicien LIKE ?)
+          OR ((notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL) AND shift_id = ?)
+        )
+      `).get(`%"paymentShiftId":"${targetShiftId}"%`, targetShiftId) as { total: number }
+      const repairDeposits = db.prepare(`SELECT COALESCE(SUM(acompte),0) as total FROM reparations WHERE shift_id = ? AND statut != 'ANNULE'`).get(targetShiftId) as { total: number }
+      const credits = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'`).get(targetShiftId) as { total: number }
+      const advances = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM avances_clients WHERE shift_id = ?`).get(targetShiftId) as { total: number }
+      const exchanges = db.prepare(`
+        SELECT COALESCE(SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END),0) AS entrees,
+               COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties
+        FROM mouvements_echange WHERE shift_id=?
+      `).get(targetShiftId) as { entrees: number; sorties: number }
+      return money3(ventes.total + repairsFinal.total + repairDeposits.total + credits.total + advances.total + exchanges.entrees - exchanges.sorties)
+    }
+    // External cash-outs are queued separately for review, so the daily entry
+    // remains gross and accepting those exits yields the exact original net.
+    const total = money3(shiftIds.reduce((sum, id) => sum + shiftGross(id), 0))
+    if (total <= 0) {
+      for (const id of shiftIds) {
+        db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(id)
+        enqueueSync('shifts', 'UPDATE', { id, transfere_caisse_interne: 1 })
+      }
       return { success: true, montant: 0 }
     }
 
-    const today = new Date().toLocaleDateString('en-CA')
-    const existingCash = db.prepare('SELECT id FROM caisse_interne WHERE date_journal = ?').get(today)
-    if (!existingCash) {
-      const previous = db.prepare('SELECT solde_ouverture,total_entrees,total_sorties FROM caisse_interne ORDER BY date_journal DESC LIMIT 1').get() as { solde_ouverture?: number; total_entrees?: number; total_sorties?: number } | undefined
-      const opening = previous ? money3(Number(previous.solde_ouverture) + Number(previous.total_entrees) - Number(previous.total_sorties)) : 100
-      db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(`ci-${today}`, today, opening)
-    }
-    const id = `mvt-${Date.now()}`
-    const m = {
-      id, date_journal: today,
-      type: 'ENTREE', categorie: 'TRANSFERT_CAISSE_EXTERNE',
-      montant: total, reference_id: shiftId,
-      note: `Transfert recettes shift — ${(shift as { operateur_nom?: string }).operateur_nom ?? ''}`,
-      operateur: 'superadmin', created_at: new Date().toISOString()
-    }
-    db.prepare(`
-      INSERT INTO mouvements_caisse_interne (id, date_journal, type, categorie, montant, reference_id, note, operateur, created_at)
-      VALUES (@id, @date_journal, @type, @categorie, @montant, @reference_id, @note, @operateur, @created_at)
-    `).run(m)
-    db.prepare(`UPDATE caisse_interne SET total_entrees = total_entrees + ? WHERE date_journal = ?`).run(total, today)
-    db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(shiftId)
-    addActivityLog({ shift_id: shiftId, action: 'SHIFT_TRANSFERRED_TO_INTERNAL_CASH', montant: total })
-    enqueueSync('mouvements_caisse_interne', 'INSERT', m)
-    const cashSnapshot = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown> | undefined
-    if (cashSnapshot) enqueueSync('caisse_interne', 'UPDATE', cashSnapshot)
-    enqueueSync('shifts', 'UPDATE', { id: shiftId, transfere_caisse_interne: 1 })
-    return { success: true, montant: total }
+    const now = new Date().toISOString()
+    const pendingId = queueTreasuryMovement({
+      direction: 'ENTREE', categorie: 'TOTAL_CAISSE_JOUR', montant: total,
+      referenceId: `journee-${dateJournal}`,
+      note: `Total caisse journée ${dateJournal} · Matin + Soir`,
+      operateur: (shift as { operateur_nom?: string }).operateur_nom ?? 'superadmin',
+      createdAt: now,
+    })
+    for (const id of shiftIds) db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(id)
+    addActivityLog({ shift_id: shiftId, action: 'SHIFT_TRANSFER_QUEUED_FOR_TREASURY', montant: total, details: { pending_id: pendingId } })
+    for (const id of shiftIds) enqueueSync('shifts', 'UPDATE', { id, transfere_caisse_interne: 1 })
+    return { success: true, montant: total, pending: true, pendingId }
   })
 
   // ── Ventes en Ligne ───────────────────────────────────────────────────────
@@ -3900,6 +4026,11 @@ function setupIpcHandlers() {
       }
       db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
         .run(sortieId, sortieRow.shift_id, frais, sortieRow.note, sortieRow.operateur, now)
+      queueTreasuryMovement({
+        direction: 'SORTIE', categorie: 'FRAIS_RETOUR_COLIS', montant: frais,
+        referenceId: sortieId, note: sortieRow.note, operateur: sortieRow.operateur,
+        createdAt: now,
+      })
       enqueueSync('sorties_caisse', 'INSERT', sortieRow)
     }
     if (statut === 'CONFIRME') {
@@ -3930,6 +4061,11 @@ function setupIpcHandlers() {
           .run(mvtId, today, 'ENTREE', 'VENTE_EN_LIGNE_REGLEMENT', montant, id, mvtRow.note, mvtRow.operateur, now)
         db.prepare(`UPDATE caisse_interne SET total_entrees = total_entrees + ? WHERE date_journal = ?`).run(montant, today)
         db.prepare(`UPDATE ventes_en_ligne SET montant_net = ?, updated_at = ? WHERE id = ?`).run(montant, now, id)
+        queueTreasuryMovement({
+          direction: 'ENTREE', categorie: 'VENTE_EN_LIGNE_REGLEMENT', montant,
+          referenceId: mvtId, note: mvtRow.note, operateur: mvtRow.operateur,
+          createdAt: now, impactApplied: true,
+        })
         enqueueSync('mouvements_caisse_interne', 'INSERT', mvtRow)
         const ci = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown> | undefined
         if (ci) enqueueSync('caisse_interne', 'UPDATE', ci)
@@ -4465,6 +4601,11 @@ function setupIpcHandlers() {
       }
       db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
         .run(sortieId, row.shift_id, row.montant_rembourse, sortieRow.note, row.operateur, row.created_at)
+      queueTreasuryMovement({
+        direction: 'SORTIE', categorie: 'REMBOURSEMENT_RETOUR', montant: row.montant_rembourse,
+        referenceId: sortieId, note: sortieRow.note, operateur: row.operateur,
+        createdAt: row.created_at,
+      })
       enqueueSync('sorties_caisse', 'INSERT', sortieRow)
     }
     if (row.type_retour === 'SANS_PROBLEME' && row.produit_id) {
@@ -5105,11 +5246,13 @@ function setupIpcHandlers() {
       } else if (type === 'CREDIT_PERSONNEL' && source === 'EXTERNE') {
         db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
           .run(`staff-${row.id}`, shiftId, montant, `[CAISSE:EXTERNE] Crédit argent personnel`, row.operateur, row.created_at)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'CREDIT_PERSONNEL_EXTERNE', montant, referenceId: `staff-${row.id}`, note: 'Crédit argent personnel', operateur: row.operateur, createdAt: row.created_at })
       } else if (['SALAIRE', 'AVANCE', 'CREDIT_PERSONNEL'].includes(type)) {
         const categorie = type === 'SALAIRE' ? 'SALAIRE' : type === 'AVANCE' ? 'AVANCE_PERSONNEL' : 'CHARGE'
         db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE',?,?,?,?,?,?)`)
           .run(`mci-${row.id}`, categorie, montant, pid, row.note ?? type, row.operateur, row.created_at)
         applyInternalCashOut(montant, row.created_at)
+        queueTreasuryMovement({ direction: 'SORTIE', categorie, montant, referenceId: `staff-${row.id}`, note: row.note ?? type, operateur: row.operateur, createdAt: row.created_at, impactApplied: true })
       }
     })()
     addActivityLog({ shift_id: shiftId ?? undefined, operateur: row.operateur as string, action: 'STAFF_MOVEMENT_CREATED', montant: row.montant as number, details: { type: row.type, personnel_id: row.personnel_id, mois: row.mois, nature_credit: natureCredit, caisse_source: source, produit: product?.nom, quantite: quantity } })
