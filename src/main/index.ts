@@ -440,6 +440,90 @@ function repairLegacyQuoteInventory() {
   }
 }
 
+/**
+ * v1.9.1036 briefly allowed external-shift exits to be accepted as additional
+ * internal-treasury exits. They already reduce the net end-of-day transfer, so
+ * accepting them separately deducted the same money twice. Remove only those
+ * generated ledger rows, convert the matching gross daily transfer to net and
+ * preserve intentional internal POS exits.
+ */
+function repairExternalTreasuryDoubleDeductions() {
+  const externalCategories = [
+    'SORTIE_CAISSE_EXTERNE',
+    'FRAIS_RETOUR_COLIS',
+    'PAIEMENT_FOURNISSEUR_EXTERNE',
+    'AJUSTEMENT_FOURNISSEUR_EXTERNE',
+    'CREDIT_PERSONNEL_EXTERNE',
+    'REMBOURSEMENT_RETOUR',
+  ]
+  try {
+    const placeholders = externalCategories.map(() => '?').join(',')
+    const externalPending = db.prepare(`
+      SELECT id, date(created_at,'localtime') AS date_journal, montant
+      FROM mouvements_tresorerie_attente
+      WHERE categorie IN (${placeholders})
+        AND COALESCE(note,'') NOT LIKE '[HORS TRESORERIE]%'
+    `).all(...externalCategories) as Array<{ id: string; date_journal: string; montant: number }>
+    const acceptedExternalRows = db.prepare(`
+      SELECT m.id, m.date_journal, m.montant
+      FROM mouvements_caisse_interne m
+      JOIN mouvements_tresorerie_attente p ON m.id = 'mci-' || p.id
+      WHERE p.impact_applique = 0 AND p.categorie IN (${placeholders})
+    `).all(...externalCategories) as Array<{ id: string; date_journal: string; montant: number }>
+    const externalByDate = new Map<string, number>()
+    for (const row of externalPending) externalByDate.set(row.date_journal, money3((externalByDate.get(row.date_journal) ?? 0) + Number(row.montant)))
+    const acceptedByDate = new Map<string, number>()
+    for (const row of acceptedExternalRows) acceptedByDate.set(row.date_journal, money3((acceptedByDate.get(row.date_journal) ?? 0) + Number(row.montant)))
+    const now = new Date().toISOString()
+    db.transaction(() => {
+      for (const row of acceptedExternalRows) db.prepare(`DELETE FROM mouvements_caisse_interne WHERE id=?`).run(row.id)
+      for (const [date, amount] of acceptedByDate) {
+        db.prepare(`UPDATE caisse_interne SET total_sorties=MAX(0,total_sorties-?) WHERE date_journal=?`).run(amount, date)
+      }
+      for (const [date, amount] of externalByDate) {
+        const dailyPending = db.prepare(`
+          SELECT id,montant FROM mouvements_tresorerie_attente
+          WHERE categorie='TOTAL_CAISSE_JOUR' AND reference_id=?
+        `).get(`journee-${date}`) as { id: string; montant: number } | undefined
+        if (!dailyPending) continue
+        const reduction = Math.min(Number(dailyPending.montant) || 0, amount)
+        if (reduction <= 0) continue
+        db.prepare(`UPDATE mouvements_tresorerie_attente SET montant=MAX(0,montant-?) WHERE id=?`).run(reduction, dailyPending.id)
+        const dailyLedgerId = `mci-${dailyPending.id}`
+        const dailyLedger = db.prepare(`SELECT montant,date_journal FROM mouvements_caisse_interne WHERE id=?`).get(dailyLedgerId) as { montant: number; date_journal: string } | undefined
+        if (dailyLedger) {
+          const ledgerReduction = Math.min(Number(dailyLedger.montant) || 0, reduction)
+          db.prepare(`UPDATE mouvements_caisse_interne SET montant=MAX(0,montant-?) WHERE id=?`).run(ledgerReduction, dailyLedgerId)
+          db.prepare(`UPDATE caisse_interne SET total_entrees=MAX(0,total_entrees-?) WHERE date_journal=?`).run(ledgerReduction, dailyLedger.date_journal)
+        }
+      }
+      db.prepare(`
+        UPDATE mouvements_tresorerie_attente
+        SET statut='ACCEPTE', accepted_at=COALESCE(accepted_at,?),
+            note=CASE WHEN note LIKE '[HORS TRESORERIE]%' THEN note ELSE '[HORS TRESORERIE] ' || COALESCE(note,'') END
+        WHERE categorie IN (${placeholders})
+      `).run(now, ...externalCategories)
+    })()
+    for (const row of acceptedExternalRows) enqueueSync('mouvements_caisse_interne', 'DELETE', { id: row.id })
+    for (const date of externalByDate.keys()) {
+      const cash = db.prepare(`SELECT * FROM caisse_interne WHERE date_journal=?`).get(date) as Record<string, unknown> | undefined
+      if (cash) enqueueSync('caisse_interne', 'UPDATE', cash)
+      const dailyPending = db.prepare(`SELECT * FROM mouvements_tresorerie_attente WHERE categorie='TOTAL_CAISSE_JOUR' AND reference_id=?`).get(`journee-${date}`) as Record<string, unknown> | undefined
+      if (dailyPending) {
+        enqueueSync('mouvements_tresorerie_attente', 'UPDATE', dailyPending)
+        const dailyLedger = db.prepare(`SELECT * FROM mouvements_caisse_interne WHERE id=?`).get(`mci-${dailyPending.id}`) as Record<string, unknown> | undefined
+        if (dailyLedger) enqueueSync('mouvements_caisse_interne', 'UPDATE', dailyLedger)
+      }
+    }
+    if (externalPending.length) {
+      addActivityLog({ action: 'TREASURY_EXTERNAL_DOUBLE_DEDUCTION_REPAIRED', details: { movements: acceptedExternalRows.length, dates: [...externalByDate.keys()] } })
+      console.log(`[treasury] Repaired ${externalPending.length} external cash-out review item(s)`)
+    }
+  } catch (error) {
+    console.warn('[treasury] External double-deduction repair skipped:', error)
+  }
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 function resolveAppIcon(): NativeImage | undefined {
@@ -546,6 +630,7 @@ app.whenReady().then(() => {
     initDatabase()
     repairStoredMoneyPrecision()
     repairLegacyQuoteInventory()
+    repairExternalTreasuryDoubleDeductions()
   } catch (err) {
     console.error('DB init error:', err)
   }
@@ -2824,13 +2909,6 @@ function setupIpcHandlers() {
       INSERT INTO sorties_caisse (id, shift_id, montant, note, operateur, mouvement_interne_id, created_at)
       VALUES (@id, @shift_id, @montant, @note, @operateur, @mouvement_interne_id, @created_at)
     `).run(sortie)
-    if (source === 'EXTERNE') {
-      queueTreasuryMovement({
-        direction: 'SORTIE', categorie: 'SORTIE_CAISSE_EXTERNE', montant,
-        referenceId: sortie.id, note: String(s.note).trim(), operateur: s.operateur,
-        createdAt: now,
-      })
-    }
     addActivityLog({ shift_id: sortie.shift_id, operateur: s.operateur, action: 'CASH_OUT_CREATED', montant, details: { note: s.note, caisse_source: source } })
     enqueueSync('sorties_caisse', 'INSERT', sortie)
     return { success: true }
@@ -3736,7 +3814,6 @@ function setupIpcHandlers() {
       } else {
         db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
           .run(`supplier-${row.id}`, shiftId, row.montant, `[CAISSE:EXTERNE] Paiement fournisseur ${factureBefore.numero_facture}`, operateur, row.created_at)
-        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'PAIEMENT_FOURNISSEUR_EXTERNE', montant: row.montant, referenceId: `supplier-${row.id}`, note: `Paiement fournisseur ${factureBefore.numero_facture}`, operateur, createdAt: row.created_at })
       }
     })
     transaction()
@@ -3789,7 +3866,6 @@ function setupIpcHandlers() {
       }
       if (type === 'RETRAIT' && source === 'EXTERNE') {
         db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`).run(`supplier-adjust-${id}`, input.shift_id, montant, `[CAISSE:EXTERNE] Ajustement fournisseur: ${String(input.motif).trim()}`, input.operateur ?? 'superadmin', now)
-        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'AJUSTEMENT_FOURNISSEUR_EXTERNE', montant, referenceId: `supplier-adjust-${id}`, note: `Ajustement fournisseur: ${String(input.motif).trim()}`, operateur: input.operateur, createdAt: now })
       }
     })()
     const snapshot = db.prepare('SELECT * FROM fournisseurs WHERE id = ?').get(input.fournisseur_id) as Record<string, unknown>
@@ -3931,13 +4007,7 @@ function setupIpcHandlers() {
     const dateJournal = new Date(String(shift.ended_at ?? new Date().toISOString())).toLocaleDateString('en-CA')
     const reportShifts = db.prepare(`SELECT shift_id FROM rapports_caisse WHERE date_journal=? AND session_type IN ('MATIN','SOIR') ORDER BY started_at ASC`).all(dateJournal) as Array<{ shift_id: string }>
     const shiftIds = [...new Set([...(reportShifts.map(row => row.shift_id)), shiftId])]
-    for (const targetShiftId of shiftIds) {
-      const exits = db.prepare(`SELECT id,montant,note,operateur,created_at FROM sorties_caisse WHERE shift_id=?`).all(targetShiftId) as Array<{ id: string; montant: number; note?: string; operateur?: string; created_at: string }>
-      for (const exit of exits) {
-        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'SORTIE_CAISSE_EXTERNE', montant: exit.montant, referenceId: exit.id, note: exit.note, operateur: exit.operateur, createdAt: exit.created_at })
-      }
-    }
-    const shiftGross = (targetShiftId: string) => {
+    const shiftNet = (targetShiftId: string) => {
       const ventes = db.prepare(`
         SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
         WHERE shift_id = ? AND type = 'VENTE'
@@ -3959,11 +4029,12 @@ function setupIpcHandlers() {
                COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties
         FROM mouvements_echange WHERE shift_id=?
       `).get(targetShiftId) as { entrees: number; sorties: number }
-      return money3(ventes.total + repairsFinal.total + repairDeposits.total + credits.total + advances.total + exchanges.entrees - exchanges.sorties)
+      const cashOuts = db.prepare(`SELECT COALESCE(SUM(montant),0) AS total FROM sorties_caisse WHERE shift_id=?`).get(targetShiftId) as { total: number }
+      return money3(ventes.total + repairsFinal.total + repairDeposits.total + credits.total + advances.total + exchanges.entrees - exchanges.sorties - cashOuts.total)
     }
-    // External cash-outs are queued separately for review, so the daily entry
-    // remains gross and accepting those exits yields the exact original net.
-    const total = money3(shiftIds.reduce((sum, id) => sum + shiftGross(id), 0))
+    // Treasury receives the net Matin + Soir result once. External shift exits
+    // are already included here and must never be deducted a second time.
+    const total = money3(shiftIds.reduce((sum, id) => sum + shiftNet(id), 0))
     if (total <= 0) {
       for (const id of shiftIds) {
         db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(id)
@@ -4026,11 +4097,6 @@ function setupIpcHandlers() {
       }
       db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
         .run(sortieId, sortieRow.shift_id, frais, sortieRow.note, sortieRow.operateur, now)
-      queueTreasuryMovement({
-        direction: 'SORTIE', categorie: 'FRAIS_RETOUR_COLIS', montant: frais,
-        referenceId: sortieId, note: sortieRow.note, operateur: sortieRow.operateur,
-        createdAt: now,
-      })
       enqueueSync('sorties_caisse', 'INSERT', sortieRow)
     }
     if (statut === 'CONFIRME') {
@@ -4601,11 +4667,6 @@ function setupIpcHandlers() {
       }
       db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,created_at) VALUES (?,?,?,?,?,?)`)
         .run(sortieId, row.shift_id, row.montant_rembourse, sortieRow.note, row.operateur, row.created_at)
-      queueTreasuryMovement({
-        direction: 'SORTIE', categorie: 'REMBOURSEMENT_RETOUR', montant: row.montant_rembourse,
-        referenceId: sortieId, note: sortieRow.note, operateur: row.operateur,
-        createdAt: row.created_at,
-      })
       enqueueSync('sorties_caisse', 'INSERT', sortieRow)
     }
     if (row.type_retour === 'SANS_PROBLEME' && row.produit_id) {
@@ -5246,7 +5307,6 @@ function setupIpcHandlers() {
       } else if (type === 'CREDIT_PERSONNEL' && source === 'EXTERNE') {
         db.prepare(`INSERT INTO sorties_caisse (id,shift_id,montant,note,operateur,mouvement_interne_id,created_at) VALUES (?,?,?,?,?,NULL,?)`)
           .run(`staff-${row.id}`, shiftId, montant, `[CAISSE:EXTERNE] Crédit argent personnel`, row.operateur, row.created_at)
-        queueTreasuryMovement({ direction: 'SORTIE', categorie: 'CREDIT_PERSONNEL_EXTERNE', montant, referenceId: `staff-${row.id}`, note: 'Crédit argent personnel', operateur: row.operateur, createdAt: row.created_at })
       } else if (['SALAIRE', 'AVANCE', 'CREDIT_PERSONNEL'].includes(type)) {
         const categorie = type === 'SALAIRE' ? 'SALAIRE' : type === 'AVANCE' ? 'AVANCE_PERSONNEL' : 'CHARGE'
         db.prepare(`INSERT INTO mouvements_caisse_interne (id,date_journal,type,categorie,montant,reference_id,note,operateur,created_at) VALUES (?,date('now','localtime'),'SORTIE',?,?,?,?,?,?)`)
