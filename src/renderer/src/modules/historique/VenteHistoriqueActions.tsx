@@ -182,14 +182,13 @@ export function ConvertVenteDocModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[120]">
       <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-5">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-sm">Convertir vente {vente.numero}</h3>
+          <h3 className="font-bold text-sm">Créer un document pour {vente.numero}</h3>
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <div className="space-y-2 mb-4">
           {([
             ['FACTURE_VENTE', 'Facture', FileText],
             ['BON_LIVRAISON', 'Bon de livraison', FileCheck],
-            ['DEVIS', 'Devis', FileText],
           ] as const).map(([id, label, Icon]) => (
             <button key={id} type="button" onClick={() => setType(id)}
               className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-semibold ${type === id ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted'}`}>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Personnel, MouvementPersonnel, TypeMouvementPersonnel } from '../../lib/types'
+import type { Personnel, MouvementPersonnel, TypeMouvementPersonnel, Produit } from '../../lib/types'
 import { formatPrice, formatDate, generateId } from '../../lib/utils'
 import { useAppStore } from '../../store/appStore'
 import {
@@ -56,6 +56,10 @@ const TYPE_COLORS: Record<TypeMouvementPersonnel, string> = {
   CREDIT_PERSONNEL:      'bg-purple-100 text-purple-800',
   CREDIT_REMBOURSEMENT:  'bg-teal-100 text-teal-800',
 }
+
+const cleanAccountingNote = (note?: string) => String(note ?? '')
+  .replace(/\n?\[SMLPOS_ACCOUNTING\]\{[^\r\n]*\}/g, '')
+  .trim()
 
 function getCurrentMois() {
   const d = new Date()
@@ -234,7 +238,7 @@ export default function PersonnelsTab() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right font-price font-semibold">{formatPrice(m.montant)}</td>
-                      <td className="px-4 py-3 text-xs text-text-secondary">{m.note ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-text-secondary">{cleanAccountingNote(m.note) || '—'}</td>
                       <td className="px-4 py-3 text-xs text-text-secondary">{m.operateur ?? '—'}</td>
                     </tr>
                   ))}
@@ -324,6 +328,7 @@ export default function PersonnelsTab() {
           initialType={showMvt.type}
           initialPersonnel={showMvt.personnel}
           operateur={currentOperateur?.nom ?? ''}
+          currentShift={currentShift}
           onClose={() => setShowMvt(null)}
           onSaved={() => { setShowMvt(null); loadPersonnels() }}
         />
@@ -393,10 +398,11 @@ function PersonnelHistoryModal({ personnel: p, onClose }: { personnel: Personnel
         <div className="p-4 overflow-auto space-y-2">
           {loading ? <p className="text-sm text-text-muted text-center py-8">Chargement...</p> : rows.length === 0 ? <p className="text-sm text-text-muted text-center py-8">Aucun mouvement</p> : rows.map(row => {
             const positive = row.type === 'AVANCE' || row.type === 'CREDIT_PERSONNEL' || row.type === 'SALAIRE'
-            return <div key={row.id} className="flex items-center gap-3 bg-muted/40 border border-border rounded-xl p-3"><span className={cn('w-8 h-8 rounded-full flex items-center justify-center text-lg', positive ? 'bg-accent-100 text-accent-700' : 'bg-green-100 text-green-700')}>{positive ? '+' : '-'}</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{TYPE_LABELS[row.type]}</p><p className="text-xs text-text-muted">{formatDate(row.created_at)}</p>{row.note && <p className="text-xs text-text-secondary italic truncate">{row.note}</p>}</div><p className={cn('font-price font-bold', positive ? 'text-accent-700' : 'text-green-700')}>{positive ? '+' : '-'}{formatPrice(row.montant)} DT</p></div>
+            const displayNote = cleanAccountingNote(row.note)
+            return <div key={row.id} className="flex items-center gap-3 bg-muted/40 border border-border rounded-xl p-3"><span className={cn('w-8 h-8 rounded-full flex items-center justify-center text-lg', positive ? 'bg-accent-100 text-accent-700' : 'bg-green-100 text-green-700')}>{positive ? '+' : '-'}</span><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{TYPE_LABELS[row.type]}</p><p className="text-xs text-text-muted">{formatDate(row.created_at)}</p>{displayNote && <p className="text-xs text-text-secondary italic truncate">{displayNote}</p>}</div><p className={cn('font-price font-bold', positive ? 'text-accent-700' : 'text-green-700')}>{positive ? '+' : '-'}{formatPrice(row.montant)} DT</p></div>
           })}
         </div>
-        <div className="flex justify-end gap-2 px-5 py-4 border-t border-border"><button onClick={async () => { await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Solde actuel', `${formatPrice((p.avance_solde || 0) + (p.credit_solde || 0))} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: row.note })), `personnel-${p.nom}`) }} className="flex items-center gap-1.5 border border-border rounded-lg px-3 py-2 text-xs font-semibold"><Download size={13} /> PDF</button><button onClick={onClose} className="border border-border rounded-lg px-4 py-2 text-xs font-semibold">Fermer</button></div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-border"><button onClick={async () => { await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Solde actuel', `${formatPrice((p.avance_solde || 0) + (p.credit_solde || 0))} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: cleanAccountingNote(row.note) })), `personnel-${p.nom}`) }} className="flex items-center gap-1.5 border border-border rounded-lg px-3 py-2 text-xs font-semibold"><Download size={13} /> PDF</button><button onClick={onClose} className="border border-border rounded-lg px-4 py-2 text-xs font-semibold">Fermer</button></div>
       </div>
     </div>
   )
@@ -422,7 +428,7 @@ function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary }
           <button onClick={() => printFichePersonnel(p)} title="Imprimer fiche" className="p-1.5 text-text-muted hover:text-text-primary hover:bg-muted rounded-lg transition-colors">
             <Printer size={13} />
           </button>
-          <button onClick={async () => { const rows = await api.mouvementsPersonnelsList({ personnel_id: p.id }) as MouvementPersonnel[]; await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Avance', `${formatPrice(p.avance_solde)} DT`], ['Crédit', `${formatPrice(p.credit_solde)} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: row.note })), `personnel-${p.nom}`) }} title="Exporter PDF" className="p-1.5 text-text-muted hover:text-text-primary hover:bg-muted rounded-lg transition-colors">
+          <button onClick={async () => { const rows = await api.mouvementsPersonnelsList({ personnel_id: p.id }) as MouvementPersonnel[]; await saveBalanceReport('Historique personnel', `${p.nom} ${p.prenom ?? ''}`.trim(), [['Avance', `${formatPrice(p.avance_solde)} DT`], ['Crédit', `${formatPrice(p.credit_solde)} DT`], ['Mouvements', String(rows.length)]], rows.map(row => ({ date: row.created_at, type: TYPE_LABELS[row.type], amount: row.montant, operator: row.operateur, note: cleanAccountingNote(row.note) })), `personnel-${p.nom}`) }} title="Exporter PDF" className="p-1.5 text-text-muted hover:text-text-primary hover:bg-muted rounded-lg transition-colors">
             <Download size={13} />
           </button>
           <button onClick={() => setOpen(!open)} className="text-text-muted hover:text-text-primary">
@@ -569,11 +575,12 @@ function AddPersonnelModal({ onClose, onSaved }: { onClose: () => void; onSaved:
 }
 
 // ── Mouvement Modal ───────────────────────────────────────────────────────────
-function MouvementModal({ personnels, initialType, initialPersonnel, operateur, onClose, onSaved }: {
+function MouvementModal({ personnels, initialType, initialPersonnel, operateur, currentShift, onClose, onSaved }: {
   personnels: Personnel[]
   initialType: TypeMouvementPersonnel
   initialPersonnel: Personnel
   operateur: string
+  currentShift: { id?: string; operateur_nom?: string } | null
   onClose: () => void
   onSaved: () => void
 }) {
@@ -584,6 +591,16 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
   const [mois, setMois] = useState(getCurrentMois())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [creditNature, setCreditNature] = useState<'ARGENT' | 'PRODUIT'>('ARGENT')
+  const [caisseSource, setCaisseSource] = useState<'INTERNE' | 'EXTERNE'>('INTERNE')
+  const [products, setProducts] = useState<Produit[]>([])
+  const [productId, setProductId] = useState('')
+  const [quantity, setQuantity] = useState(1)
+
+  useEffect(() => {
+    if (type !== 'CREDIT_PERSONNEL' || products.length) return
+    void loadData('Chargement produits', () => api.produitsList({ actif: 1 }), { silent: true }).then(rows => rows && setProducts(rows as Produit[]))
+  }, [products.length, type])
 
   const handleSave = async () => {
     const m = parseFloat(montant)
@@ -593,6 +610,11 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
       await api.mouvementsPersonnelsCreate({
         id: generateId(), personnel_id: selectedId, type, montant: m,
         mois: type === 'SALAIRE' ? mois : null, note: note || null, operateur,
+        nature_credit: type === 'CREDIT_PERSONNEL' ? creditNature : null,
+        caisse_source: type === 'CREDIT_PERSONNEL' && creditNature === 'ARGENT' ? caisseSource : null,
+        shift_id: currentShift?.id ?? null,
+        produit_id: type === 'CREDIT_PERSONNEL' && creditNature === 'PRODUIT' ? productId : null,
+        quantite: type === 'CREDIT_PERSONNEL' && creditNature === 'PRODUIT' ? quantity : null,
         created_at: new Date().toISOString(),
       })
     }, {
@@ -643,6 +665,37 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
                 className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none" />
             </div>
           )}
+          {type === 'CREDIT_PERSONNEL' && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {(['ARGENT', 'PRODUIT'] as const).map(nature => (
+                  <button key={nature} type="button" onClick={() => setCreditNature(nature)} className={cn('rounded-xl border-2 py-2 text-xs font-bold', creditNature === nature ? 'border-purple-500 bg-purple-50 text-purple-800' : 'border-border')}>
+                    {nature === 'ARGENT' ? 'Crédit argent' : 'Crédit produit'}
+                  </button>
+                ))}
+              </div>
+              {creditNature === 'ARGENT' ? (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-text-secondary">Caisse débitée</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['INTERNE', 'EXTERNE'] as const).map(source => (
+                      <button key={source} type="button" onClick={() => setCaisseSource(source)} className={cn('rounded-xl border-2 py-2 text-xs font-bold', caisseSource === source ? 'border-accent-500 bg-accent-50' : 'border-border')}>
+                        Caisse {source === 'INTERNE' ? 'interne' : 'externe'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-[1fr_80px] gap-2">
+                  <select value={productId} onChange={e => setProductId(e.target.value)} className="rounded-xl border border-border px-3 py-2 text-xs">
+                    <option value="">Choisir un produit…</option>
+                    {products.filter(p => p.stock_actuel > 0).map(p => <option key={p.id} value={p.id}>{p.nom} (stock {p.stock_actuel})</option>)}
+                  </select>
+                  <input type="number" min="1" value={quantity} onChange={e => setQuantity(Math.max(1, Number(e.target.value) || 1))} className="rounded-xl border border-border px-2 py-2 text-center" />
+                </div>
+              )}
+            </>
+          )}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-text-secondary">Montant (DT)</label>
             <input type="number" min="0" step="0.001" value={montant} onChange={e => setMontant(e.target.value)} placeholder="0.00"
@@ -656,7 +709,7 @@ function MouvementModal({ personnels, initialType, initialPersonnel, operateur, 
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-text-secondary border border-border rounded-lg">Annuler</button>
-          <button type="button" onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-accent-500 hover:bg-accent-400 text-black font-semibold rounded-lg disabled:opacity-50">
+          <button type="button" onClick={handleSave} disabled={saving || (type === 'CREDIT_PERSONNEL' && creditNature === 'PRODUIT' && !productId) || (type === 'CREDIT_PERSONNEL' && creditNature === 'ARGENT' && caisseSource === 'EXTERNE' && !currentShift?.id)} className="px-4 py-2 text-sm bg-accent-500 hover:bg-accent-400 text-black font-semibold rounded-lg disabled:opacity-50">
             {saving ? 'Enregistrement...' : 'Confirmer'}
           </button>
         </div>
