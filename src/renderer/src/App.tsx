@@ -163,7 +163,7 @@ export default function App() {
       if (!v) return
       setAppVersion(v)
       const hintKey = `smlpos-update-hint-${v}`
-      if (v === '1.9.1037' && window.localStorage.getItem(hintKey) !== 'seen') {
+      if (v === '1.9.1038' && window.localStorage.getItem(hintKey) !== 'seen') {
         setShowTreasuryUpdateHint(true)
       }
     }).catch(() => {})
@@ -343,18 +343,18 @@ export default function App() {
           <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-violet-200 bg-[var(--bg-primary)] shadow-2xl">
             <div className="flex items-center gap-3 border-b border-border bg-gradient-to-r from-violet-50 to-amber-50 px-6 py-5">
               <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-600 text-white shadow-sm"><Vault size={22}/></span>
-              <div><p className="text-xs font-bold uppercase tracking-wider text-violet-600">Mise à jour v1.9.1037</p><h2 className="text-lg font-black text-text-primary">Calcul de la trésorerie corrigé</h2></div>
+              <div><p className="text-xs font-bold uppercase tracking-wider text-violet-600">Mise à jour v1.9.1038</p><h2 className="text-lg font-black text-text-primary">Montant final de caisse corrigé</h2></div>
             </div>
             <div className="space-y-3 px-6 py-5 text-sm text-text-secondary">
-              <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-950"><strong>Fin de journée :</strong> la trésorerie reçoit une seule fois le total net Matin + Soir après la clôture du soir.</p>
-              <p className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950"><strong>Sorties séparées :</strong> seules les opérations où « Caisse interne » a été choisie sont déduites séparément.</p>
-              <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950"><strong>Correction automatique :</strong> les anciennes sorties externes comptées deux fois par la version précédente sont réparées sans modifier les opérations légitimes.</p>
+              <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-950"><strong>Montant complet :</strong> la Trésorerie reprend désormais exactement le résultat final Matin + Soir affiché dans le rapport de caisse.</p>
+              <p className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950"><strong>Éléments inclus :</strong> les timbres fiscaux et toutes les opérations déjà présentes dans le rapport final ne sont plus oubliés par un second calcul.</p>
+              <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950"><strong>Correction automatique :</strong> les totaux journaliers déjà en attente ou déjà acceptés sont réalignés sans dupliquer les mouvements.</p>
             </div>
             <div className="border-t border-border px-6 py-4">
               <button
                 type="button"
                 onClick={() => {
-                  window.localStorage.setItem('smlpos-update-hint-1.9.1037', 'seen')
+                  window.localStorage.setItem('smlpos-update-hint-1.9.1038', 'seen')
                   setShowTreasuryUpdateHint(false)
                 }}
                 className="w-full rounded-2xl bg-violet-600 px-4 py-3 font-bold text-white transition hover:bg-violet-700"

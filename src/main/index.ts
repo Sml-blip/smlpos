@@ -524,6 +524,59 @@ function repairExternalTreasuryDoubleDeductions() {
   }
 }
 
+/**
+ * Keep already-created daily treasury reviews aligned with the authoritative
+ * Matin + Soir cash reports. Older builds recomputed the amount from source
+ * tables and could omit report-only values such as fiscal stamps.
+ */
+function repairDailyTreasuryTotalsFromReports() {
+  try {
+    const dailyRows = db.prepare(`
+      SELECT p.id,p.montant,p.statut,
+             SUM(r.total_entrees-r.total_sorties) AS expected_amount
+      FROM mouvements_tresorerie_attente p
+      JOIN rapports_caisse r
+        ON p.reference_id='journee-' || r.date_journal
+       AND r.session_type IN ('MATIN','SOIR')
+      WHERE p.categorie='TOTAL_CAISSE_JOUR'
+      GROUP BY p.id,p.montant,p.statut
+    `).all() as Array<{ id: string; montant: number; statut: string; expected_amount: number }>
+    const changed: Array<{ id: string; previous: number; expected: number }> = []
+    db.transaction(() => {
+      for (const row of dailyRows) {
+        const previous = money3(row.montant)
+        const expected = Math.max(0, money3(row.expected_amount))
+        const delta = money3(expected - previous)
+        if (Math.abs(delta) < 0.0001) continue
+        db.prepare(`UPDATE mouvements_tresorerie_attente SET montant=? WHERE id=?`).run(expected, row.id)
+        const ledgerId = `mci-${row.id}`
+        const ledger = db.prepare(`SELECT date_journal FROM mouvements_caisse_interne WHERE id=?`).get(ledgerId) as { date_journal: string } | undefined
+        if (ledger) {
+          db.prepare(`UPDATE mouvements_caisse_interne SET montant=? WHERE id=?`).run(expected, ledgerId)
+          db.prepare(`UPDATE caisse_interne SET total_entrees=MAX(0,total_entrees+?) WHERE date_journal=?`).run(delta, ledger.date_journal)
+        }
+        changed.push({ id: row.id, previous, expected })
+      }
+    })()
+    for (const item of changed) {
+      const pending = db.prepare(`SELECT * FROM mouvements_tresorerie_attente WHERE id=?`).get(item.id) as Record<string, unknown>
+      enqueueSync('mouvements_tresorerie_attente', 'UPDATE', pending)
+      const ledger = db.prepare(`SELECT * FROM mouvements_caisse_interne WHERE id=?`).get(`mci-${item.id}`) as Record<string, unknown> | undefined
+      if (ledger) {
+        enqueueSync('mouvements_caisse_interne', 'UPDATE', ledger)
+        const cash = db.prepare(`SELECT * FROM caisse_interne WHERE date_journal=?`).get(ledger.date_journal) as Record<string, unknown> | undefined
+        if (cash) enqueueSync('caisse_interne', 'UPDATE', cash)
+      }
+    }
+    if (changed.length) {
+      addActivityLog({ action: 'TREASURY_DAILY_TOTALS_REALIGNED', details: { days: changed } })
+      console.log(`[treasury] Realigned ${changed.length} daily total(s) with final cash reports`)
+    }
+  } catch (error) {
+    console.warn('[treasury] Daily total realignment skipped:', error)
+  }
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 function resolveAppIcon(): NativeImage | undefined {
@@ -631,6 +684,7 @@ app.whenReady().then(() => {
     repairStoredMoneyPrecision()
     repairLegacyQuoteInventory()
     repairExternalTreasuryDoubleDeductions()
+    repairDailyTreasuryTotalsFromReports()
   } catch (err) {
     console.error('DB init error:', err)
   }
@@ -4005,36 +4059,18 @@ function setupIpcHandlers() {
     }
 
     const dateJournal = new Date(String(shift.ended_at ?? new Date().toISOString())).toLocaleDateString('en-CA')
-    const reportShifts = db.prepare(`SELECT shift_id FROM rapports_caisse WHERE date_journal=? AND session_type IN ('MATIN','SOIR') ORDER BY started_at ASC`).all(dateJournal) as Array<{ shift_id: string }>
+    const reportShifts = db.prepare(`
+      SELECT shift_id,total_entrees,total_sorties
+      FROM rapports_caisse
+      WHERE date_journal=? AND session_type IN ('MATIN','SOIR')
+      ORDER BY started_at ASC
+    `).all(dateJournal) as Array<{ shift_id: string; total_entrees: number; total_sorties: number }>
     const shiftIds = [...new Set([...(reportShifts.map(row => row.shift_id)), shiftId])]
-    const shiftNet = (targetShiftId: string) => {
-      const ventes = db.prepare(`
-        SELECT COALESCE(SUM(MAX(0, COALESCE(montant_encaisse_initial, total_ttc) - COALESCE(avance_utilisee, 0))),0) as total FROM ventes
-        WHERE shift_id = ? AND type = 'VENTE'
-          AND COALESCE(type_vente, 'TICKET') != 'DEVIS'
-          AND COALESCE(statut, 'ACTIVE') != 'ANNULEE'
-      `).get(targetShiftId) as { total: number }
-      const repairsFinal = db.prepare(`
-        SELECT COALESCE(SUM(MAX(0, COALESCE(total_final,total_estime,0) - COALESCE(acompte,0))),0) as total FROM reparations
-        WHERE statut IN ('TERMINE', 'RENDU') AND (
-          (notes_technicien LIKE '%[SMLPOS_PAYMENT]%"paid":true%' AND notes_technicien LIKE ?)
-          OR ((notes_technicien NOT LIKE '%[SMLPOS_PAYMENT]%' OR notes_technicien IS NULL) AND shift_id = ?)
-        )
-      `).get(`%"paymentShiftId":"${targetShiftId}"%`, targetShiftId) as { total: number }
-      const repairDeposits = db.prepare(`SELECT COALESCE(SUM(acompte),0) as total FROM reparations WHERE shift_id = ? AND statut != 'ANNULE'`).get(targetShiftId) as { total: number }
-      const credits = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM credits_clients WHERE shift_id = ? AND type = 'PAIEMENT'`).get(targetShiftId) as { total: number }
-      const advances = db.prepare(`SELECT COALESCE(SUM(montant),0) as total FROM avances_clients WHERE shift_id = ?`).get(targetShiftId) as { total: number }
-      const exchanges = db.prepare(`
-        SELECT COALESCE(SUM(CASE WHEN type='ENTREE' THEN montant ELSE 0 END),0) AS entrees,
-               COALESCE(SUM(CASE WHEN type='SORTIE' THEN montant ELSE 0 END),0) AS sorties
-        FROM mouvements_echange WHERE shift_id=?
-      `).get(targetShiftId) as { entrees: number; sorties: number }
-      const cashOuts = db.prepare(`SELECT COALESCE(SUM(montant),0) AS total FROM sorties_caisse WHERE shift_id=?`).get(targetShiftId) as { total: number }
-      return money3(ventes.total + repairsFinal.total + repairDeposits.total + credits.total + advances.total + exchanges.entrees - exchanges.sorties - cashOuts.total)
-    }
-    // Treasury receives the net Matin + Soir result once. External shift exits
-    // are already included here and must never be deducted a second time.
-    const total = money3(shiftIds.reduce((sum, id) => sum + shiftNet(id), 0))
+    // The saved reports are the accounting authority shown to the user. Using
+    // their exact final values prevents drift from stamps or future cash rules.
+    const total = money3(reportShifts.reduce((sum, report) => (
+      sum + Number(report.total_entrees || 0) - Number(report.total_sorties || 0)
+    ), 0))
     if (total <= 0) {
       for (const id of shiftIds) {
         db.prepare(`UPDATE shifts SET transfere_caisse_interne = 1 WHERE id = ?`).run(id)

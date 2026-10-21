@@ -50,7 +50,7 @@ export const db = new Proxy({} as Database.Database, {
 })
 
 /** Bump when migrations change — logged on boot and returned by app:health */
-export const SCHEMA_VERSION = '1.10.9'
+export const SCHEMA_VERSION = '1.10.10'
 
 export function initDatabase() {
   const db = getDb()
