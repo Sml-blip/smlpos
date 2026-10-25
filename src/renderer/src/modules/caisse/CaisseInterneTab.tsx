@@ -4,7 +4,7 @@ import { cn } from '../../lib/utils'
 import {
   Lock, Vault, TrendingUp, TrendingDown, RefreshCw, Plus, X,
   DollarSign, ArrowUpCircle, ArrowDownCircle, Search,
-  BarChart3, List, User, Tag, Calendar, Clock, Hash, FileText
+  BarChart3, List, User, Tag, Calendar, Clock, Hash, FileText, Inbox, CheckCircle2
 } from 'lucide-react'
 import { runAction, loadData } from '../../lib/apiCall'
 
@@ -28,6 +28,11 @@ interface StatCategorie {
 interface StatDay {
   date_journal: string; entrees: number; sorties: number; count: number
 }
+interface PendingMovement {
+  id: string; direction: 'ENTREE' | 'SORTIE'; categorie: string; montant: number
+  reference_id: string; note?: string; operateur: string; impact_applique: number
+  created_at: string
+}
 
 const CAT_LABELS: Record<string, string> = {
   TRANSFERT_CAISSE_EXTERNE: 'Transfert caisse externe',
@@ -35,6 +40,14 @@ const CAT_LABELS: Record<string, string> = {
   SORTIE_INTERNE: 'Sortie interne',
   ENTREE_MANUELLE: 'Entrée manuelle',
   AUTRE: 'Autre',
+  SORTIE_POS_INTERNE: 'Sortie POS · caisse interne',
+  SORTIE_CAISSE_EXTERNE: 'Sortie POS · caisse externe',
+  FRAIS_RETOUR_COLIS: 'Frais retour colis',
+  TOTAL_CAISSE_JOUR: 'Total caisse à accepter',
+  PAIEMENT_FOURNISSEUR_EXTERNE: 'Paiement fournisseur · externe',
+  AJUSTEMENT_FOURNISSEUR_EXTERNE: 'Ajustement fournisseur · externe',
+  CREDIT_PERSONNEL_EXTERNE: 'Crédit personnel · externe',
+  REMBOURSEMENT_RETOUR: 'Remboursement client',
 }
 const CAT_COLORS: Record<string, string> = {
   TRANSFERT_CAISSE_EXTERNE: 'bg-blue-100 text-blue-800',
@@ -135,6 +148,8 @@ function CaisseInterneView({ onLock }: { onLock: () => void }) {
   const [stats, setStats] = useState<{ byAgent: StatAgent[]; byCategorie: StatCategorie[]; byDay: StatDay[]; agents: { operateur: string }[] } | null>(null)
   const [loading, setLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [pending, setPending] = useState<PendingMovement[]>([])
+  const [showPendingModal, setShowPendingModal] = useState(false)
 
   const applyPreset = useCallback((id: string) => {
     const p = DATE_PRESETS.find(d => d.id === id)
@@ -153,17 +168,19 @@ function CaisseInterneView({ onLock }: { onLock: () => void }) {
       if (filterOperateur !== 'all') filters.operateur = filterOperateur
       if (search) filters.search = search
 
-      const [mvts, j, st] = await Promise.all([
+      const [mvts, j, st, pendingRows] = await Promise.all([
         api.caisseInterneMouvementsList(filters) as Promise<Mouvement[]>,
         api.caisseInterneGetToday() as Promise<CaisseJournal>,
         api.caisseInterneGetStats(dateFrom, dateTo) as Promise<typeof stats>,
+        api.caisseInternePendingList() as Promise<PendingMovement[]>,
       ])
-      return { mvts, j, st }
+      return { mvts, j, st, pendingRows }
     }, { setLoading })
     if (data) {
       setMouvements(data.mvts)
       setJournal(data.j)
       setStats(data.st)
+      setPending(data.pendingRows)
     }
   }, [dateFrom, dateTo, filterType, filterCategorie, filterOperateur, search])
 
@@ -196,6 +213,11 @@ function CaisseInterneView({ onLock }: { onLock: () => void }) {
       <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-border flex-shrink-0">
         <h2 className="font-bold text-sm flex items-center gap-2"><Vault size={15} /> Caisse Interne — Trésorerie</h2>
         <div className="flex items-center gap-2">
+          <button onClick={() => setShowPendingModal(true)}
+            className={cn('relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors', pending.length ? 'bg-red-600 text-white hover:bg-red-700' : 'border border-border bg-white text-text-secondary hover:bg-muted')}>
+            <Inbox size={13} /> À accepter
+            {pending.length > 0 && <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-black text-red-700">{pending.length}</span>}
+          </button>
           <button onClick={() => setShowAddModal(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent-500 hover:bg-accent-600 rounded-lg text-xs font-bold transition-colors">
             <Plus size={13} /> Mouvement
@@ -208,6 +230,12 @@ function CaisseInterneView({ onLock }: { onLock: () => void }) {
           </button>
         </div>
       </div>
+
+      {pending.length > 0 && <div className="mx-4 mt-3 flex flex-shrink-0 items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950 shadow-sm">
+        <Inbox size={18} className="text-amber-700"/>
+        <div className="min-w-0 flex-1"><strong>{pending.length} nouveau{pending.length > 1 ? 'x' : ''} mouvement{pending.length > 1 ? 's' : ''} à vérifier</strong><p className="mt-0.5 text-amber-800">Seuls le total net de fin de journée et les sorties explicitement débitées de la caisse interne sont présentés ici.</p></div>
+        <button onClick={() => setShowPendingModal(true)} className="rounded-lg bg-amber-600 px-3 py-2 font-bold text-white hover:bg-amber-700">Examiner</button>
+      </div>}
 
       {/* ── Solde actuel (always today) ── */}
       <div className="px-4 pt-3 pb-0 flex-shrink-0">
@@ -318,8 +346,33 @@ function CaisseInterneView({ onLock }: { onLock: () => void }) {
       </div>
 
       {showAddModal && <AddMouvementModal onClose={() => setShowAddModal(false)} onSaved={load} />}
+      {showPendingModal && <PendingTreasuryModal movements={pending} onClose={() => setShowPendingModal(false)} onChanged={async () => { await load(); window.dispatchEvent(new CustomEvent('smlpos:treasury-movements-changed')) }} />}
     </div>
   )
+}
+
+function PendingTreasuryModal({ movements, onClose, onChanged }: { movements: PendingMovement[]; onClose: () => void; onChanged: () => Promise<void> }) {
+  const [loadingId, setLoadingId] = useState<string | null>(null)
+  const acceptOne = async (id: string) => {
+    const ok = await runAction('Acceptation mouvement trésorerie', async () => { await api.caisseInterneAcceptPending(id) }, { setLoading: value => setLoadingId(value ? id : null), successMessage: 'Mouvement accepté et synchronisé' })
+    if (ok) await onChanged()
+  }
+  const acceptAll = async () => {
+    const ok = await runAction('Acceptation des mouvements trésorerie', async () => { await api.caisseInterneAcceptAllPending() }, { setLoading: value => setLoadingId(value ? 'all' : null), successMessage: 'Tous les mouvements ont été acceptés' })
+    if (ok) { await onChanged(); onClose() }
+  }
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+    <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl animate-slide-in">
+      <div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h2 className="flex items-center gap-2 font-bold"><Inbox size={17}/> Nouveaux mouvements Trésorerie</h2><p className="mt-0.5 text-xs text-text-muted">Vérifiez chaque mouvement avant son intégration définitive.</p></div><button onClick={onClose}><X size={18}/></button></div>
+      <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-4">
+        {movements.length === 0 ? <div className="py-16 text-center text-sm text-text-muted"><CheckCircle2 size={36} className="mx-auto mb-3 text-emerald-500"/>Aucun mouvement en attente</div> : movements.map(movement => <div key={movement.id} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl border border-border bg-white p-4 shadow-sm">
+          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold', movement.direction === 'ENTREE' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{movement.direction === 'ENTREE' ? 'Entrée' : 'Sortie'}</span><strong className="text-sm">{CAT_LABELS[movement.categorie] ?? movement.categorie}</strong>{movement.impact_applique === 1 && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">déjà comptabilisé</span>}</div><p className="mt-1 truncate text-xs text-text-secondary">{movement.note || 'Sans note'}</p><p className="mt-1 text-[10px] text-text-muted">{new Date(movement.created_at).toLocaleString('fr-TN')} · {movement.operateur} · réf. {movement.reference_id}</p></div>
+          <div className="flex min-w-[135px] flex-col items-end justify-between gap-2"><strong className={cn('font-price text-lg', movement.direction === 'ENTREE' ? 'text-green-700' : 'text-red-700')}>{movement.direction === 'ENTREE' ? '+' : '-'}{formatPrice(movement.montant)}</strong><button disabled={loadingId !== null} onClick={() => void acceptOne(movement.id)} className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold hover:bg-accent-600 disabled:opacity-50">{loadingId === movement.id ? 'Acceptation…' : 'Accepter'}</button></div>
+        </div>)}
+      </div>
+      <div className="flex gap-3 border-t border-border px-5 py-4"><button onClick={onClose} className="flex-1 rounded-xl bg-muted py-2.5 font-semibold">Fermer</button><button disabled={!movements.length || loadingId !== null} onClick={() => void acceptAll()} className="flex-1 rounded-xl bg-emerald-600 py-2.5 font-bold text-white hover:bg-emerald-700 disabled:bg-gray-300">{loadingId === 'all' ? 'Acceptation…' : `Tout accepter (${movements.length})`}</button></div>
+    </div>
+  </div>
 }
 
 // ── Journal (full detailed table) ─────────────────────────────────────────────

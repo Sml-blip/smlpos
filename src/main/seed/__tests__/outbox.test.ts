@@ -89,11 +89,11 @@ test('actual ventes:create callback captures serial, stock and loyalty changes; 
     const text=readFileSync(resolve('src/main/index.ts'),'utf8');const ast=ts.createSourceFile('index.ts',text,ts.ScriptTarget.Latest,true)
     let callback='';const helpers:string[]=[]
     function visit(node:ts.Node) {
-      if(ts.isFunctionDeclaration(node)&&['money3','normalizeMoneyFields','normalizeVenteLine'].includes(node.name?.text??''))helpers.push(node.getText(ast))
+      if(ts.isFunctionDeclaration(node)&&['money3','normalizeMoneyFields','normalizeVenteLine','parseLineSerials','validateLineSerials','applyVenteLineInventory'].includes(node.name?.text??''))helpers.push(node.getText(ast))
       if(ts.isCallExpression(node)&&ts.isPropertyAccessExpression(node.expression)&&node.expression.getText(ast)==='ipcMain.handle'&&node.arguments[0]&&ts.isStringLiteral(node.arguments[0])&&node.arguments[0].text==='ventes:create')callback=node.arguments[1].getText(ast)
       ts.forEachChild(node,visit)
     }
-    visit(ast);assert.ok(callback);assert.equal(helpers.length,3)
+    visit(ast);assert.ok(callback);assert.equal(helpers.length,6)
     const js=ts.transpileModule(`function build(db,randomUUID,addActivityLog,enqueueSync,enqueueProductSnapshot){${helpers.join('\n')};return (${callback})};exports.build=build`,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText
     const module:{build?:Function}={};new Function('exports',js)(module)
     const sale=module.build!(db,randomUUID,()=>{},()=>{},()=>{})

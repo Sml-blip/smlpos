@@ -5,11 +5,13 @@ import { useAppStore } from '../../store/appStore'
 import {
   Users, X, Search, RefreshCw, CreditCard, UserPlus,
   ArrowUpCircle, ArrowDownCircle, DollarSign, Clock, User,
-  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus
+  FileText, TrendingDown, CheckCircle, Phone, Hash, Building2, Plus, Download, UserMinus, Edit2
 } from 'lucide-react'
-import type { Organisation } from '../../lib/types'
+import type { Organisation, Produit } from '../../lib/types'
 import { runAction, loadData } from '../../lib/apiCall'
 import { saveBalanceReport } from '../../lib/reportPdf'
+import { installmentNote, money3, parseInstallmentPlan, upcomingInstallments } from '../../lib/creditInstallments'
+import { printCreditMovementReceipt } from '../../lib/clientPaymentReceipt'
 
 const api = window.api
 
@@ -29,6 +31,11 @@ interface CreditWithBalance extends CreditLigne {
   balance: number
 }
 
+const cleanAccountingNote = (note?: string) => String(note ?? '')
+  .replace(/\n?\[SMLPOS_ACCOUNTING\]\{[^\r\n]*\}/g, '')
+  .replace(/\n?\[SMLPOS_INSTALLMENT\]\{[^\r\n]*\}/g, '')
+  .trim()
+
 export default function CreditsTab() {
   const { currentShift } = useAppStore()
   const [subTab, setSubTab] = useState<SubTab>('clients')
@@ -41,10 +48,12 @@ export default function CreditsTab() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [showNewClient, setShowNewClient] = useState(false)
   const [showAddTranche, setShowAddTranche] = useState<'CREDIT' | 'PAIEMENT' | null>(null)
+  const [editingMovement, setEditingMovement] = useState<CreditLigne | null>(null)
   const [showAddOrg, setShowAddOrg] = useState(false)
   const [assignOrg, setAssignOrg] = useState<OrganisationSummary | null>(null)
   const [filterOrgId, setFilterOrgId] = useState<string | null>(null)
   const [unassigning, setUnassigning] = useState(false)
+  const [clientSort, setClientSort] = useState<'DESC' | 'ASC'>('DESC')
 
   // Use a ref to avoid including `selected` in load deps (prevents infinite reload loop)
   const selectedIdRef = useRef<string | null>(null)
@@ -114,6 +123,7 @@ export default function CreditsTab() {
     ? clients.filter(c => c.organisation_id === filterOrgId)
     : clients.filter(c => !c.organisation_id))
     .filter(c => !search || `${c.nom} ${c.telephone ?? ''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => clientSort === 'DESC' ? b.solde_credit - a.solde_credit : a.solde_credit - b.solde_credit)
 
   // Compute running balances for history (oldest → newest, then reverse for display)
   const historyWithBalance: CreditWithBalance[] = (() => {
@@ -125,6 +135,10 @@ export default function CreditsTab() {
     })
     return computed.reverse() // display newest first
   })()
+  const installmentPlans = history
+    .filter(row => row.type === 'CREDIT')
+    .map(row => ({ row, plan: parseInstallmentPlan(row.note) }))
+    .filter((item): item is { row: CreditLigne; plan: NonNullable<ReturnType<typeof parseInstallmentPlan>> } => Boolean(item.plan))
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-surface">
@@ -228,6 +242,14 @@ export default function CreditsTab() {
               <UserPlus size={12} /> Nouveau
             </button>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <span className="text-[10px] font-semibold text-text-muted">Trier par montant</span>
+          <select value={clientSort} onChange={event => setClientSort(event.target.value as 'DESC' | 'ASC')} className="rounded-lg border border-border bg-white px-2 py-1 text-[11px] font-semibold outline-none">
+            <option value="DESC">Plus élevé → plus faible</option>
+            <option value="ASC">Plus faible → plus élevé</option>
+          </select>
         </div>
 
         {/* KPIs */}
@@ -393,7 +415,7 @@ export default function CreditsTab() {
               </div>
               {/* Action buttons */}
               <div className="flex flex-col gap-2 flex-shrink-0">
-                <button onClick={() => void saveBalanceReport('Historique crédit client', selected.nom, [['Solde actuel', `${formatPrice(selected.solde_credit)} DT`], ['Limite', selected.credit_limite == null ? '—' : `${formatPrice(selected.credit_limite)} DT`], ['Mouvements', String(history.length)]], history.map(row => ({ date: row.created_at, type: row.type === 'CREDIT' ? 'Crédit' : 'Paiement', amount: row.montant, operator: row.operateur, note: row.note || row.reference })), `credit-${selected.nom}`)} className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:bg-muted rounded-xl text-xs font-semibold"><Download size={12} /> PDF</button>
+                <button onClick={() => void saveBalanceReport('Historique crédit client', selected.nom, [['Solde actuel', `${formatPrice(selected.solde_credit)} DT`], ['Limite', selected.credit_limite == null ? '—' : `${formatPrice(selected.credit_limite)} DT`], ['Mouvements', String(history.length)]], history.map(row => ({ date: row.created_at, type: row.type === 'CREDIT' ? 'Crédit' : 'Paiement', amount: row.montant, operator: row.operateur, note: cleanAccountingNote(row.note) || row.reference })), `credit-${selected.nom}`)} className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:bg-muted rounded-xl text-xs font-semibold"><Download size={12} /> PDF</button>
                 <button
                   onClick={() => setShowAddTranche('CREDIT')}
                   className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-colors"
@@ -417,6 +439,36 @@ export default function CreditsTab() {
                 )}
               </div>
             </div>
+
+            {installmentPlans.length > 0 && (
+              <div className="bg-indigo-50 border-b border-indigo-100 px-5 py-3 flex gap-3 overflow-x-auto flex-shrink-0">
+                {installmentPlans.map(({ row, plan }) => {
+                  const schedule = upcomingInstallments(plan)
+                  const paid = history
+                    .filter(payment => payment.type === 'PAIEMENT' && payment.created_at >= row.created_at)
+                    .reduce((sum, payment) => sum + payment.montant, 0)
+                  const paidSafe = Math.min(plan.total, paid)
+                  const next = schedule.find(due => due.amount > paidSafe - schedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0))
+                  return (
+                    <div key={row.id} className="min-w-[310px] rounded-xl border border-indigo-200 bg-white px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs font-bold text-indigo-900">Échéancier · {plan.months} mois</span>
+                        <span className="font-price text-xs font-bold text-indigo-700">{formatPrice(plan.monthlyAmount)} / mois</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-indigo-800">{formatPrice(paidSafe)} payé sur {formatPrice(plan.total)}</div>
+                      <div className="mt-2 flex gap-1" aria-label="Progression des mensualités">
+                        {schedule.map(due => {
+                          const before = schedule.slice(0, due.number - 1).reduce((sum, item) => sum + item.amount, 0)
+                          const done = paidSafe >= before + due.amount - 0.0001
+                          return <span key={due.number} title={`${new Date(`${due.date}T12:00:00`).toLocaleDateString('fr-FR')} · ${formatPrice(due.amount)} DT`} className={cn('h-1.5 min-w-4 flex-1 rounded-full', done ? 'bg-green-500' : 'bg-indigo-200')} />
+                        })}
+                      </div>
+                      <div className="mt-1.5 text-[11px] text-text-secondary">{next ? <>Prochaine : <strong>{new Date(`${next.date}T12:00:00`).toLocaleDateString('fr-FR')}</strong> · {formatPrice(next.amount)} DT</> : <strong className="text-green-700">Échéancier soldé</strong>}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             {/* History table */}
             <div className="flex-1 overflow-hidden flex flex-col">
@@ -455,6 +507,7 @@ export default function CreditsTab() {
                         <th className="text-right px-3 py-2.5 font-semibold text-text-secondary whitespace-nowrap">
                           <Hash size={10} className="inline mr-1" />Solde courant
                         </th>
+                        <th className="px-3 py-2.5 text-right font-semibold text-text-secondary">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -515,8 +568,8 @@ export default function CreditsTab() {
                             </td>
                             {/* Note + Reference */}
                             <td className="px-3 py-2.5 max-w-[200px]">
-                              {row.note ? (
-                                <span className="text-text-secondary truncate block" title={row.note}>{row.note}</span>
+                              {cleanAccountingNote(row.note) ? (
+                                <span className="text-text-secondary truncate block" title={cleanAccountingNote(row.note)}>{cleanAccountingNote(row.note)}</span>
                               ) : row.reference ? (
                                 <span className="font-mono text-[10px] text-text-secondary bg-muted px-1.5 py-0.5 rounded">{row.reference}</span>
                               ) : (
@@ -534,6 +587,9 @@ export default function CreditsTab() {
                               {row.balance <= 0 && (
                                 <CheckCircle size={10} className="text-green-500 inline ml-1" />
                               )}
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <button type="button" onClick={() => setEditingMovement(row)} title="Modifier ce mouvement" className="rounded-lg p-1.5 text-text-muted hover:bg-accent-50 hover:text-accent-700"><Edit2 size={13} /></button>
                             </td>
                           </tr>
                         )
@@ -565,6 +621,16 @@ export default function CreditsTab() {
           currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
           onClose={() => setShowAddTranche(null)}
           onSaved={() => { setShowAddTranche(null); handleSaved() }}
+        />
+      )}
+      {editingMovement && selected && (
+        <AddTrancheModal
+          client={selected}
+          defaultType={editingMovement.type}
+          movement={editingMovement}
+          currentShift={currentShift as { id?: string; operateur_nom?: string } | null}
+          onClose={() => setEditingMovement(null)}
+          onSaved={() => { setEditingMovement(null); handleSaved() }}
         />
       )}
       {showAddOrg && (
@@ -601,12 +667,24 @@ function NewClientModal({
   const [organisationId, setOrganisationId] = useState('')
   const [montantBrut, setMontantBrut] = useState('')    // before interest
   const [montantApres, setMontantApres] = useState('')  // after interest = actual debt
+  const [creditMode, setCreditMode] = useState<'FREE' | 'INSTALLMENT'>('FREE')
+  const [installmentMonths, setInstallmentMonths] = useState('3')
+  const [firstPaymentDate, setFirstPaymentDate] = useState(() => {
+    const nextMonth = new Date()
+    nextMonth.setMonth(nextMonth.getMonth() + 1)
+    return nextMonth.toISOString().slice(0, 10)
+  })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
   const agent = currentShift?.operateur_nom ?? 'superadmin'
   const brutNum = parseFloat(montantBrut.replace(',', '.')) || 0
   const apresNum = parseFloat(montantApres.replace(',', '.')) || 0
+  const planMonths = Math.max(1, Math.min(60, Math.floor(Number(installmentMonths) || 1)))
+  const creditTotal = apresNum > 0 ? apresNum : brutNum
+  const installmentPlan = creditMode === 'INSTALLMENT' && creditTotal > 0
+    ? { total: money3(creditTotal), months: planMonths, firstPaymentDate, monthlyAmount: money3(creditTotal / planMonths) }
+    : null
+  const installments = installmentPlan ? upcomingInstallments(installmentPlan) : []
   const interetPct = brutNum > 0 && apresNum > brutNum
     ? (((apresNum - brutNum) / brutNum) * 100).toFixed(1)
     : null
@@ -615,9 +693,10 @@ function NewClientModal({
     if (!nom.trim()) return
     setError('')
     const ok = await runAction('Création client crédit', async () => {
-      const noteCredit = brutNum > 0 && apresNum > 0
+      const baseNote = brutNum > 0 && apresNum > 0
         ? `Brut: ${brutNum.toFixed(3)} DT → Après intérêt: ${apresNum.toFixed(3)} DT`
         : null
+      const noteCredit = installmentPlan ? installmentNote(baseNote ?? 'Crédit avec mensualités', installmentPlan) : baseNote
       await api.clientsCreate({
         id: generateId(),
         nom: nom.trim(),
@@ -728,6 +807,35 @@ function NewClientModal({
               </div>
             </div>
 
+            <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold text-indigo-900">Mode de remboursement</p>
+                  <p className="text-[10px] text-indigo-700">Le crédit libre reste sans échéance.</p>
+                </div>
+                <div className="flex rounded-lg border border-indigo-200 bg-white p-0.5">
+                  <button type="button" onClick={() => setCreditMode('FREE')} className={cn('rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors', creditMode === 'FREE' ? 'bg-indigo-600 text-white' : 'text-indigo-700')}>Crédit libre</button>
+                  <button type="button" onClick={() => setCreditMode('INSTALLMENT')} className={cn('rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors', creditMode === 'INSTALLMENT' ? 'bg-indigo-600 text-white' : 'text-indigo-700')}>Mensualités</button>
+                </div>
+              </div>
+              {creditMode === 'INSTALLMENT' && (
+                <>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <label className="text-xs font-semibold text-indigo-900">Nombre de mois<input type="number" min="1" max="60" value={installmentMonths} onChange={e => setInstallmentMonths(e.target.value)} className="mt-1 block w-full rounded-lg border border-indigo-200 bg-white px-2.5 py-2 text-sm" /></label>
+                    <label className="text-xs font-semibold text-indigo-900">1er paiement<input type="date" value={firstPaymentDate} onChange={e => setFirstPaymentDate(e.target.value)} className="mt-1 block w-full rounded-lg border border-indigo-200 bg-white px-2.5 py-2 text-sm" /></label>
+                  </div>
+                  {installmentPlan && (
+                    <div className="mt-3 rounded-lg bg-white p-2.5">
+                      <div className="flex items-center justify-between text-xs"><span className="font-semibold text-text-secondary">Mensualité calculée</span><strong className="font-price text-indigo-700">{formatPrice(installmentPlan.monthlyAmount)} DT</strong></div>
+                      <div className="mt-2 grid grid-cols-3 gap-1.5">
+                        {installments.map(due => <div key={due.number} className="rounded-md border border-indigo-100 px-1.5 py-1.5 text-center"><p className="text-[10px] font-semibold text-indigo-800">M{due.number}</p><p className="text-[9px] text-text-muted">{new Date(`${due.date}T12:00:00`).toLocaleDateString('fr-FR')}</p><p className="font-price text-[10px] font-bold">{formatPrice(due.amount)}</p></div>)}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             {interetPct && (
               <div className="mt-2 px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800 flex items-center gap-2">
                 <TrendingDown size={12} />
@@ -765,23 +873,33 @@ function NewClientModal({
 function AddTrancheModal({
   client,
   defaultType,
+  movement,
   currentShift,
   onClose,
   onSaved,
 }: {
   client: Client
   defaultType: 'CREDIT' | 'PAIEMENT'
+  movement?: CreditLigne
   currentShift: { id?: string; operateur_nom?: string } | null
   onClose: () => void
   onSaved: () => void
 }) {
-  const [type, setType] = useState<'CREDIT' | 'PAIEMENT'>(defaultType)
-  const [montant, setMontant] = useState('')
-  const [reference, setReference] = useState('')
-  const [note, setNote] = useState('')
-  const [agent, setAgent] = useState(currentShift?.operateur_nom ?? '')
+  const [type, setType] = useState<'CREDIT' | 'PAIEMENT'>(movement?.type ?? defaultType)
+  const [montant, setMontant] = useState(movement ? String(movement.montant) : '')
+  const [reference, setReference] = useState(movement?.reference ?? '')
+  const [note, setNote] = useState(cleanAccountingNote(movement?.note))
+  const [agent, setAgent] = useState(movement?.operateur ?? currentShift?.operateur_nom ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [products, setProducts] = useState<Produit[]>([])
+  const [productId, setProductId] = useState('')
+  const [quantity, setQuantity] = useState(1)
+
+  useEffect(() => {
+    if (type !== 'CREDIT' || products.length) return
+    void loadData('Chargement produits', () => api.produitsList({ actif: 1 }), { silent: true }).then(rows => rows && setProducts(rows as Produit[]))
+  }, [products.length, type])
 
   const montantNum = parseFloat(montant.replace(',', '.')) || 0
   const newSolde = type === 'CREDIT'
@@ -791,9 +909,9 @@ function AddTrancheModal({
   const handleSave = async () => {
     if (montantNum <= 0) return
     setError('')
-    const label = type === 'CREDIT' ? 'Accord crédit' : 'Encaissement paiement'
+    const label = movement ? 'Modification mouvement crédit' : type === 'CREDIT' ? 'Accord crédit' : 'Encaissement paiement'
     const ok = await runAction(label, async () => {
-      await api.creditsCreate({
+      const payload = {
         id: generateId(),
         client_id: client.id,
         client_nom: client.nom,
@@ -802,12 +920,25 @@ function AddTrancheModal({
         montant: montantNum,
         reference: reference.trim() || null,
         note: note.trim() || null,
+        produit_id: type === 'CREDIT' && productId ? productId : null,
+        quantite: type === 'CREDIT' && productId ? quantity : null,
         operateur: agent.trim() || 'superadmin',
         created_at: new Date().toISOString(),
-      })
+      }
+      const created = movement
+        ? await api.creditsUpdate(movement.id, { type, montant: montantNum, reference: reference.trim() || null, note: note.trim() || null, operateur: agent.trim() || 'superadmin' })
+        : await api.creditsCreate(payload)
+      if (!movement) {
+        const result = created as { before?: number; amount?: number; after?: number; organisation_nom?: string }
+        await printCreditMovementReceipt({
+          numero: `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`,
+          clientNom: client.nom, telephone: client.telephone, adresse: client.adresse, operateur: agent.trim() || 'superadmin', date: new Date().toISOString(), note: note.trim() || undefined,
+          type, before: Number(result.before ?? client.solde_credit), amount: Number(result.amount ?? montantNum), after: Number(result.after ?? newSolde), organisation: result.organisation_nom,
+        })
+      }
     }, {
       setLoading,
-      successMessage: type === 'CREDIT' ? 'Crédit enregistré' : 'Paiement enregistré',
+      successMessage: movement ? 'Mouvement modifié' : type === 'CREDIT' ? 'Crédit enregistré' : 'Paiement enregistré',
       onError: msg => setError(msg.replace(new RegExp(`^${label} : `), '')),
     })
     if (ok) onSaved()
@@ -818,7 +949,7 @@ function AddTrancheModal({
       <div className="bg-white rounded-2xl shadow-2xl w-[440px] animate-slide-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
-            <h2 className="font-bold text-base">Mouvement Crédit</h2>
+            <h2 className="font-bold text-base">{movement ? 'Modifier le mouvement' : 'Mouvement Crédit'}</h2>
             <p className="text-xs text-text-muted mt-0.5">{client.nom}</p>
           </div>
           <button onClick={onClose}><X size={18} className="text-text-muted" /></button>
@@ -864,6 +995,18 @@ function AddTrancheModal({
                 Ce paiement sera enregistré sur le <strong>shift en cours</strong> (caisse externe).
                 {currentShift?.operateur_nom && ` Opérateur : ${currentShift.operateur_nom}.`}
               </span>
+            </div>
+          )}
+          {type === 'CREDIT' && !movement && (
+            <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
+              <label className="mb-1.5 block text-xs font-semibold text-purple-800">Produit remis au client (optionnel — met à jour le stock)</label>
+              <div className="grid grid-cols-[1fr_80px] gap-2">
+                <select value={productId} onChange={e => setProductId(e.target.value)} className="rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs">
+                  <option value="">Aucun produit / crédit libre</option>
+                  {products.filter(p => p.stock_actuel > 0).map(p => <option key={p.id} value={p.id}>{p.nom} (stock {p.stock_actuel})</option>)}
+                </select>
+                <input type="number" min="1" value={quantity} disabled={!productId} onChange={e => setQuantity(Math.max(1, Number(e.target.value) || 1))} className="rounded-lg border border-purple-200 bg-white px-2 py-2 text-center disabled:opacity-50" />
+              </div>
             </div>
           )}
 
@@ -951,7 +1094,7 @@ function AddTrancheModal({
               type === 'CREDIT' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
             )}
           >
-            {loading ? 'Enregistrement...' : (
+            {loading ? 'Enregistrement...' : movement ? <><Edit2 size={14} /> Enregistrer la modification</> : (
               type === 'CREDIT'
                 ? <><ArrowUpCircle size={14} /> Accorder {formatPrice(montantNum)}</>
                 : <><ArrowDownCircle size={14} /> Encaisser {formatPrice(montantNum)}</>

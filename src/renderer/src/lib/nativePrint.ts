@@ -3,7 +3,7 @@ import { openPrintManager, inferPrintKind, defaultSettingsKey, type PrintKind } 
 import { showToast } from './toast'
 import type { NativePageSize } from '../components/PrintManagerModal'
 
-export type NativePrintPageSize = 'A4' | '58mm' | '80mm' | '40x20mm' | 'label'
+export type NativePrintPageSize = 'A4' | 'A5' | '58mm' | '80mm' | '40x20mm' | 'label'
 export type NativePrintSettingsKey = 'impression_printer_a4' | 'impression_printer_ticket' | 'impression_printer_label'
 
 export interface NativePrintOptions {

@@ -74,7 +74,7 @@ export const MONEY_COLUMNS: Record<string, readonly string[]> = {
   ],
   ventes: [
     'sous_total', 'total_remises', 'total_ttc', 'montant_recu', 'monnaie_rendue',
-    'fidelite_utilisee', 'fidelite_gagnee',
+    'fidelite_utilisee', 'fidelite_gagnee', 'montant_encaisse_initial', 'avance_utilisee',
   ],
   lignes_vente: ['prix_unitaire', 'total_ligne'],
   factures_clients: ['total_ht', 'total_tva', 'total_ttc'],
@@ -83,7 +83,7 @@ export const MONEY_COLUMNS: Record<string, readonly string[]> = {
   sorties_caisse: ['montant'],
   factures_fournisseurs: [
     'montant_ht', 'montant_tva', 'montant_ttc', 'montant_paye', 'timbre',
-    'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise',
+    'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise', 'retenue_source_montant', 'net_a_payer',
   ],
   lignes_facture_fournisseur: ['ancien_prix_achat', 'nouveau_prix_achat', 'prix_vente_suggere', 'prix_vente_applique'],
   paiements_fournisseurs: ['montant'],
@@ -102,14 +102,18 @@ export const MONEY_COLUMNS: Record<string, readonly string[]> = {
   transactions_services: ['montant_frais'],
   activity_logs: ['montant'],
   // Tables outside the legacy Supabase sync list — found by the "unclassified REAL" guard.
-  avances_clients: ['montant'],
+  avances_clients: ['montant', 'prix_produit'],
   demandes_clients: ['avance'],
   mouvements_fidelite: ['montant', 'solde_avant', 'solde_apres'], // loyalty is stored via money3() → dinars
+  mouvements_echange: ['montant', 'ancien_total', 'nouveau_total'],
+  mouvements_tresorerie_attente: ['montant'],
+  rapports_caisse: ['fond_de_caisse', 'total_entrees', 'total_sorties', 'solde_theorique', 'solde_reel', 'ecart'],
+  remboursements_ventes: ['montant'],
 }
 
 /** Percent / ratio columns: sent as plain decimals, never converted. */
 export const RATE_COLUMNS = new Set([
-  'tva_taux', 'tva_achat_pct', 'marge_pct', 'coef_av', 'remise_pct', 'tva_taux_principal',
+  'tva_taux', 'tva_achat_pct', 'marge_pct', 'coef_av', 'remise_pct', 'tva_taux_principal', 'retenue_source_pct',
 ])
 
 export function moneyColumnsOf(table: string): readonly string[] {
