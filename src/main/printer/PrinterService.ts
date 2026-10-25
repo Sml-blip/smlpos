@@ -365,7 +365,7 @@ export class PrinterService {
 
   static resolveElectronPageSize(
     pageSize?: string | ElectronPageSize | CustomPageSizeMm
-  ): ElectronPageSize {
+  ): NonNullable<Electron.WebContentsPrintOptions['pageSize']> {
     if (!pageSize || pageSize === 'A4') return 'A4';
     if (pageSize === 'A5') return { width: 148000, height: 210000 };
     if (typeof pageSize === 'object') {
@@ -375,7 +375,7 @@ export class PrinterService {
           height: this.mmToMicrons(pageSize.heightMm),
         };
       }
-      if ('width' in pageSize && 'height' in pageSize) return pageSize as ElectronPageSize;
+      if ('width' in pageSize && 'height' in pageSize) return { width: pageSize.width, height: pageSize.height };
     }
     if (pageSize === '58mm') return { width: 58000, height: 297000 };
     if (pageSize === '80mm') return { width: 80000, height: 297000 };

@@ -242,7 +242,7 @@ async function syncOneRow(row: {
 
 async function syncBatchUpsert(
   table_name: string,
-  rows: { id: string; operation: string; payload: string }[],
+  rows: { id: string; table_name: string; operation: string; payload: string }[],
 ): Promise<number> {
   if (!rows.length) return 0
   const pk = table_name === 'app_settings' ? 'key' : 'id'

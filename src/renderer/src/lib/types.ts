@@ -2,7 +2,7 @@ export type TypeFacturation = 'F' | 'NF'
 export type ModePaiement = 'ESPECES' | 'CARTE' | 'CHEQUE' | 'MIXTE'
 export type StatutReparation = 'EN_ATTENTE' | 'DIAGNOSTIC' | 'DEVIS' | 'ATTENTE_PIECES' | 'EN_COURS' | 'TERMINE' | 'NON_REPARABLE' | 'RENDU' | 'ANNULE'
 export type TypeAppareil = 'PC' | 'SCOOTER' | 'SMARTPHONE' | 'IMPRIMANTE'
-export type StatutPaiement = 'EN_ATTENTE' | 'PARTIEL' | 'PAYE' | 'EN_RETARD'
+export type StatutPaiement = 'EN_ATTENTE' | 'PARTIEL' | 'PAYE' | 'EN_RETARD' | 'ANNULE' | 'BROUILLON'
 
 export interface Operateur {
   id: string
@@ -39,6 +39,7 @@ export interface Categorie {
 }
 
 export interface Produit {
+  prix_achat_ttc?: number
   id: string
   code_barre?: string
   reference: string
@@ -395,6 +396,7 @@ export interface MouvementPersonnel {
 export type TypeDocument = 'FACTURE_VENTE' | 'DEVIS' | 'BON_LIVRAISON' | 'FACTURE_JOURNALIERE_F' | 'FACTURE_ACHAT' | 'FACTURE_ACHAT_BL' | 'TICKET' | 'AVOIR'
 
 export interface Document {
+  exo?: string | null
   id: string
   numero: string
   type_document: TypeDocument

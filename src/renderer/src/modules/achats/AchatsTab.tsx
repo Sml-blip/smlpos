@@ -1289,7 +1289,7 @@ function ProductSearchPopup({ produits: initialProduits, onAddProduct, onNewProd
       if (exact) {
         const okType = filterType === 'all' || exact.type === filterType
         const okStock = filterType !== 'rupture' || exact.stock_actuel <= exact.stock_minimum
-        if (okType && (filterType !== 'rupture' || okStock)) return [exact]
+        if (okType && okStock) return [exact]
       }
     }
     const base = q.length >= 2 ? fuseIndex.search(q, { limit: 100 }).map(r => r.item) : [...produits]
@@ -2453,7 +2453,7 @@ function FactureFournisseurModal({
               if (scannedMetadata.dateFacture) setDateFacture(scannedMetadata.dateFacture)
             }
             setShowInvoiceScan(false)
-            showToast(`${importedLines.length} ligne(s) ajoutée(s) au brouillon. Vérifiez avant d’enregistrer.`, 'success')
+            showToast('success', `${importedLines.length} ligne(s) ajoutée(s) au brouillon. Vérifiez avant d’enregistrer.`)
           }}
         />
       )}

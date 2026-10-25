@@ -127,7 +127,7 @@ export function ConvertVenteDocModal({
         return s + brut * ((l.remise_pct || 0) / 100)
       }, 0)
       const remisePanier = Math.max(0, (vente.total_remises ?? 0) - lineRemiseTotal)
-      const isFacture = type === 'FACTURE_VENTE' || type === 'FACTURE_JOURNALIERE_F'
+      const isFacture = type === 'FACTURE_VENTE'
       const timbre = isFacture ? 1.0 : 0.0
       const netPay = Math.max(0, sums.total_ttc + timbre - remisePanier)
 
@@ -169,6 +169,7 @@ export function ConvertVenteDocModal({
       if (result?.success === false) throw new Error(result.error || 'Document non cree')
       setCreatedDoc({
         ...doc,
+        imprimee: 0,
         id: result?.id || docId,
         numero: result?.numero || numero,
       } as DocType)

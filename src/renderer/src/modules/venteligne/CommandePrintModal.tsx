@@ -1,3 +1,4 @@
+import { formatPrice } from '../../lib/utils'
 import { useEffect, useState } from 'react'
 import { useRef } from 'react'
 import { printFullHtmlDocument } from '../../lib/nativePrint'
@@ -9,7 +10,7 @@ interface CommandeLigne {
   id: string; numero: string; client_nom: string; client_tel?: string
   client_adresse?: string; produits_json: string; montant_ttc: number
   frais_livraison: number; frais_retour: number
-  statut: 'EN_ATTENTE' | 'CONFIRME' | 'LIVRE' | 'RETOUR'
+  statut: 'EN_ATTENTE' | 'CONFIRME' | 'LIVRE' | 'RETOUR' | 'REGLE' | 'ANNULE'
   livraison_nom?: string; montant_recu: number; note?: string
   operateur_nom?: string; created_at: string
 }

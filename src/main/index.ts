@@ -35,6 +35,8 @@ import { startBossApiServer, stopBossApiServer } from './bossApiServer'
 bootstrapCanonicalUserDataPath()
 
 let mainWindow: BrowserWindow | null = null
+const chooseSaveFile = (options: Electron.SaveDialogOptions) => mainWindow ? dialog.showSaveDialog(mainWindow, options) : dialog.showSaveDialog(options)
+const chooseOpenFile = (options: Electron.OpenDialogOptions) => mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options)
 const execFileAsync = promisify(execFile)
 
 type InvoiceScanSource = {
@@ -137,7 +139,6 @@ async function registerInvoicePdfSource(path: string): Promise<{
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const document = await pdfjs.getDocument({
       data: new Uint8Array(buffer),
-      disableWorker: true,
       useSystemFonts: true,
     }).promise
     pageCount = document.numPages
@@ -954,7 +955,7 @@ function setupIpcHandlers() {
   ipcMain.handle('app:version', () => app.getVersion())
 
   ipcMain.handle('invoiceScan:chooseImage', async () => {
-    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+    const result = await chooseOpenFile({
       title: 'Importer une facture fournisseur',
       properties: ['openFile'],
       filters: [
@@ -1107,7 +1108,7 @@ function setupIpcHandlers() {
   ipcMain.handle('reports:savePdf', async (_e, html: string, suggestedName = 'rapport.pdf') => {
     if (!html?.trim()) return { success: false, error: 'Rapport vide' }
     const safeName = String(suggestedName).replace(/[<>:"/\\|?*]/g, '-').replace(/\.pdf$/i, '') + '.pdf'
-    const target = await dialog.showSaveDialog(mainWindow ?? undefined, {
+    const target = await chooseSaveFile({
       title: 'Exporter en PDF',
       defaultPath: safeName,
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -1963,7 +1964,7 @@ function setupIpcHandlers() {
     try {
       if (typeof base64 !== 'string' || !base64.trim()) return { success: false, error: 'Fichier Excel vide' }
       const safeName = `${basename(suggestedName, extname(suggestedName)) || 'export'}.xlsx`
-      const target = await dialog.showSaveDialog(mainWindow ?? undefined, {
+      const target = await chooseSaveFile({
         title: 'Enregistrer export Excel',
         defaultPath: safeName,
         filters: [{ name: 'Fichier Excel', extensions: ['xlsx'] }],
@@ -1980,7 +1981,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('produits:update', (_e, id, p) => {
     const { serial_tracking_disable_confirmed: serialTrackingDisableConfirmed, ...productData } = p as Record<string, unknown>
-    const normalized = {
+    const normalized: Record<string, unknown> = {
       has_serial_number: 0, numero_serie: null,
       tva_achat_pct: 0, marge_pct: null, coef_av: null,
       cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
@@ -4318,7 +4319,7 @@ function setupIpcHandlers() {
     const productMeta = credit.type === 'CREDIT' && product
       ? `[SMLPOS_ACCOUNTING]${JSON.stringify({ nature: 'PRODUIT', produitId: product.id, produit: product.nom, quantite: quantity })}`
       : ''
-    const row = bindRow({
+    const row: Record<string, unknown> = bindRow({
       id: '',
       client_id: '',
       client_nom: '',
@@ -4675,7 +4676,7 @@ function setupIpcHandlers() {
 
   // ── Retours (Returns) ──────────────────────────────────────────────────────
   ipcMain.handle('retours:create', (_e, retour: Record<string, unknown>) => {
-    const row = bindRow({
+    const row: Record<string, unknown> = bindRow({
       id: '',
       vente_id: '',
       vente_numero: '',
@@ -5385,7 +5386,7 @@ function setupIpcHandlers() {
   })
   ipcMain.handle('documents:create', (_e, doc: Record<string, unknown>, lignes: Record<string, unknown>[]) => {
     const now = new Date().toISOString()
-    const normalizedDoc = normalizeMoneyFields({
+    const normalizedDoc: Record<string, unknown> = normalizeMoneyFields({
       vente_id: null, fournisseur_id: null, client_id: null,
       client_nom: null, client_tel: null, client_adresse: null, client_matricule: null,
       shift_id: null, statut_paiement: 'PAYE', montant_paye: 0,
@@ -5554,7 +5555,7 @@ function setupIpcHandlers() {
         for (const line of normalizedLignes) validateLineSerials(line, claimedSerials)
         db.prepare(`DELETE FROM lignes_document WHERE document_id = ?`).run(documentId)
         for (const l of normalizedLignes) {
-          const nl = { ...l, document_id: documentId }
+          const nl: Record<string, unknown> = { ...l, document_id: documentId }
           insertLigne.run(nl)
           if (doc.vente_id) {
             insertVenteLigne.run({

@@ -309,6 +309,8 @@ const api = {
   r2Restore: (key: string) => ipcRenderer.invoke('r2:restore', key),
 }
 
+export type DesktopApi = typeof api
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)

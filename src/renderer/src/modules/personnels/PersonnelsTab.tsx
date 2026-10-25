@@ -414,6 +414,7 @@ function PersonnelCard({ personnel: p, paidThisMonth, onMouvement, onPaySalary }
   onMouvement: (type: TypeMouvementPersonnel) => void
   onPaySalary: () => void
 }) {
+  const [open, setOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const totalDue = Math.max(0, (p.avance_solde || 0) + (p.credit_solde || 0))
   const progress = p.salaire_base > 0 ? Math.min(100, (totalDue / p.salaire_base) * 100) : 0

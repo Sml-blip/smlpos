@@ -42,7 +42,7 @@ export function closeDatabase(): void {
   dbInstance = null
 }
 
-export const db = new Proxy({} as Database.Database, {
+export const db: Database.Database = new Proxy({} as Database.Database, {
   get(_target, prop) {
     const inst = getDb()
     const value = Reflect.get(inst as object, prop)

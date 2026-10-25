@@ -95,7 +95,7 @@ export default function DocumentPreviewModal({
   const lineSums = useMemo(() => sumInvoiceLines(docLignes), [docLignes])
 
   const previewDoc: InvoiceDocData = useMemo(() => {
-    const isFacture = typeDoc === 'FACTURE_VENTE' || typeDoc === 'FACTURE_JOURNALIERE_F'
+    const isFacture = typeDoc === 'FACTURE_VENTE'
     const timbreVal = isFacture ? (settings.invoice_timbre_fiscal !== 'false' ? 1.0 : 0.0) : 0.0
     const lineRemiseTotal = items.reduce((s, item) => {
       const brut = item.quantite * item.prix_unitaire

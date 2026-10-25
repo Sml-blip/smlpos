@@ -493,7 +493,7 @@ export default function PrintManagerModal({
           setStatusOk(false)
           return
         }
-        const result = await api.gainschaPrintLabel(job)
+        const result = await api.gainschaPrintLabel({ ...job })
         if (result.success) {
           setStatusMsg(`Imprimé (SDK Gainscha) · ${opts.copies} copie(s)`)
           setStatusOk(true)

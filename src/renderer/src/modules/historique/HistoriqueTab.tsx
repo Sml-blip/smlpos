@@ -289,7 +289,7 @@ export default function HistoriqueTab() {
       })
       if (!result.success) throw new Error(result.error || 'Échange impossible')
     }, { successMessage: 'Échange enregistré et inventaire mis à jour', feedback: 'success' })
-    if (!succeeded || !result) throw new Error(result?.error || 'Échange impossible')
+    if (!succeeded || !result) throw new Error('Échange impossible')
     const completed = result as ExchangeResult
     const documentNumbers = completed.updatedDocuments?.map(document => document.numero).filter(Boolean) ?? []
     if (documentNumbers.length > 0) {

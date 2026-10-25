@@ -497,7 +497,7 @@ const mockApi = {
     return CLIENTS
   },
   clientsCreate: async (c: unknown) => ({ ...(c as object), id: `cl${Date.now()}`, solde_credit: 0, actif: 1, created_at: new Date().toISOString() }),
-  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
 
   // Crédits clients
   creditsList: async () => [],
@@ -508,14 +508,14 @@ const mockApi = {
   avancesClientsList: async () => [],
 
   // Ventes: annulation
-  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...data }),
+  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...(data as Record<string, unknown>) }),
 
   // Organisations
   organisationsList: async () => [
     { id: 'org1', nom: 'B2B Tech', telephone: '71 000 001', matricule_fiscal: '1234567B', credit_total: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   organisationsCreate: async (org: unknown) => ({ ...(org as object), id: `org${Date.now()}`, credit_total: 0, actif: 1, created_at: new Date().toISOString() }),
-  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   organisationsDelete: async () => ({ success: true }),
 
   // Personnels
@@ -523,7 +523,7 @@ const mockApi = {
     { id: 'pers1', nom: 'Salah', prenom: 'Ben Amor', poste: 'Technicien', telephone: '22 111 222', cin: '12345678', salaire_base: 900, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   personnelsCreate: async (p: unknown) => ({ ...(p as object), id: `pers${Date.now()}`, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() }),
-  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   personnelsDelete: async () => ({ success: true }),
   mouvementsPersonnelsList: async () => [],
   mouvementsPersonnelsCreate: async (m: unknown) => ({ ...(m as object), id: `mp${Date.now()}`, created_at: new Date().toISOString() }),
@@ -534,7 +534,7 @@ const mockApi = {
   documentsGet: async (id: string) => ({ id, numero: 'FAC-MOCK-001', type_document: 'FACTURE_VENTE', statut: 'ACTIF', total_ht: 0, total_tva: 0, total_ttc: 0, created_at: new Date().toISOString() }),
   documentsCreateDailyFactureF: async () => ({ success: true, documentId: 'daily-f-mock', numero: '26/#00001', lineCount: 1, totalTTC: 10 }),
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
-  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   documentsRevoquer: async () => ({ success: true }),
   documentsAnnulerAvecAvoir: async (_id: string, _motif?: string) => ({ success: true, avoir: { id: `av${Date.now()}`, numero: 'AVO-MOCK-001' } }),
   documentsReplaceLignes: async (_documentId: string, _lignes: unknown[], _totals: unknown) => ({ success: true }),
@@ -543,7 +543,7 @@ const mockApi = {
 
   authVerifyCaissePin: async (pin: string) => ({ valid: pin === 'sml2023' }),
 
-  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   facturesFournisseursReplaceLignes: async () => ({ success: true }),
 
   // Factures fournisseurs marquer reçu
