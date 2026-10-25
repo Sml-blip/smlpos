@@ -167,6 +167,11 @@ export default function InventaireTab() {
 
   // On mount: if cache is fresh, skip loading state; always refresh in bg
   useEffect(() => {
+    const refresh=()=>{ void loadProduits(true) }
+    window.addEventListener('smlpos:sync-pull-complete',refresh)
+    return ()=>window.removeEventListener('smlpos:sync-pull-complete',refresh)
+  }, [loadProduits])
+  useEffect(() => {
     const fresh = isProduitsCacheFresh()
     loadProduits(!fresh)
   // eslint-disable-next-line react-hooks/exhaustive-deps

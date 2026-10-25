@@ -13,6 +13,7 @@ export default function LiveSyncStatus({ live, busy, act }: {
   return <section className="rounded-lg border border-border p-3 space-y-2" aria-label="État de la synchronisation continue">
     <h4 className="font-bold">Synchronisation continue · {live.backend === 'vps' ? 'VPS' : 'ancienne connexion'}</h4>
     <p>{live.enabled ? 'Vérification initiale terminée' : 'Envoi verrouillé : sauvegarde et vérification initiale requises'}</p>
+    {live.backend==='vps' && <p className="text-text-muted">Les corrections financières passent par un avoir ou une contrepassation. Les enregistrements validés restent immuables.</p>}
     <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
       {[
         ['À envoyer', live.pending], ['Rejets d’envoi', live.rejected], ['Rejets de réception', live.pullRejected],

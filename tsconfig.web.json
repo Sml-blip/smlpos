@@ -17,5 +17,5 @@
       "@/*": ["src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/**/*.ts", "src/main/printer/LabelTemplate.ts"]
+  "include": ["src/renderer/src/**/*", "src/preload/**/*.ts", "src/main/printer/LabelTemplate.ts", "src/shared/**/*.ts"]
 }

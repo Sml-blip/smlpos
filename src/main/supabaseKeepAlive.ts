@@ -1,4 +1,5 @@
 import { getDb } from './db'
+import type { LegacySyncGate } from './seed/runtime'
 
 declare const __SML_SUPABASE_URL__: string | undefined
 declare const __SML_SUPABASE_ANON_KEY__: string | undefined
@@ -31,12 +32,15 @@ function recordKeepAlive(ok: boolean, error?: string): void {
   }
 }
 
-export async function pingSupabaseKeepAlive(): Promise<boolean> {
+export async function pingSupabaseKeepAlive(admission?: LegacySyncGate): Promise<boolean> {
   const creds = getSupabaseCredentials()
   if (!creds) return false
+  const lease = admission?.begin()
+  if (admission && !lease) return false
 
   try {
     const res = await fetch(`${creds.url}/rest/v1/app_settings?select=key&limit=1`, {
+      signal: AbortSignal.timeout(15_000),
       headers: {
         apikey: creds.key,
         Authorization: `Bearer ${creds.key}`,
@@ -55,15 +59,15 @@ export async function pingSupabaseKeepAlive(): Promise<boolean> {
     recordKeepAlive(false, msg)
     console.warn('[supabase] Keep-alive error:', e)
     return false
-  }
+  } finally { if (lease) admission!.end(lease) }
 }
 
 let _timer: ReturnType<typeof setInterval> | null = null
 
-export function startSupabaseKeepAlive(): void {
+export function startSupabaseKeepAlive(admission?: LegacySyncGate): void {
   if (_timer || !getSupabaseCredentials()) return
 
-  const tick = () => { void pingSupabaseKeepAlive() }
+  const tick = () => { void pingSupabaseKeepAlive(admission) }
   setTimeout(tick, 45_000)
   _timer = setInterval(tick, KEEPALIVE_INTERVAL_MS)
 }

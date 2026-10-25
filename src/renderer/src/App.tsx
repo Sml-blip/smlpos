@@ -25,6 +25,7 @@ import {
   Eye, LockKeyhole, Play
 } from 'lucide-react'
 import { cn } from './lib/utils'
+import { invalidateProduitsCache } from './lib/produitsCache'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
 import ToastProvider from './components/ToastProvider'
 import { PrintManagerProvider } from './components/PrintManagerProvider'
@@ -55,6 +56,10 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
 ]
 
 export default function App() {
+  useEffect(() => window.api.onSync2Changed?.((applied) => {
+    invalidateProduitsCache()
+    window.dispatchEvent(new CustomEvent('smlpos:sync-pull-complete', { detail: { applied } }))
+  }), [])
   const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur, currentShift,
     setCurrentShift, setCurrentOperateur, setShowShiftModal, previewMode, setPreviewMode } = useAppStore()
   const [showSplash, setShowSplash] = useState(true)

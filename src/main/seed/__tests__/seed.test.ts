@@ -39,12 +39,12 @@ function serverTablesFrom(db: Database.Database) {
 
 let n = 0
 const openedLedgers: SeedLedger[] = []
-function newService(backend: MockBackend, name = `t${++n}`) {
+function newService(backend: MockBackend, name = `t${++n}`, fetchImpl: typeof fetch = backend.fetch) {
   const ledger = new SeedLedger(join(TMP, `${name}.ledger.db`))
   openedLedgers.push(ledger)
   const svc = new SeedService({
     liveDb: getDb, ledger, archiveDir: join(TMP, `archive-${name}`), secrets, appVersion: '1.9.1001',
-    platform: 'win32', legacyQueue: () => ({ pending: 3, failed: 1 }), fetchImpl: backend.fetch, sleep: async () => {},
+    platform: 'win32', legacyQueue: () => ({ pending: 3, failed: 1 }), fetchImpl, sleep: async () => {},
   })
   return { svc, ledger }
 }
@@ -271,4 +271,22 @@ test('token refresh rotates; bad enrollment token and non-https URL are refused'
   assert.ok(be.refreshCount >= 1)
   await assert.rejects(svc.registerDevice('https://sync.example.com', 'wrong', 'X'), /Invalid enrollment token/)
   await assert.rejects(svc.registerDevice('http://evil.example.com', 'good-token', 'X'), /https/)
+})
+
+test('failed registration on a new server sends no old bearer and preserves the working server config', async () => {
+  const be = new MockBackend({ tables: serverTablesFrom(getDb()) })
+  let newServerAuthorization: string | null = 'not-called'
+  const routedFetch: typeof fetch = async (input, init) => {
+    if (new URL(String(input)).hostname === 'new.example.com') {
+      newServerAuthorization = new Headers(init?.headers).get('authorization')
+    }
+    return be.fetch(input, init)
+  }
+  const { svc, ledger } = newService(be, `registration-${++n}`, routedFetch)
+  await svc.registerDevice('https://sync.example.com', 'good-token', 'PC Principal')
+  const savedSession = ledger.get('session_sealed')
+  await assert.rejects(svc.registerDevice('https://new.example.com', 'wrong', 'PC Test'), /Invalid enrollment token/)
+  assert.equal(newServerAuthorization, null)
+  assert.equal(ledger.get('base_url'), 'https://sync.example.com')
+  assert.equal(ledger.get('session_sealed'), savedSession)
 })

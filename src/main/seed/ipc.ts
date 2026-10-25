@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { getArchiveDir } from '../dataPaths'
@@ -60,7 +60,11 @@ export function registerSeedIpc(legacyQueue: () => { pending: number; failed: nu
   ipcMain.handle('sync2:reserveNumber', (_e, table: string, proposed: string) => reserveNumber(getDb(), table, proposed))
   ipcMain.handle('sync2:legacyBegin', () => legacySyncGate.begin())
   ipcMain.handle('sync2:legacyEnd', (_e, token: string) => legacySyncGate.end(String(token)))
-  startLiveRuntime(getDb, { drain: () => svc().drainLiveChanges(), pull: () => svc().pullLiveChanges() })
+  startLiveRuntime(getDb, { drain: () => svc().drainLiveChanges(), pull: async () => {
+    const result=await svc().pullLiveChanges()
+    if(result.applied>0)for(const window of BrowserWindow.getAllWindows())window.webContents.send('sync2:changed',result.applied)
+    return result
+  } })
   ipcMain.handle('sync2:issues', () => wrap(() => liveIssues(getDb())))
   ipcMain.handle('sync2:retry', () => wrap(() => retryPush(getDb())))
   ipcMain.handle('sync2:export', () => wrap(async () => {

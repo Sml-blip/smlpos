@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, Menu, dialog, nativeImage } from 'electron'
 import type { NativeImage } from 'electron'
 import { join, extname, basename } from 'path'
-import { randomUUID } from 'crypto'
+import { uuidv7 as randomUUID } from '../shared/uuid'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -25,6 +25,7 @@ import {
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { registerSeedIpc, legacySyncGate } from './seed/ipc'
 import { newCashId, reserveNumber } from './seed/numbering'
+import { guardInvoiceEdit, requireReversal } from './seed/financialGuard'
 import { importDefaultProductCatalog } from './seedProducts'
 import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
@@ -694,7 +695,7 @@ app.whenReady().then(() => {
 
   startAutoBackup()
   startR2BackupScheduler()
-  startSupabaseKeepAlive()
+  startSupabaseKeepAlive(legacySyncGate)
   startBossApiServer()
   setupIpcHandlers()
   createWindow()
@@ -1560,6 +1561,7 @@ function setupIpcHandlers() {
         AND statut NOT IN ('ANNULE', 'REVOQUE')
         ORDER BY created_at DESC LIMIT 1
       `).get(targetDate, targetDate) as { id: string; numero: string; created_at: string } | undefined
+      if(existing)guardInvoiceEdit(db,existing.id)
 
       const lignesF = db.prepare(`
         SELECT v.id AS vente_id, lv.produit_id, lv.designation, lv.quantite,
@@ -1647,7 +1649,7 @@ function setupIpcHandlers() {
         const prevRow = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(seqKey) as { value?: string } | undefined
         const nextSeq = (parseInt(prevRow?.value ?? '0', 10) || 0) + 1
         db.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`).run(seqKey, String(nextSeq))
-        numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
+        numero = reserveNumber(db,'documents',`${yy}/#${String(nextSeq).padStart(5, '0')}`)
       }
       const now = new Date().toISOString()
       const targetCreatedAt = new Date(`${targetDate}T12:00:00`).toISOString()
@@ -4370,6 +4372,7 @@ function setupIpcHandlers() {
   // Changes are applied as a financial delta so client balances, the cash shift,
   // organisation totals, and inventory remain consistent with the edited movement.
   ipcMain.handle('credits:update', (_e, id: string, patch: Record<string, unknown>) => {
+    requireReversal(db)
     const previous = db.prepare(`SELECT * FROM credits_clients WHERE id=?`).get(id) as Record<string, unknown> | undefined
     if (!previous) throw new Error('Mouvement crédit introuvable')
     const nextType = String(patch.type ?? previous.type) === 'PAIEMENT' ? 'PAIEMENT' : 'CREDIT'
@@ -4846,6 +4849,7 @@ function setupIpcHandlers() {
 
   // ── Ventes: Exchange ──────────────────────────────────────────────────────
   ipcMain.handle('ventes:exchange', (_e, venteId: string, payload: Record<string, unknown>) => {
+    requireReversal(db)
     const vente = db.prepare(`SELECT * FROM ventes WHERE id=?`).get(venteId) as Record<string, unknown> | undefined
     if (!vente) return { success: false, error: 'Vente introuvable' }
     if (vente.statut === 'ANNULEE' || vente.type_vente === 'DEVIS') return { success: false, error: 'Cette vente ne peut pas être échangée' }
@@ -5458,6 +5462,7 @@ function setupIpcHandlers() {
     return { success: true, id: normalizedDoc.id, numero: normalizedDoc.numero }
   })
   ipcMain.handle('documents:update', (_e, id: string, data: Record<string, unknown>) => {
+    guardInvoiceEdit(db,id,data)
     const FORBIDDEN = new Set(['numero', 'type_document', 'vente_id', 'created_at', 'avoir_id', 'document_origine_id'])
     if (Object.keys(data).some(k => FORBIDDEN.has(k))) {
       return { success: false, error: 'Champ interdit (numéro immuable)' }
@@ -5522,6 +5527,7 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('documents:replaceLignes', (_e, documentId: string, lignes: Record<string, unknown>[], totals: { total_ht: number; total_tva: number; total_ttc: number; ht_7?: number; tva_7?: number; ht_19?: number; tva_19?: number; total_remise?: number }) => {
+    guardInvoiceEdit(db,documentId)
     const normalizedLignes = lignes.map(l => normalizeDocumentLine(l))
     const normalizedTotals = normalizeMoneyFields({ ...totals }, ['total_ht', 'total_tva', 'total_ttc', 'ht_7', 'tva_7', 'ht_19', 'tva_19', 'total_remise'])
     const doc = db.prepare(`SELECT id, statut, type_document, vente_id FROM documents WHERE id = ?`).get(documentId) as { id: string; statut: string; type_document: string; vente_id?: string | null } | undefined

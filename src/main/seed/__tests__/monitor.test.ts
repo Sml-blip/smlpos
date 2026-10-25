@@ -6,6 +6,8 @@ import { liveIssues, liveStatus, retryPush } from '../monitor'
 import { setCaptureState } from '../gate'
 import { LegacySyncGate } from '../runtime'
 import { reserveNumber, newCashId } from '../numbering'
+import { requireReversal,guardInvoiceEdit } from '../financialGuard'
+import { uuidv7 } from '../../../shared/uuid'
 
 test('monitor works before preparation; retries preserve identities, payloads and acknowledged rows', () => {
   const db = new Database(':memory:')
@@ -30,6 +32,22 @@ test('monitor works before preparation; retries preserve identities, payloads an
     assert.equal((db.prepare('SELECT sent_at FROM outbox WHERE seq=1').get() as {sent_at:string}).sent_at, 'ack')
     assert.equal(liveIssues(db).length, 1)
   } finally { db.close() }
+})
+
+test('new business IDs are UUIDv7 and financial guards reject edits before a local transaction', () => {
+  const ids=Array.from({length:1000},()=>uuidv7())
+  assert.equal(new Set(ids).size,ids.length)
+  assert.ok(ids.every(id=>/^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id)))
+  const db=new Database(':memory:')
+  try {
+    db.exec("CREATE TABLE documents(id TEXT PRIMARY KEY,type_document TEXT,total_ttc REAL); INSERT INTO documents VALUES('invoice','FACTURE_VENTE',10),('draft','DEVIS',10)")
+    installOutbox(db);requireReversal(db);setCaptureState(db,'sync_backend','vps')
+    assert.throws(()=>requireReversal(db),/contrepassation/)
+    assert.throws(()=>guardInvoiceEdit(db,'invoice',{total_ttc:12}),/contrepassation/)
+    assert.doesNotThrow(()=>guardInvoiceEdit(db,'invoice',{client_nom:'Corrected name',total_ttc:10}))
+    assert.doesNotThrow(()=>guardInvoiceEdit(db,'draft',{total_ttc:12}))
+    assert.equal((db.prepare("SELECT total_ttc FROM documents WHERE id='invoice'").get() as {total_ttc:number}).total_ttc,10)
+  }finally{db.close()}
 })
 
 test('number reservations survive reopen, preserve historical numbers and refuse missing identity', () => {

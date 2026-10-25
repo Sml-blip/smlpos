@@ -2,6 +2,7 @@ import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
+import { uuidv7 } from '../../../shared/uuid'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -21,7 +22,7 @@ export function formatDate(dateStr: string, fmt = 'dd/MM/yyyy HH:mm'): string {
 }
 
 export function generateId(): string {
-  return crypto.randomUUID()
+  return uuidv7()
 }
 
 export function generateReference(): string {

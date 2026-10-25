@@ -9,6 +9,8 @@ export function reserveNumber(db: Database.Database, table: string, proposed: st
   if (captureState(db, 'sync_backend') !== 'vps') return proposed
   const device = captureState(db, 'device_id')
   if (!device || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device)) throw new Error('Register this PC before creating synchronized documents')
+  const code=captureState(db,'number_code')
+  if(code&&!/^PC[1-9][0-9]{0,8}$/.test(code))throw new Error('Invalid server device prefix')
   return db.transaction(() => {
     const key = `number:${table}`, current = Number(captureState(db, key) ?? 0)
     if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) throw new Error('Document sequence exhausted')
@@ -16,7 +18,7 @@ export function reserveNumber(db: Database.Database, table: string, proposed: st
     do {
       next++
       if (!Number.isSafeInteger(next)) throw new Error('Document sequence exhausted')
-      number = `${proposed.replace(/\d+$/, '')}${device.toLowerCase()}-${String(next).padStart(6, '0')}`
+      number = `${proposed.replace(/\d+$/, '')}${code??device.toLowerCase()}-${String(next).padStart(6, '0')}`
     } while (db.prepare(`SELECT 1 FROM "${table}" WHERE numero=?`).get(number))
     setCaptureState(db, key, String(next))
     return number

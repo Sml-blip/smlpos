@@ -175,7 +175,7 @@ export class BackendClient {
   }
 
   register(enrollmentToken: string, device: { install_id: string; name: string; platform: string; app_version: string; schema_version: string | null }) {
-    return this.request<{ device_id: string; session: Session }>(
+    return this.request<{ device_id: string; number_code?: string; session: Session }>(
       'POST', '/v1/devices/register', { enrollment_token: enrollmentToken, ...device }, { auth: false },
     )
   }

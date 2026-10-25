@@ -28,6 +28,11 @@ const api = {
 
   // Seed / device sync panel (new backend)
   sync2Issues: () => ipcRenderer.invoke('sync2:issues'),
+  onSync2Changed: (callback: (count: number) => void) => {
+    const handler=(_event: Electron.IpcRendererEvent,count:number)=>callback(count)
+    ipcRenderer.on('sync2:changed',handler)
+    return ()=>{ ipcRenderer.removeListener('sync2:changed',handler) }
+  },
   sync2PrepareReplica: (phrase: string) => ipcRenderer.invoke('sync2:prepareReplica', phrase),
   sync2JoinReplica: () => ipcRenderer.invoke('sync2:joinReplica'),
   sync2ReserveNumber: (table: string, proposed: string) => ipcRenderer.invoke('sync2:reserveNumber', table, proposed),

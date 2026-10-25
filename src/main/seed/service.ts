@@ -126,23 +126,44 @@ export class SeedService {
     const baseUrl = validateBaseUrl(baseUrlRaw)
     if (!enrollmentToken.trim()) throw new Error('Enrollment token is required')
     if (!deviceName.trim()) throw new Error('Device name is required')
-    this.d.ledger.set('base_url', baseUrl)
-    this.client = null
-    this.drainer = null
-    this.puller?.stopPolling()
-    this.puller = null
-    const res = await this.getClient()!.register(enrollmentToken.trim(), {
+    // Registration has no bearer token and must not reuse a session from the
+    // previously configured server. Keep current settings intact until the new
+    // server has accepted this device and its identity has been validated.
+    const registrationClient = new BackendClient({
+      baseUrl, loadSession: () => null, saveSession: () => {},
+      fetchImpl: this.d.fetchImpl, sleep: this.d.sleep,
+    })
+    const res = await registrationClient.register(enrollmentToken.trim(), {
       install_id: this.d.ledger.installId(),
       name: deviceName.trim().slice(0, 60),
       platform: this.d.platform,
       app_version: this.d.appVersion,
       schema_version: this.schemaVersionLive(),
     })
+    if (!res.device_id?.trim() || !res.session?.access_token || !res.session?.refresh_token || !Number.isFinite(Date.parse(res.session.expires_at))) {
+      throw new Error('Invalid device registration response')
+    }
     const captureDevice = captureState(this.d.liveDb(), 'device_id')
     if (captureDevice && captureDevice !== res.device_id) throw new Error('Device identity changed; refusing to relabel recorded operations')
+    let numberCode: string | undefined
+    if(res.number_code){
+      if(!/^PC[1-9][0-9]{0,8}$/.test(res.number_code))throw new Error('Invalid server device prefix')
+      const previous=captureState(this.d.liveDb(),'number_code')||this.d.ledger.get('number_code')
+      if(previous&&previous!==res.number_code)throw new Error('Device numbering prefix changed')
+      numberCode=res.number_code
+    }
+    this.d.ledger.set('base_url', baseUrl)
+    this.client = null
+    this.drainer = null
+    this.puller?.stopPolling()
+    this.puller = null
     this.saveSession(res.session)
     this.d.ledger.set('device_id', res.device_id)
     this.d.ledger.set('device_name', deviceName.trim().slice(0, 60))
+    if(numberCode){
+      this.d.ledger.set('number_code',numberCode)
+      if(captureState(this.d.liveDb(),'apply_mute')!==null)setCaptureState(this.d.liveDb(),'number_code',numberCode)
+    }
     this.d.ledger.event('device_registered', res.device_id)
     this.serverCache = null
   }
@@ -178,6 +199,7 @@ export class SeedService {
     L.set('install_id', installId)
     setCaptureState(live, 'install_id', installId)
     if (L.get('device_id')) setCaptureState(live, 'device_id', L.get('device_id')!)
+    if (L.get('number_code')) setCaptureState(live, 'number_code', L.get('number_code')!)
     const backup = await createVerifiedBackup(live, this.d.archiveDir)
     L.setJson('backup', backup)
     if (!backup.ok) {
@@ -426,6 +448,7 @@ export class SeedService {
       await this.d.quiesceLegacy?.()
       installOutbox(live)
       setCaptureState(live,'install_id',this.d.ledger.installId());setCaptureState(live,'device_id',status.deviceId!)
+      if(this.d.ledger.get('number_code'))setCaptureState(live,'number_code',this.d.ledger.get('number_code')!)
       prepareEmptyReplica(live)
       this.d.ledger.event('replica_prepared',backup.sha256)
     }finally{this.checking=false}
