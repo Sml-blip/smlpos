@@ -27,6 +27,11 @@ const api = {
   },
 
   // Seed / device sync panel (new backend)
+  sync2Issues: () => ipcRenderer.invoke('sync2:issues'),
+  sync2LegacyBegin: () => ipcRenderer.invoke('sync2:legacyBegin'),
+  sync2LegacyEnd: (token: string) => ipcRenderer.invoke('sync2:legacyEnd', token),
+  sync2Retry: () => ipcRenderer.invoke('sync2:retry'),
+  sync2Export: () => ipcRenderer.invoke('sync2:export'),
   seedStatus: (force = false) => ipcRenderer.invoke('seed:status', force),
   seedRegister: (baseUrl: string, token: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, token, name),
   seedBackupAndCheck: () => ipcRenderer.invoke('seed:backupAndCheck'),

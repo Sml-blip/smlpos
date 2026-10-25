@@ -8,6 +8,7 @@ import { installOutbox } from './outbox'
 import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptureState } from './gate'
 import { OutboxDrainer } from './drainer'
 import { PullClient } from './pull'
+import { liveStatus } from './monitor'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -28,6 +29,7 @@ export interface SeedDeps {
   legacyQueue: () => { pending: number; failed: number }
   fetchImpl?: typeof fetch
   sleep?: (ms: number) => Promise<void>
+  quiesceLegacy?: () => Promise<void>
 }
 
 export interface SeedProgress {
@@ -40,6 +42,7 @@ export interface SeedProgress {
 }
 
 export interface PanelStatus {
+  live: ReturnType<typeof liveStatus>
   connection: 'unconfigured' | 'unregistered' | 'online' | 'offline' | 'auth_failed'
   connectionError: string | null
   baseUrl: string | null
@@ -166,7 +169,9 @@ export class SeedService {
     const protection = await createVerifiedBackup(live, this.d.archiveDir)
     L.setJson('migration_backup', protection)
     if (!protection.ok) throw new Error(`Pre-migration backup failed: ${protection.problems.join(', ')}`)
+    await this.d.quiesceLegacy?.()
     installOutbox(live)
+    setCaptureState(live, 'sync_backend', 'vps')
     closeSeedGate(live)
     const installId = captureState(live, 'install_id') || L.installId()
     L.set('install_id', installId)
@@ -458,6 +463,7 @@ export class SeedService {
     const report = L.getJson<SeedReport>('report')
     const backup = L.getJson<BackupVerification>('backup')
     return {
+      live: liveStatus(this.d.liveDb()),
       connection, connectionError, baseUrl,
       deviceId: L.get('device_id'), deviceName: L.get('device_name'),
       sessionPersisted: !!L.get('session_sealed'),

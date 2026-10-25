@@ -6,6 +6,8 @@ import { getDb } from '../db'
 import { SeedLedger } from './ledger'
 import { SeedService, type SecretBox } from './service'
 import type { SeedReport } from './dryRun'
+import { liveIssues, liveStatus, retryPush } from './monitor'
+import { LegacySyncGate, startLiveRuntime } from './runtime'
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string }
 
@@ -21,6 +23,7 @@ const secretBox: SecretBox = {
 }
 
 let service: SeedService | null = null
+export const legacySyncGate = new LegacySyncGate(getDb)
 
 /** Created on first use: merely installing/launching the update creates no ledger and contacts no server. */
 function getService(legacyQueue: () => { pending: number; failed: number }): SeedService {
@@ -34,6 +37,7 @@ function getService(legacyQueue: () => { pending: number; failed: number }): See
     appVersion: app.getVersion(),
     platform: process.platform,
     legacyQueue,
+    quiesceLegacy: () => legacySyncGate.quiesce(),
   })
   return service
 }
@@ -48,6 +52,18 @@ async function wrap<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
 
 export function registerSeedIpc(legacyQueue: () => { pending: number; failed: number }): void {
   const svc = () => getService(legacyQueue)
+  ipcMain.handle('sync2:legacyBegin', () => legacySyncGate.begin())
+  ipcMain.handle('sync2:legacyEnd', (_e, token: string) => legacySyncGate.end(String(token)))
+  startLiveRuntime(getDb, { drain: () => svc().drainLiveChanges(), pull: () => svc().pullLiveChanges() })
+  ipcMain.handle('sync2:issues', () => wrap(() => liveIssues(getDb())))
+  ipcMain.handle('sync2:retry', () => wrap(() => retryPush(getDb())))
+  ipcMain.handle('sync2:export', () => wrap(async () => {
+    const result = await dialog.showSaveDialog({ defaultPath: 'smlpos-sync-diagnostics.json', filters: [{ name: 'JSON', extensions: ['json'] }] })
+    if (result.canceled || !result.filePath) return null
+    // Export metadata only: no row payloads, credentials or customer records.
+    writeFileSync(result.filePath, JSON.stringify({ status: liveStatus(getDb()), issues: liveIssues(getDb()) }, null, 2), 'utf8')
+    return result.filePath
+  }))
 
   ipcMain.handle('seed:status', (_e, force?: boolean) => wrap(() => svc().status(!!force)))
   ipcMain.handle('seed:register', (_e, baseUrl: string, token: string, name: string) =>

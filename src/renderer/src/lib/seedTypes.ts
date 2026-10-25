@@ -42,6 +42,11 @@ export type SeedStateName =
   | 'paused' | 'finalizing' | 'done' | 'needs_review' | 'failed'
 
 export interface SeedPanelStatus {
+  live: {
+    prepared: boolean; enabled: boolean; backend: 'legacy' | 'vps'; pending: number; rejected: number; pullRejected: number
+    cursor: number; serverSeq: number | null; lag: number | null; lastPush: string | null; lastPull: string | null
+    pushError: string | null; pullError: string | null; retryAt: number
+  }
   connection: 'unconfigured' | 'unregistered' | 'online' | 'offline' | 'auth_failed'
   connectionError: string | null
   baseUrl: string | null
@@ -67,6 +72,9 @@ export interface SeedPanelStatus {
 export interface SeedRejectedOp { op_id: string; table_name: string; pk: string; code: string; message: string; at: string }
 
 export interface SeedApi {
+  sync2Issues: () => Promise<SeedResult<{ source: 'push' | 'pull'; seq: number; table: string; pk: string; reason: string; at: string }[]>>
+  sync2Retry: () => Promise<SeedResult<void>>
+  sync2Export: () => Promise<SeedResult<string | null>>
   seedStatus: (force?: boolean) => Promise<SeedResult<SeedPanelStatus>>
   seedRegister: (baseUrl: string, token: string, name: string) => Promise<SeedResult<void>>
   seedBackupAndCheck: () => Promise<SeedResult<SeedReportView>>

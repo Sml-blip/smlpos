@@ -62,6 +62,7 @@ export class OutboxDrainer {
       const response=await this.client.pushLive(deviceId,selected)
       this.validate(response,selected)
       this.db.transaction(()=>{
+        setCaptureState(this.db,'server_seq',String(response.server_seq))
         for(const item of response.results){
           if(item.status==='rejected'){
             this.db.prepare('UPDATE outbox SET last_error=? WHERE seq=? AND sent_at IS NULL').run(`rejected:${item.code??'server'}:${String(item.message??'Rejected').slice(0,300)}`,item.seq);result.rejected++

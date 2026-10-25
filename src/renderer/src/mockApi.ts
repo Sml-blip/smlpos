@@ -2,6 +2,7 @@
 // Provides realistic dummy data so all tabs render correctly.
 import PRODUITS_SEED from './productsSeed.json'
 import type { DemandeClient } from './lib/types'
+import { seedMock } from './lib/seedMock'
 
 const OPERATEURS = [
   { id: 'op1', nom: 'Amira', identifiant: 'amira', role: 'superadmin' as const, actif: 1 },
@@ -171,6 +172,7 @@ let nextFacClientSeq = 2
 let nextFacFourn = FACTURES_FOURNISSEURS.length
 
 const mockApi = {
+  ...seedMock,
   dbQuery: async () => [],
   dbRun: async () => ({ changes: 1, lastInsertRowid: 1 }),
   dbGet: async () => null,

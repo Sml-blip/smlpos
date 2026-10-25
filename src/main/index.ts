@@ -23,7 +23,7 @@ import {
   uploadR2Snapshot,
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
-import { registerSeedIpc } from './seed/ipc'
+import { registerSeedIpc, legacySyncGate } from './seed/ipc'
 import { importDefaultProductCatalog } from './seedProducts'
 import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
@@ -5923,6 +5923,7 @@ function setupIpcHandlers() {
   const SYNC_QUEUE_BATCH = 500
 
   ipcMain.handle('sync:queue:getPending', () => {
+    if (!legacySyncGate.allowed()) return []
     // Only return items that haven't exceeded max attempts
     return db.prepare(
       `SELECT id, table_name, operation, payload FROM sync_queue
@@ -6037,6 +6038,7 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('sync:pull:applyRows', (_e, tableName: string, rows: Record<string, unknown>[]) => {
+    if (!legacySyncGate.allowed()) return { applied: 0, skipped: 0, error: 'Legacy sync disabled for VPS mode' }
     if (!isPullTableAllowed(tableName)) return { applied: 0, skipped: 0, error: 'table not allowed' }
     try {
       const result = applyRemoteRows(db, tableName, rows ?? [])

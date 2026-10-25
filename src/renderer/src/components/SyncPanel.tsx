@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { X, Wifi, WifiOff, Monitor, ShieldCheck, Upload, Pause, Play, AlertTriangle, FileDown, RefreshCw, CheckCircle2, Loader2 } from 'lucide-react'
 import type { SeedApi, SeedPanelStatus, SeedRejectedOp, SeedResult } from '../lib/seedTypes'
+import LiveSyncStatus from './LiveSyncStatus'
 
 const api = window.api as unknown as SeedApi
 
@@ -51,6 +52,8 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
     try {
       const r = await fn()
       if (!r.ok) setErr(r.error)
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error))
     } finally {
       setBusy(null)
       refresh(true)
@@ -85,6 +88,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
 
           {st && (
             <>
+              <LiveSyncStatus live={st.live} busy={!!busy} act={act} />
               {/* ── Connexion ── */}
               <section>
                 <h4 className="font-bold mb-2">1. Connexion au serveur</h4>
@@ -133,7 +137,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 ) : <p className="text-text-muted">{online ? 'Aucun autre poste enregistré.' : 'Disponible une fois connecté.'}</p>}
                 <p className="text-text-muted mt-2">
-                  File Supabase (ancienne synchro) : {st.legacyQueue.pending} en attente, {st.legacyQueue.failed} en erreur — inchangée par cette mise à jour.
+                  File Supabase conservée : {st.legacyQueue.pending} en attente, {st.legacyQueue.failed} en erreur. {st.live.backend === 'vps' ? 'Connexion Supabase désactivée.' : 'Connexion actuelle active.'}
                 </p>
               </section>
 
@@ -145,8 +149,8 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                   {seed!.message ? ` — ${seed!.message}` : ''}
                 </p>
                 <p className="text-text-muted mb-3">
-                  Rien n'est envoyé automatiquement. Étapes : sauvegarde vérifiée → contrôles → résumé → confirmation → envoi.
-                  Votre base locale n'est jamais modifiée.
+                  Démarrage initial manuel : sauvegarde vérifiée → contrôles → résumé → confirmation → envoi. Ensuite, les changements sont synchronisés automatiquement.
+                  La sauvegarde est vérifiée avant l'installation du suivi des changements.
                 </p>
 
                 <div className="flex flex-wrap gap-2 mb-3">
@@ -205,17 +209,16 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                     <div className="border border-border rounded-lg overflow-hidden mb-3">
                       <table className="w-full">
                         <thead className="bg-muted text-left">
-                          <tr><th className="px-3 py-1.5">Table</th><th className="px-3 py-1.5 text-right">Lignes</th><th className="px-3 py-1.5 text-right">À envoyer</th><th className="px-3 py-1.5 text-right">Total monétaire (TND)</th></tr>
+                          <tr><th className="px-3 py-1.5">Table</th><th className="px-3 py-1.5 text-right">Lignes</th><th className="px-3 py-1.5 text-right">À envoyer</th><th className="px-3 py-1.5 text-right">Totaux par champ (TND)</th></tr>
                         </thead>
                         <tbody>
                           {report.tables.filter(t => t.rows > 0).map(t => {
-                            const sum = Object.values(t.moneySumsMillimes).reduce((a, b) => a + b, 0)
                             return (
                               <tr key={t.name} className="border-t border-border">
                                 <td className="px-3 py-1">{t.name}</td>
                                 <td className="px-3 py-1 text-right">{t.rows}</td>
                                 <td className="px-3 py-1 text-right">{t.seedable}</td>
-                                <td className="px-3 py-1 text-right font-price">{t.moneyColumns.length ? fmtTnd(sum) : '—'}</td>
+                                <td className="px-3 py-1 text-right font-price">{Object.entries(t.moneySumsMillimes).map(([field, sum]) => <div key={field}>{field}: {fmtTnd(sum)}</div>)}</td>
                               </tr>
                             )
                           })}
