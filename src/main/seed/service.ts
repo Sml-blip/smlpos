@@ -9,6 +9,7 @@ import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptu
 import { OutboxDrainer } from './drainer'
 import { PullClient } from './pull'
 import { liveStatus } from './monitor'
+import { prepareEmptyReplica } from './replica'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -411,6 +412,24 @@ export class SeedService {
   }
 
   rejected(): RejectedOp[] { return this.d.ledger.rejected() }
+  async prepareReplica(phrase:string){
+    this.assertIdle()
+    if(phrase!=='JOIN')throw new Error('Type JOIN to replace this empty PC’s initial catalogue with server data')
+    this.checking=true
+    try {
+      const status=await this.status(true),device=status.server?.devices.find(device=>device.device_id===status.deviceId)
+      if(device?.role!=='replica'||status.server?.seed.state!=='seeded')throw new Error('A registered secondary PC and finalized main-PC seed are required')
+      if(captureState(this.d.liveDb(),'replica_join_pending')==='1')return
+      const live=this.d.liveDb(),backup=await createVerifiedBackup(live,this.d.archiveDir)
+      if(!backup.ok)throw new Error('Protection backup verification failed')
+      this.d.ledger.setJson('backup',backup)
+      await this.d.quiesceLegacy?.()
+      installOutbox(live)
+      setCaptureState(live,'install_id',this.d.ledger.installId());setCaptureState(live,'device_id',status.deviceId!)
+      prepareEmptyReplica(live)
+      this.d.ledger.event('replica_prepared',backup.sha256)
+    }finally{this.checking=false}
+  }
   async drainLiveChanges() {
     const client=this.getClient()
     if(!client||this.running||this.checking||this.puller?.busy)return {applied:0,duplicates:0,rejected:0,gated:true,retryAt:0}
@@ -428,11 +447,14 @@ export class SeedService {
     this.checking=true
     try {
     const backup=this.d.ledger.getJson<BackupVerification>('backup'),client=this.getClient()
-    if(!backup?.ok||!client)throw new Error('Register and prepare a verified backup before joining')
+    if(!backup?.ok||!client||captureState(this.d.liveDb(),'replica_join_pending')!=='1')throw new Error('Prepare this secondary PC before joining')
     const verified=await verifyBackupFile(backup.path,null)
     if(!verified.ok||verified.sha256!==backup.sha256)throw new Error('Protection backup changed; prepare it again')
     if(!this.puller)this.puller=new PullClient(this.d.liveDb(),client)
     return await this.puller.bootstrap()
+    }catch(error){
+      if(captureState(this.d.liveDb(),'apply_mute')!==null)setCaptureState(this.d.liveDb(),'pull_last_error',(error instanceof Error?error.message:String(error)).slice(0,300))
+      throw error
     }finally{this.checking=false}
   }
 

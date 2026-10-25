@@ -53,6 +53,10 @@ async function wrap<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
 
 export function registerSeedIpc(legacyQueue: () => { pending: number; failed: number }): void {
   const svc = () => getService(legacyQueue)
+  ipcMain.handle('sync2:prepareReplica', (_e, phrase: string) => wrap(() => svc().prepareReplica(phrase)))
+  ipcMain.handle('sync2:joinReplica', () => wrap(async () => {
+    void svc().bootstrapReplica().catch(() => { /* pull errors are persisted below */ })
+  }))
   ipcMain.handle('sync2:reserveNumber', (_e, table: string, proposed: string) => reserveNumber(getDb(), table, proposed))
   ipcMain.handle('sync2:legacyBegin', () => legacySyncGate.begin())
   ipcMain.handle('sync2:legacyEnd', (_e, token: string) => legacySyncGate.end(String(token)))

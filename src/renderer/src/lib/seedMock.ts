@@ -1,7 +1,7 @@
 import type { SeedApi, SeedPanelStatus } from './seedTypes'
 const status: SeedPanelStatus = {
   connection: 'online', connectionError: null, baseUrl: 'https://example.invalid', deviceId: 'demo-seed', deviceName: 'PC principal (démo)', sessionPersisted: true,
-  live: { prepared: true, enabled: true, backend: 'vps', pending: 12, rejected: 1, pullRejected: 1, cursor: 103, serverSeq: 105, lag: 2, lastPush: new Date().toISOString(), lastPull: new Date().toISOString(), pushError: null, pullError: null, retryAt: 0 },
+  live: { prepared: true, enabled: true, joining: false, backend: 'vps', pending: 12, rejected: 1, pullRejected: 1, cursor: 103, serverSeq: 105, lag: 2, lastPush: new Date().toISOString(), lastPull: new Date().toISOString(), pushError: null, pullError: null, retryAt: 0 },
   server: { server_time: new Date().toISOString(), devices: [
     { device_id: 'demo-seed', name: 'PC principal (démo)', platform: 'win32', role: 'seed', last_seen_at: new Date().toISOString(), online: true },
     { device_id: 'demo-2', name: 'PC Caisse 2 (démo)', platform: 'win32', role: 'replica', last_seen_at: new Date().toISOString(), online: true },
@@ -11,6 +11,7 @@ const status: SeedPanelStatus = {
 }
 const ok = async () => ({ ok: true as const, data: undefined })
 export const seedMock: SeedApi = {
+  sync2PrepareReplica: ok, sync2JoinReplica: ok,
   seedStatus: async () => ({ ok: true, data: status }), seedRegister: ok,
   seedBackupAndCheck: async () => ({ ok: false, error: 'Prévisualisation : aucune base réelle.' }),
   seedRecheck: async () => ({ ok: false, error: 'Prévisualisation : aucune base réelle.' }),

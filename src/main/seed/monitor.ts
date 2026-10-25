@@ -9,6 +9,7 @@ export function liveStatus(db: Database.Database) {
   const head = captureState(db, 'server_seq')
   return {
     prepared: ready, enabled: canDrainOutbox(db),
+    joining: captureState(db, 'replica_join_pending') === '1',
     backend: captureState(db, 'sync_backend') === 'vps' ? 'vps' as const : 'legacy' as const,
     pending: ready ? count("SELECT count(*) n FROM outbox WHERE sent_at IS NULL AND (last_error IS NULL OR last_error NOT LIKE 'rejected:%')") : 0,
     rejected: ready ? count("SELECT count(*) n FROM outbox WHERE sent_at IS NULL AND last_error LIKE 'rejected:%'") : 0,

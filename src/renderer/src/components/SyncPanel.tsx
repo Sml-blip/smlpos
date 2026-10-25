@@ -27,6 +27,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [phrase, setPhrase] = useState('')
+  const [joinPhrase, setJoinPhrase] = useState('')
   const [form, setForm] = useState({ url: '', token: '', name: '' })
   const [rejected, setRejected] = useState<SeedRejectedOp[] | null>(null)
   const alive = useRef(true)
@@ -65,6 +66,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
   const running = seed?.state === 'running' || seed?.state === 'finalizing'
   const pct = seed && seed.progress.total > 0 ? Math.min(100, Math.round((seed.progress.sent / seed.progress.total) * 100)) : 0
   const online = st?.connection === 'online'
+  const replica = st?.server?.devices.find(device => device.device_id === st.deviceId)?.role === 'replica'
   const needsRegistration = st?.connection === 'unconfigured' || st?.connection === 'unregistered' || st?.connection === 'auth_failed'
 
   return (
@@ -141,8 +143,18 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                 </p>
               </section>
 
+              {replica && <section className="border border-border rounded-lg p-3 space-y-2">
+                <h4 className="font-bold">Poste secondaire</h4>
+                <p>Une sauvegarde vérifiée conserve le catalogue initial. Un poste contenant des ventes ou un historique métier ne sera pas effacé. Les écritures métier sont verrouillées pendant la réception.</p>
+                {!st.live.joining && !st.live.enabled && <div className="flex gap-2">
+                  <input aria-label="Confirmation de préparation du poste secondaire" className="border rounded px-2 py-1 w-24" placeholder="JOIN" value={joinPhrase} onChange={event => setJoinPhrase(event.target.value)} />
+                  <button disabled={!!busy || joinPhrase !== 'JOIN'} onClick={() => act('prepare-replica', () => api.sync2PrepareReplica(joinPhrase))} className="border rounded px-2 py-1 disabled:opacity-50">Sauvegarder et préparer ce poste</button>
+                </div>}
+                {st.live.joining && <button disabled={!!busy} onClick={() => act('join-replica', () => api.sync2JoinReplica())} className="border rounded px-2 py-1">Recevoir / reprendre les données du serveur</button>}
+                {st.live.enabled && <p className="text-green-700">Réception initiale terminée. Synchronisation continue active.</p>}
+              </section>}
               {/* ── Données (seed) ── */}
-              <section>
+              {!replica && <section>
                 <h4 className="font-bold mb-1">2. Envoi des données de ce poste (poste principal)</h4>
                 <p className="text-text-muted mb-2">
                   État : <strong>{STATE_LABEL[seed!.state] ?? seed!.state}</strong>
@@ -155,7 +167,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
 
                 <div className="flex flex-wrap gap-2 mb-3">
                   <button
-                    disabled={!!busy || running}
+                    disabled={!!busy || running || st.live.enabled}
                     onClick={() => act('check', () => api.seedBackupAndCheck())}
                     className="px-3 py-2 rounded-lg border border-border font-semibold flex items-center gap-2 disabled:opacity-50"
                   >
@@ -163,7 +175,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                     Sauvegarder et vérifier
                   </button>
                   {seed!.backup?.ok && (
-                    <button disabled={!!busy || running} onClick={() => act('recheck', () => api.seedRecheck())} className="px-3 py-2 rounded-lg border border-border flex items-center gap-2 disabled:opacity-50">
+                    <button disabled={!!busy || running || st.live.enabled} onClick={() => act('recheck', () => api.seedRecheck())} className="px-3 py-2 rounded-lg border border-border flex items-center gap-2 disabled:opacity-50">
                       <RefreshCw size={12} /> Relancer les contrôles
                     </button>
                   )}
@@ -265,12 +277,12 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 )}
 
-                {(seed!.state === 'done' || seed!.state === 'needs_review') && (
+                {!st.live.enabled && (seed!.state === 'done' || seed!.state === 'needs_review') && (
                   <button onClick={() => act('newpass', () => api.seedNewPass())} className="px-3 py-2 rounded-lg border border-border">
                     Nouvelle passe (n'enverra que les lignes modifiées)
                   </button>
                 )}
-              </section>
+              </section>}
 
               {/* ── Opérations rejetées ── */}
               <section>

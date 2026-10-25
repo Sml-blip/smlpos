@@ -14,7 +14,7 @@ export const MONEY_UNIT = 'millime'
 export const EXCLUDED_TABLES = new Set(['sync_queue', 'saved_paniers', 'inventory_repair_ledger', 'outbox', 'sync_state', 'pull_rejects'])
 
 /** One table selection rule for snapshot export and transactional live capture. */
-export function syncedTableNames(names: string[]): string[] { return tableOrder(names.filter(name => !EXCLUDED_TABLES.has(name))) }
+export function syncedTableNames(names: string[]): string[] { return tableOrder(names.filter(name => !name.startsWith('sqlite_') && !EXCLUDED_TABLES.has(name))) }
 export const COUNTER_COLUMNS: Record<string, readonly string[]> = {
   produits: ['stock_actuel'], clients: ['solde_credit', 'solde_fidelite'], fournisseurs: ['solde_du'],
   organisations: ['credit_total'], personnels: ['avance_solde', 'credit_solde'],

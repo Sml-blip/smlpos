@@ -111,7 +111,7 @@ export class PullClient {
   }
   async bootstrap(){
     if(this.running)throw new Error('Pull is already running')
-    if(captureState(this.db,'bootstrap_complete')==='1')return
+    if(captureState(this.db,'bootstrap_complete')==='1'&&captureState(this.db,'replica_join_pending')!=='1')return
     this.running=true
     try{
       const preflight=await this.client.preflight();if(preflight.state!=='seeded'||preflight.contract_version!==CONTRACT_VERSION)throw new Error('Main PC seed or contract is not ready')
@@ -142,9 +142,15 @@ export class PullClient {
         }
       }
       this.db.transaction(()=>{
+        const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')
+        const retries=this.db.prepare('SELECT server_seq,payload FROM pull_rejects WHERE server_seq<0').all() as {server_seq:number;payload:string}[]
+        retries.sort((a,b)=>names.indexOf((JSON.parse(a.payload) as LiveChange).table)-names.indexOf((JSON.parse(b.payload) as LiveChange).table))
+        for(const retry of retries)if(this.isolated(JSON.parse(retry.payload) as LiveChange,true)!=='rejected')this.db.prepare('DELETE FROM pull_rejects WHERE server_seq=?').run(retry.server_seq)
         const rejected=!!this.db.prepare('SELECT 1 FROM pull_rejects LIMIT 1').get()
-        setCaptureState(this.db,'pull_cursor',captureState(this.db,'bootstrap_as_of')!);setCaptureState(this.db,'bootstrap_complete','1')
+        setCaptureState(this.db,'pull_cursor',captureState(this.db,'bootstrap_as_of')!);setCaptureState(this.db,'bootstrap_complete',rejected?'0':'1')
         setCaptureState(this.db,'seed_finalized_at',new Date().toISOString());setCaptureState(this.db,'outbox_drain_enabled',rejected?'0':'1')
+        setCaptureState(this.db,'replica_join_pending',rejected?'1':'0')
+        setCaptureState(this.db,'apply_mute',mute);setCaptureState(this.db,'pull_last_error',rejected?'Initial reception has rejected rows; review the diagnostic before retrying':'')
       })()
     }finally{this.running=false}
   }

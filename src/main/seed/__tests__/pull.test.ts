@@ -13,6 +13,7 @@ import { captureState,openVerifiedGate,setCaptureState } from '../gate'
 import { MockBackend } from './mockBackend'
 import { seedProductsIfEmpty } from '../../seedProducts'
 import { reserveNumber } from '../numbering'
+import { prepareEmptyReplica } from '../replica'
 function fixture(empty=false,shared?:MockBackend,device='dev-2') {
  const directory=mkdtempSync(join(tmpdir(),'sml-pull-')),path=join(directory,'fixture.db');let db=new Database(path)
  db.exec('CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL)')
@@ -27,6 +28,25 @@ function fixture(empty=false,shared?:MockBackend,device='dev-2') {
 const stock=(db:Database.Database)=>(db.prepare("SELECT stock_actuel n FROM produits WHERE id='p'").get() as {n:number}).n
 const queued=(db:Database.Database)=>(db.prepare('SELECT count(*) n FROM outbox').get() as {n:number}).n
 const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1})
+
+test('explicit secondary-PC preparation refuses business history, locks writes until a restart-safe bootstrap completes', async () => {
+ const f=fixture();try{
+  f.db.exec("CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT)")
+  f.backend.tableSpec.app_settings={pk:'key',columns:['key','value']}
+  f.db.exec("INSERT INTO ventes VALUES('history','VTE-HISTORY',10)")
+  assert.throws(()=>prepareEmptyReplica(f.db),/business history/)
+  assert.equal(stock(f.db),100)
+  f.db.exec("DELETE FROM ventes; DELETE FROM outbox")
+  prepareEmptyReplica(f.db)
+  assert.throws(()=>f.db.exec("INSERT INTO ventes VALUES('bad','VTE-BAD',10)"),/Finish joining/)
+  assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,0)
+  f.reopen();assert.throws(()=>f.db.exec("INSERT INTO ventes VALUES('bad','VTE-BAD',10)"),/Finish joining/)
+  await new PullClient(f.db,f.client()).bootstrap()
+  assert.equal(stock(f.db),100);assert.equal(captureState(f.db,'replica_join_pending'),'0');assert.equal(queued(f.db),0)
+  f.db.exec("INSERT INTO ventes VALUES('new','VTE-NEW',10)")
+  assert.equal(queued(f.db),1)
+ }finally{f.close()}
+})
 
 test('REPLACE delete/UPSERT across pages and restart restores counter before applying its difference', () => {
  const f=fixture();try{

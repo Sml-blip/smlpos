@@ -113,6 +113,7 @@ export { countProductsInDbFile } from './dbProbe'
 /** If the active DB is missing/empty, copy the best legacy backup or sibling DB we can find. */
 export function recoverLegacyDatabaseIfNeeded(): { recovered: boolean; from?: string; productCount?: number } {
   const activePath = getActiveDbPath()
+  if (existsSync(activePath)) return { recovered: false }
   const activeCount = countProductsInDbFile(activePath)
   if (activeCount !== null && activeCount > 0) return { recovered: false }
 

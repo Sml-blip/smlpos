@@ -28,6 +28,8 @@ const api = {
 
   // Seed / device sync panel (new backend)
   sync2Issues: () => ipcRenderer.invoke('sync2:issues'),
+  sync2PrepareReplica: (phrase: string) => ipcRenderer.invoke('sync2:prepareReplica', phrase),
+  sync2JoinReplica: () => ipcRenderer.invoke('sync2:joinReplica'),
   sync2ReserveNumber: (table: string, proposed: string) => ipcRenderer.invoke('sync2:reserveNumber', table, proposed),
   sync2LegacyBegin: () => ipcRenderer.invoke('sync2:legacyBegin'),
   sync2LegacyEnd: (token: string) => ipcRenderer.invoke('sync2:legacyEnd', token),

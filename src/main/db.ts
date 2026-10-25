@@ -55,6 +55,15 @@ export const SCHEMA_VERSION = '1.10.10'
 
 export function initDatabase() {
   const db = getDb()
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='sync_state'").get()) {
+    const joining = db.prepare("SELECT v FROM sync_state WHERE k='replica_join_pending'").get() as {v:string}|undefined
+    if (joining?.v === '1') {
+      const version = db.prepare("SELECT value FROM app_settings WHERE key='schema_version'").get() as {value:string}|undefined
+      if (version?.value !== SCHEMA_VERSION) throw new Error('Finish the secondary-PC join before applying a database schema update')
+      db.pragma('foreign_keys = ON')
+      return // Keep a partial bootstrap intact: no defaults, catalogue or backfills.
+    }
+  }
   const dbPath = dbFilePath
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
