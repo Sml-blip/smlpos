@@ -20,10 +20,12 @@ The client's money column list is `src/main/seed/tables.ts → MONEY_COLUMNS`.
 ### `POST /v1/devices/register` (no auth)
 ```json
 { "enrollment_token": "…", "install_id": "uuid", "name": "PC Caisse 1",
-  "platform": "win32", "app_version": "1.9.1001", "schema_version": "1.10.2" }
+  "platform": "win32", "app_version": "1.9.1039", "schema_version": "1.10.10" }
 ```
-→ `200 { "device_id": "…", "session": { "access_token", "refresh_token", "expires_at" } }`
+→ `200 { "device_id": "…", "number_code": "PC1", "session": { "access_token", "refresh_token", "expires_at" } }`
 `403 bad_token` for an invalid/used token.
+`number_code` is assigned once by the server and is used only for newly created document numbers. Existing numbers
+are preserved. Enrollment and refresh endpoints are the only unauthenticated device endpoints.
 
 ### `POST /v1/auth/refresh` (no auth)
 `{ "refresh_token": "…" }` → a new `session`. **Refresh tokens rotate**: the old one is invalid after use.
@@ -32,9 +34,9 @@ The client's money column list is `src/main/seed/tables.ts → MONEY_COLUMNS`.
 ### `GET /v1/status`
 ```json
 { "server_time": "ISO", "contract_version": 1,
-  "devices": [ { "device_id", "name", "platform", "role?", "app_version?", "last_seen_at": "ISO|null", "online?": true } ],
-  "seed": { "state": "empty|seeding|seeded", "install_id": "uuid|null", "rows?": 0 },
-  "rejected_count?": 0 }
+  "schema_version": "1.10.10", "min_client_version": "1.9.1039", "server_seq": 0,
+  "devices": [ { "device_id", "number_code", "name", "platform", "role", "app_version", "last_seen_at": "ISO|null", "online": true } ],
+  "seed": { "state": "empty|seeding|seeded", "install_id": "uuid|null" } }
 ```
 Any authenticated call should update the calling device's `last_seen_at`. The panel polls this every ~4 s.
 
@@ -54,7 +56,9 @@ accept; do not make it guess.
 `{ "install_id", "report_digest", "expected": { "<table>": { "rows": n, "money_sums_millimes": { "<col>": n }, "digest": "…" } } }`
 → `{ "seed_id": "…" }`. Must be idempotent on `report_digest` (header `Idempotency-Key: begin:<digest>`).
 The server must refuse (`409`) if `state != empty` and `install_id` differs from the stored one — one backend never
-mixes two installations' data. A second pass by the same `install_id` is allowed (delta re-seed).
+mixes two installations' data. Retries by the same `install_id` and `report_digest` resume the same unfinished seed.
+After successful finalization the seed is immutable: another seed pass is refused, and later changes must use the
+live outbox. This prevents an old snapshot from overwriting edits already applied through live sync.
 
 ### `POST /v1/seed/batches`   (header `Idempotency-Key: <batch_id>`)
 ```json
@@ -92,16 +96,15 @@ mismatch. Only `ok: true` with zero locally rejected rows ends in the `done` sta
 Primary key is `id` for every table except `app_settings` (`key`). Existing ids are TEXT and are **not all UUIDs**
 (`op-hamdi`, `cat-01`, `svc-enda`, plus UUIDs): accept any non-empty string up to 128 chars. Do not rewrite ids.
 
-## Open points for the backend owner
+## Preflight checks before a business seed
 
-1. Tables the client will send beyond the legacy Supabase list: `avances_clients`, `demandes_clients`,
-   `mouvements_fidelite`, `ajustements_fournisseurs`, `serial_numbers`, `reparation_status_history`,
-   `fournisseur_commerciaux` (whatever exists in the user's database). Declare them in `preflight.tables` or the
-   dry run will block on `table_unknown_to_server` — by design.
-2. `documents` carries void/credit-note state (`revoque_*`, `avoir_id`, `document_origine_id`, `annule_motif`) and
-   `lignes_*` carry `numero_serie`. These must be accepted, not dropped; the legacy Supabase sync stripped them.
-3. Any new REAL column added to the app later must be classified in `tables.ts` (money or rate) or the dry run
-   blocks — silent guessing about money is not allowed.
+1. The production schema contract is checked against every table and column on the seed PC before upload. A mismatch
+   blocks the seed. The server contract is generated from the current synthetic schema; the main PC's real database
+   has not been inspected or uploaded.
+2. `documents` keeps its void and credit-note state (`revoque_*`, `avoir_id`, `document_origine_id`, `annule_motif`)
+   and line items keep `numero_serie`; the v1 schema explicitly accepts these fields.
+3. New REAL columns must be classified in `tables.ts` as money or rate, then the audited server schema must be
+   regenerated. The dry run blocks unknown columns rather than guessing.
 
 ## Live push — Step 3
 
@@ -119,7 +122,11 @@ Response: `{"results":[{"seq":1201,"status":"applied"},{"seq":1202,"status":"dup
 - Refuse live writes before seed finalization. Registration must preserve an installation's device identity; the client refuses to relabel captured operations after an identity change.
 - Client marks sent only after a complete, validated reply, in one local transaction. Rejects stay unsent with `rejected:` errors and are excluded from automatic retry pages. Network/HTTP failures retain operations and use persisted backoff. No outbox pruning is implemented; audit rows remain on disk.
 
-Backend-owner open points: this endpoint currently exists only in the in-process mock. The live service must implement the transaction/deduplication contract, stable enrollment identity, counter ledger, authoritative column validation, immutable financial records and UNIQUE-conflict handling before release. SQLite REPLACE may produce DELETE followed by UPSERT of the same mutable identity; preserve their sequence semantics. No new endpoint besides `/v1/sync/push` was added in Step 3.
+The production v1 API implements this contract with durable `(device_id, seq)` receipts and an append-only server
+change log. It validates audited columns, integer millimes, device-number prefixes and finalized financial values;
+per-operation conflicts are reported without dropping later operations. SQLite REPLACE is handled as ordered delete
+and upsert events, with counter values preserved. Automated contract coverage runs against an isolated synthetic
+PostgreSQL schema.
 
 ## Bootstrap and pull — Step 4
 
@@ -128,4 +135,12 @@ Backend-owner open points: this endpoint currently exists only in the in-process
 - The server must commit data, `(device_id,seq)` deduplication and its change log atomically. Allocate ordered server sequences consistently with commit visibility. Duplicates/rejections create no change events. Enforce device authentication and business isolation. Keep snapshot anchors valid across the complete join; use a new sequence epoch for reseeding rather than reusing an anchor for different state.
 - Client applies changes/cursor atomically with capture muted, quarantines failed rows, and keeps later rows moving. Own DELTAs and redundant own UPSERTs are skipped; a different own UPSERT or own DELETE is applied in server order to restore convergence after an intervening remote write. The `as_of_seq` request parameter and this own-origin clarification are explicit additions to the earlier outline, not hidden assumptions.
 
-Backend-owner open points: these GET endpoints exist only in the mock. Real snapshot retention/expiry, durable pagination and change-log history still need production implementation. The polling fallback is implemented; SSE nudges are not. Bootstrap rejects nonempty business databases and pauses if local writes occur while joining; no automatic business-data wipe occurs.
+The production API implements durable, per-device frozen bootstrap snapshots (7-day expiry), binary primary-key
+pagination and an ordered PostgreSQL change log. Clients poll every 15 seconds; the optional SSE nudge endpoint is
+not implemented yet. Bootstrap accepts only an explicitly prepared empty replica and never wipes existing business
+history. Finalized invoices, sales and payments are immutable; correct them with an existing credit-note or reversal
+workflow so the audit remains append-only.
+
+Daily cash rows use `caisse:YYYY-MM-DD` for new entries. When a device syncs that date while the server already has
+a legacy row, the server aliases the new key to the historical row, keeps its opening balance and applies only the
+counter deltas. Historical IDs and document numbers are never rewritten.

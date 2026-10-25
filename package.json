@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.1038",
+  "version": "1.9.1039",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -109,7 +109,9 @@
       "**/node_modules/zlibjs/**/*"
     ],
     "files": [
-      "out/**/*",
+      "out/main/**/*",
+      "out/preload/**/*",
+      "out/renderer/**/*",
       "node_modules/**/*",
       "resources/**/*",
       "!node_modules/**/*.{ts,map}",
