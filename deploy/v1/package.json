@@ -1,0 +1,1 @@
+{"name":"smlpos-v1-sync","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test test/*.test.mjs"},"dependencies":{"@hono/node-server":"2.1.5","hono":"4.13.13","pg":"8.23.1"}}
