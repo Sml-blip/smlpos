@@ -2,8 +2,8 @@ import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
 import {
   CONTRACT_VERSION, DRIFT_TOLERANCE_MILLIMES, EXCLUDED_TABLES, LOCAL_ONLY_SETTING_KEYS, MONEY_UNIT,
-  SECRET_SETTING_PATTERN, classifyColumn, moneyColumnsOf, primaryKeyOf, tableOrder, toMillimes,
-  type ColumnKind,
+  SECRET_SETTING_PATTERN, classifyColumn, moneyColumnsOf, primaryKeyOf, toMillimes,
+  type ColumnKind, syncedTableNames,
 } from './tables'
 import { listUserTables } from './snapshot'
 
@@ -170,7 +170,7 @@ export function buildReport(
   const notes: string[] = []
   const all = listUserTables(backupDb)
   const excludedTables = all.filter(t => EXCLUDED_TABLES.has(t))
-  const names = tableOrder(all.filter(t => !EXCLUDED_TABLES.has(t)))
+  const names = syncedTableNames(all)
   const tables: TableReport[] = []
   const excludedSettingKeys: string[] = []
 

@@ -11,7 +11,15 @@ export const CONTRACT_VERSION = 1
 export const MONEY_UNIT = 'millime'
 
 /** Local-only technical tables that are never seeded. */
-export const EXCLUDED_TABLES = new Set(['sync_queue', 'saved_paniers'])
+export const EXCLUDED_TABLES = new Set(['sync_queue', 'saved_paniers', 'inventory_repair_ledger', 'outbox', 'sync_state', 'pull_rejects'])
+
+/** One table selection rule for snapshot export and transactional live capture. */
+export function syncedTableNames(names: string[]): string[] { return tableOrder(names.filter(name => !EXCLUDED_TABLES.has(name))) }
+export const COUNTER_COLUMNS: Record<string, readonly string[]> = {
+  produits: ['stock_actuel'], clients: ['solde_credit', 'solde_fidelite'], fournisseurs: ['solde_du'],
+  organisations: ['credit_total'], personnels: ['avance_solde', 'credit_solde'],
+  caisse_interne: ['total_entrees', 'total_sorties'],
+}
 
 /** app_settings keys that stay on the machine (devices, secrets, local paths). */
 export const LOCAL_ONLY_SETTING_KEYS = new Set([
@@ -19,9 +27,11 @@ export const LOCAL_ONLY_SETTING_KEYS = new Set([
   'r2_enabled', 'r2_endpoint', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key',
   'r2_machine_id', 'r2_last_upload_at', 'r2_last_upload_key', 'r2_last_upload_error',
   'supabase_keepalive_at', 'supabase_keepalive_error', 'schema_version',
+  'device_id', 'install_id', 'backend_url', 'sync_backend', 'pull_cursor', 'apply_mute', 'seed_finalized_at',
 ])
 /** Anything that looks like a credential is never uploaded, whatever its key. */
-export const SECRET_SETTING_PATTERN = /(secret|token|password|passwd|pin|api[_-]?key|access[_-]?key|private)/i
+export const SECRET_SETTING_FRAGMENTS = ['secret', 'token', 'password', 'passwd', 'pin', 'api_key', 'api-key', 'apikey', 'access_key', 'access-key', 'accesskey', 'private']
+export const SECRET_SETTING_PATTERN = new RegExp(SECRET_SETTING_FRAGMENTS.join('|'), 'i')
 
 /** Parent tables first. Unlisted tables go last (priority 45). */
 export const TABLE_PRIORITY: Record<string, number> = {

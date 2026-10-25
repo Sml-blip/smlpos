@@ -38,8 +38,10 @@ function serverTablesFrom(db: Database.Database) {
 }
 
 let n = 0
+const openedLedgers: SeedLedger[] = []
 function newService(backend: MockBackend, name = `t${++n}`) {
   const ledger = new SeedLedger(join(TMP, `${name}.ledger.db`))
+  openedLedgers.push(ledger)
   const svc = new SeedService({
     liveDb: getDb, ledger, archiveDir: join(TMP, `archive-${name}`), secrets, appVersion: '1.9.1001',
     platform: 'win32', legacyQueue: () => ({ pending: 3, failed: 1 }), fetchImpl: backend.fetch, sleep: async () => {},
@@ -71,6 +73,7 @@ before(() => {
 })
 
 after(() => {
+  for (const ledger of openedLedgers) ledger.close()
   closeDatabase()
   rmSync(TMP, { recursive: true, force: true })
 })
@@ -189,6 +192,7 @@ test('crash/outage mid-upload is resumable with no duplicates and no loss', asyn
 test('a restart while running never resumes by itself', async () => {
   const be = new MockBackend({ tables: serverTablesFrom(getDb()) })
   const ledger = new SeedLedger(join(TMP, 'restart.ledger.db'))
+  openedLedgers.push(ledger)
   ledger.setState('running')
   const svc = new SeedService({
     liveDb: getDb, ledger, archiveDir: join(TMP, 'a-r'), secrets, appVersion: '1', platform: 'win32',
