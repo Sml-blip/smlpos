@@ -451,6 +451,7 @@ export class SeedService {
       } else {
         try {
           server = await this.getClient()!.status()
+          if (Number.isSafeInteger(server.server_seq) && server.server_seq! >= 0 && captureState(this.d.liveDb(), 'apply_mute') !== null) setCaptureState(this.d.liveDb(), 'server_seq', String(server.server_seq))
           connection = 'online'
         } catch (e) {
           connection = e instanceof BackendError && (e.status === 401 || e.status === 403) ? 'auth_failed' : 'offline'

@@ -28,6 +28,15 @@ const stock=(db:Database.Database)=>(db.prepare("SELECT stock_actuel n FROM prod
 const queued=(db:Database.Database)=>(db.prepare('SELECT count(*) n FROM outbox').get() as {n:number}).n
 const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1})
 
+test('REPLACE delete/UPSERT across pages and restart restores counter before applying its difference', () => {
+ const f=fixture();try{
+  new PullClient(f.db,f.client()).applyPage({changes:[{server_seq:1,origin_device:'dev-1',table:'produits',pk:'p',op:'DELETE'}],next_seq:1,has_more:true})
+  f.reopen()
+  new PullClient(f.db,f.client()).applyPage({changes:[{server_seq:2,origin_device:'dev-1',table:'produits',pk:'p',op:'UPSERT',row:{id:'p',nom:'Replaced',reference:'P',prix_vente:12000}},{...delta(3),value:-2}],next_seq:3,has_more:false})
+  assert.equal(stock(f.db),98);assert.equal(queued(f.db),0)
+ }finally{f.close()}
+})
+
 test('two offline PCs reserve distinct sale numbers and pull all twenty sales without a UNIQUE collision', async () => {
  const a=fixture(false,undefined,'10000000-0000-4000-8000-000000000001'),b=fixture(false,a.backend,'20000000-0000-4000-8000-000000000002')
  try {

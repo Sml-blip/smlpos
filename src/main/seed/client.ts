@@ -18,6 +18,9 @@ export interface DeviceInfo {
 }
 
 export interface ServerStatus {
+  server_seq?: number
+  min_client_version?: string
+  schema_version?: string
   server_time: string
   contract_version: number
   devices: DeviceInfo[]

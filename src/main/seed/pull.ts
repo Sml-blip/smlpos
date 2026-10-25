@@ -18,7 +18,12 @@ export class PullClient {
     if(table==='app_settings'&&!isSeedableSetting(pk))return false
     const key=primaryKeyOf(table),columns=describeColumns(this.db,table),allowed=new Set(columns.map(column=>column.name))
     const own=!bootstrap&&change.origin_device===captureState(this.db,'device_id')
-    if(change.op==='DELETE'){this.db.prepare(`DELETE FROM ${q(table)} WHERE ${q(key)}=?`).run(pk);return true}
+    const counterKey=`deleted_counters:${JSON.stringify([table,pk])}`
+    if(change.op==='DELETE'){
+      const row=this.db.prepare(`SELECT * FROM ${q(table)} WHERE ${q(key)}=?`).get(pk) as Record<string,unknown>|undefined
+      if(row&&(COUNTER_COLUMNS[table]??[]).length)setCaptureState(this.db,counterKey,JSON.stringify(Object.fromEntries(COUNTER_COLUMNS[table].map(field=>[field,row[field]??0]))))
+      this.db.prepare(`DELETE FROM ${q(table)} WHERE ${q(key)}=?`).run(pk);return true
+    }
     if(change.op==='DELTA'){
       if(!(COUNTER_COLUMNS[table]??[]).includes(change.field??'')||!Number.isSafeInteger(change.value))throw new Error('Invalid delta')
       if(own)return false // Already applied by this device's original transaction.
@@ -42,12 +47,24 @@ export class PullClient {
         row[column]=value
       }
     }
+    if(table==='caisse_interne'&&row.date_journal){
+      const daily=this.db.prepare('SELECT id FROM caisse_interne WHERE date_journal=?').get(row.date_journal) as {id:string}|undefined
+      // The server chooses the historical identity for a shared calendar day.
+      // Movements reference date_journal, so no business FK is rewritten.
+      if(daily&&daily.id!==pk)this.db.prepare('UPDATE caisse_interne SET id=? WHERE id=?').run(pk,daily.id)
+    }
     const current=this.db.prepare(`SELECT * FROM ${q(table)} WHERE ${q(key)}=?`).get(pk) as Record<string,unknown>|undefined
     if(own&&current&&Object.entries(row).every(([column,value])=>current[column]===value))return false
     // Apply server order even with unsent local edits. In particular an own
     // UPSERT may need to restore state overwritten by an earlier remote event.
     const names=Object.keys(row),updates=names.filter(column=>column!==key)
     this.db.prepare(`INSERT INTO ${q(table)}(${names.map(q).join(',')}) VALUES(${names.map(()=>'?').join(',')}) ON CONFLICT(${q(key)}) ${updates.length?`DO UPDATE SET ${updates.map(column=>`${q(column)}=excluded.${q(column)}`).join(',')}`:'DO NOTHING'}`).run(...Object.values(row))
+    const saved=captureState(this.db,counterKey)
+    if(!current&&!bootstrap&&saved){
+      const counters=JSON.parse(saved) as Record<string,number>,fields=(COUNTER_COLUMNS[table]??[]).filter(field=>Object.hasOwn(counters,field))
+      if(fields.length)this.db.prepare(`UPDATE ${q(table)} SET ${fields.map(field=>`${q(field)}=?`).join(',')} WHERE ${q(key)}=?`).run(...fields.map(field=>counters[field]),pk)
+    }
+    this.db.prepare('DELETE FROM sync_state WHERE k=?').run(counterKey)
     return true
   }
   private isolated(change:LiveChange,bootstrap=false){
