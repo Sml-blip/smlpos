@@ -1,0 +1,20 @@
+name: pos-v1
+services:
+  v1:
+    build: .
+    container_name: pos-v1-api
+    restart: unless-stopped
+    env_file: .env
+    mem_limit: 512m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    networks: [internal]
+    ports: ["127.0.0.1:13001:3000"]
+networks:
+  internal:
+    external: true
+    name: pos-sync-staging_internal

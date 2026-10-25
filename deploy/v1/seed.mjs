@@ -39,7 +39,7 @@ export function seedRoutes(app,pool){
  })
  app.post('/v1/seed/batches',async c=>{
   const input=await c.req.json(),device=c.get('device'),definition=schema.tables[input.table]
-  if(!definition||!Array.isArray(input.rows)||!input.rows.length||input.rows.length>500||Buffer.byteLength(JSON.stringify(input))>900000)throw new Fault(422,'invalid_batch')
+  if(!Object.hasOwn(schema.tables,input.table)||!Array.isArray(input.rows)||!input.rows.length||input.rows.length>500||Buffer.byteLength(JSON.stringify(input))>900000)throw new Fault(422,'invalid_batch')
   const money=definition.columns.filter(column=>column.kind==='money').map(column=>column.name).sort()
   if(canonical([...(input.money_columns??[])].sort())!==canonical(money))throw new Fault(422,'money_coverage')
   return c.json(await transaction(pool,async db=>{
@@ -71,6 +71,7 @@ export function seedRoutes(app,pool){
   return c.json(await transaction(pool,async db=>{
    const job=await seedJob(db,c.get('device'),input.seed_id),diffs=[]
    if(canonical(input.expected)!==canonical(job.expected))throw new Fault(409,'report_changed')
+   if(job.state==='seeded')return {ok:true,diffs:[]} // Durable verification receipt survives a lost final ACK and later live writes.
    for(const [table,expected] of Object.entries(job.expected)){
     const sums=Object.fromEntries(Object.keys(expected.money_sums_millimes).map(key=>[key,0n])),digest=createHash('sha256');let count=0,after=''
     while(true){

@@ -14,7 +14,9 @@ export function createApp(pool,options={}){
   console.error(JSON.stringify({event:'v1_failure',type:error.constructor.name,code:error.code??null}))
   return c.json({code:'server_error',message:'Service temporarily unavailable'},500)
  })
- app.get('/health',async c=>{await pool.query('SELECT 1');return c.json({ok:true,contract_version:1,minimum_version:options.minimumVersion??'1.9.1039'})})
+ const health=async c=>{await pool.query('SELECT 1');return c.json({ok:true,contract_version:1,minimum_version:options.minimumVersion??'1.9.1039',schema_version:'1.10.10'})}
+ app.get('/health',health)
+ app.get('/v1/health',health)
  authRoutes(app,pool,options);seedRoutes(app,pool);syncRoutes(app,pool)
  return app
 }

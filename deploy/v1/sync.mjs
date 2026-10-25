@@ -1,9 +1,9 @@
 import { Fault,schema,transaction,one,validateRow,text,positive,sha,canonical } from './db.mjs'
-const immutableFields={ventes:['numero','total_ttc','sous_total','total_remises'],factures_clients:['numero','total_ht','total_tva','total_ttc'],paiements_fournisseurs:['facture_id','fournisseur_id','montant'],remboursements_ventes:['vente_id','montant'],credits_clients:['client_id','montant'],mouvements_fidelite:['client_id','montant'],mouvements_personnels:['personnel_id','montant']}
+const immutableFields={ventes:['numero','total_ttc','sous_total','total_remises'],factures_clients:['numero','total_ht','total_tva','total_ttc'],paiements_fournisseurs:['facture_id','fournisseur_id','montant'],remboursements_ventes:['vente_id','montant'],credits_clients:['client_id','type','montant'],mouvements_fidelite:['client_id','montant'],mouvements_personnels:['personnel_id','montant']}
 const payload=async(db,table,pk)=>one(db,'SELECT * FROM v1_rows WHERE table_name=$1 AND pk=$2',[table,pk])
 async function apply(db,device,op){
  const definition=schema.tables[op.table];text(op.pk);text(op.at,128)
- if(!definition)throw new Fault(422,'unknown_table')
+ if(!Object.hasOwn(schema.tables,op.table))throw new Fault(422,'unknown_table')
  let pk=op.pk
  if(op.table==='caisse_interne'){
   const alias=await one(db,'SELECT canonical FROM v1_aliases WHERE table_name=$1 AND alias=$2',[op.table,pk]);if(alias)pk=alias.canonical
@@ -13,8 +13,10 @@ async function apply(db,device,op){
   }
  }
  const old=await payload(db,op.table,pk),change={table:op.table,pk,op:op.op};let row
+ const frozen=op.table==='documents'&&['FACTURE_VENTE','FACTURE_JOURNALIERE_F','FACTURE_ACHAT','AVOIR'].includes(old?.payload.type_document)
+ const financial=immutableFields[op.table]??(frozen?['numero','type_document','total_ht','total_tva','total_ttc','timbre','total_remise','ht_7','tva_7','ht_19','tva_19']:null)
  if(op.op==='DELETE'){
-  if(immutableFields[op.table]&&old&&!old.deleted)throw new Fault(422,'immutable_financial_record','Use a reversal or credit note')
+  if(financial&&old&&!old.deleted)throw new Fault(422,'immutable_financial_record','Use a reversal or credit note')
   if(old)await db.query('UPDATE v1_rows SET deleted=true,deleted_by=$3,deleted_seq=$4 WHERE table_name=$1 AND pk=$2',[op.table,pk,device.id,op.seq])
  }else if(op.op==='DELTA'){
   if(!definition.counters.includes(op.field)||!Number.isSafeInteger(op.value))throw new Fault(422,'invalid_delta')
@@ -24,8 +26,9 @@ async function apply(db,device,op){
   row={...old.payload,[op.field]:value};change.field=op.field;change.value=op.value
  }else if(op.op==='UPSERT'){
   if(validateRow(op.table,op.row,{live:true})!==op.pk)throw new Fault(422,'identity_mismatch')
+  if(!old&&['ventes','reparations','factures_clients','documents','ventes_en_ligne','rapports_caisse','avances_clients'].includes(op.table)&&typeof op.row.numero==='string'&&!op.row.numero.includes(`${device.number_code}-`)&&!op.row.numero.includes(`${device.id}-`))throw new Fault(422,'device_number_required')
   if(old?.deleted&&(old.deleted_by!==device.id||Number(old.deleted_seq)!==op.seq-1))throw new Fault(409,'deleted_identity_reused')
-  for(const field of immutableFields[op.table]??[])if(old&&!old.deleted&&canonical(old.payload[field]??null)!==canonical(op.row[field]??null))throw new Fault(422,'immutable_financial_record','Use a reversal or credit note')
+  for(const field of financial??[])if(old&&!old.deleted&&canonical(old.payload[field]??null)!==canonical(op.row[field]??null))throw new Fault(422,'immutable_financial_record','Use a reversal or credit note')
   row={...op.row,[definition.pk]:pk}
   for(const counter of definition.counters)row[counter]=old?.payload[counter]??0
   if(op.table==='caisse_interne'&&pk!==op.pk&&old)row.solde_ouverture=old.payload.solde_ouverture
@@ -74,7 +77,7 @@ export function syncRoutes(app,pool){
  })
  app.get('/v1/sync/bootstrap',async c=>{
   const device=c.get('device'),table=c.req.query('table'),after=c.req.query('after')??'',limit=positive(Number(c.req.query('limit')??500)),requested=c.req.query('as_of_seq')
-  if(!schema.tables[table]||limit>500||after.length>128||device.role!=='replica')throw new Fault(422,'invalid_bootstrap_request')
+  if(!Object.hasOwn(schema.tables,table)||limit>500||after.length>128||device.role!=='replica')throw new Fault(422,'invalid_bootstrap_request')
   return c.json(await transaction(pool,async db=>{
    let snapshot=await one(db,'SELECT * FROM v1_bootstrap WHERE device_id=$1 AND expires_at>now()',[device.id])
    if(!snapshot){

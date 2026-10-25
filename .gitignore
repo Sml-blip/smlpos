@@ -4,6 +4,7 @@ dist-v*
 out
 release
 release2
+.sync-release-private/
 *.db
 .env
 .env.local

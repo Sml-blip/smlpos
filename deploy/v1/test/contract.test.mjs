@@ -23,14 +23,24 @@ test('production v1 protocol on an isolated synthetic PostgreSQL schema',async t
    return {body,...await json('/v1/devices/register',body)}
   }
   const seed=await register('seed'),replica=await register('replica'),token=seed.session.access_token
+  await t.test('public health endpoint reports database and client compatibility',async()=>{
+   const health=await json('/v1/health')
+   assert.equal(health.ok,true)
+   assert.equal(health.contract_version,1)
+   assert.equal(health.minimum_version,'1.9.1039')
+   assert.equal(health.schema_version,'1.10.10')
+  })
   await t.test('enrollment identity is stable, token use is bound to install, old versions and missing auth refused',async()=>{
-   assert.equal((await json('/v1/devices/register',seed.body)).device_id,seed.device_id)
+   const same=await json('/v1/devices/register',seed.body)
+   assert.equal(same.device_id,seed.device_id)
+   assert.match(seed.number_code,/^PC[1-9][0-9]{0,8}$/)
+   assert.equal(same.number_code,seed.number_code)
    assert.equal((await request('/v1/devices/register',{...seed.body,install_id:randomUUID()})).status,403)
    assert.equal((await request('/v1/devices/register',{...seed.body,app_version:'1.9.1038'})).status,426)
    assert.equal((await request('/v1/status')).status,401)
    assert.equal((await request('/v1/sync/push',{device_id:seed.device_id,ops:[]},token)).status,409)
   })
-  const rows={produits:[{id:'legacy-product',reference:'REF',nom:'Product',prix_vente:12345,stock_actuel:100}],ventes:[{id:'legacy-sale',numero:'VTE-HISTORY',total_ttc:12345}]}
+  const rows={produits:[{id:'legacy-product',reference:'REF',nom:'Product',prix_vente:12345,stock_actuel:100}],ventes:[{id:'legacy-sale',numero:'VTE-HISTORY',total_ttc:12345}],caisse_interne:[{id:'ci-legacy-day',date_journal:'2026-10-25',solde_ouverture:100000,total_entrees:1000,total_sorties:0}]}
   const expected=Object.fromEntries(Object.entries(schema.tables).map(([table,definition])=>{
    const values=rows[table]??[],sum=Object.fromEntries(definition.columns.filter(column=>column.kind==='money').map(column=>[column.name,values.reduce((sum,row)=>sum+(row[column.name]??0),0)])),digest=createHash('sha256')
    for(const row of values.sort((a,b)=>Buffer.compare(Buffer.from(a[definition.pk]),Buffer.from(b[definition.pk]))))digest.update(wireHash(table,row))
@@ -83,6 +93,20 @@ test('production v1 protocol on an isolated synthetic PostgreSQL schema',async t
    assert.equal(pull.next_seq,pull.changes.at(-1).server_seq)
    assert.ok(pull.changes.every((change,i)=>!i||change.server_seq>pull.changes[i-1].server_seq))
    assert.ok(pull.changes.filter(row=>row.op==='UPSERT').every(row=>!Object.hasOwn(row.row,'stock_actuel')))
+  })
+  await t.test('finalized money stays immutable; daily cash rows alias safely and device codes stay stable',async()=>{
+   const changed=await push([op({table:'ventes',pk:'legacy-sale',op:'UPSERT',row:{id:'legacy-sale',numero:'VTE-HISTORY',total_ttc:1}})])
+   assert.equal(changed.results[0].status,'rejected')
+   assert.equal(changed.results[0].code,'immutable_financial_record')
+   assert.deepEqual(await json('/v1/seed/finalize',{seed_id:begun.seed_id,expected},token),{ok:true,diffs:[]})
+   const cash=await push([op({table:'caisse_interne',pk:'caisse:2026-10-25',op:'UPSERT',row:{id:'caisse:2026-10-25',date_journal:'2026-10-25',solde_ouverture:999999}}),op({table:'caisse_interne',pk:'caisse:2026-10-25',op:'DELTA',field:'total_entrees',value:500})])
+   assert.ok(cash.results.every(item=>item.status==='applied'))
+   const row=await one(pool,"SELECT pk,payload FROM v1_rows WHERE table_name='caisse_interne' AND NOT deleted")
+   assert.equal(row.pk,'ci-legacy-day')
+   assert.equal(row.payload.solde_ouverture,100000)
+   assert.equal(row.payload.total_entrees,1500)
+   assert.equal(Number((await one(pool,"SELECT count(*) n FROM v1_rows WHERE table_name='caisse_interne' AND NOT deleted AND payload->>'date_journal'='2026-10-25'")).n),1)
+   assert.equal((await one(pool,"SELECT canonical FROM v1_aliases WHERE table_name='caisse_interne' AND alias='caisse:2026-10-25'")).canonical,'ci-legacy-day')
   })
   await t.test('refresh tokens rotate and revoked devices cannot read or write',async()=>{
    const current=await json('/v1/auth/refresh',{refresh_token:replica.session.refresh_token})

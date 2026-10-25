@@ -6,7 +6,7 @@ export function authRoutes(app,pool,{minimumVersion='1.9.1039'}={}){
   const now=Date.now(),key=c.req.header('X-Real-IP')??'local',bucket=attempts.get(key)??{until:now+60_000,n:0}
   for(const [ip,value] of attempts)if(value.until<now)attempts.delete(ip)
   if(bucket.until<now){bucket.until=now+60_000;bucket.n=0}
-  if(++bucket.n>180||attempts.size>5000)throw new Fault(429,'rate_limited')
+  if(++bucket.n>3000||attempts.size>5000)throw new Fault(429,'rate_limited')
   attempts.set(key,bucket);await next()
  })
  app.post('/v1/devices/register',async c=>{
@@ -24,7 +24,7 @@ export function authRoutes(app,pool,{minimumVersion='1.9.1039'}={}){
    const id=old?.id??randomUUID()
    await db.query('INSERT INTO v1_devices(id,install_id,name,platform,app_version,role) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(install_id) DO UPDATE SET name=excluded.name,app_version=excluded.app_version,last_seen_at=now()',[id,input.install_id,input.name,input.platform,input.app_version,token.role])
    await db.query('UPDATE v1_enrollment SET used_by=$2 WHERE hash=$1',[token.hash,input.install_id])
-   return {device_id:id,session:await issueSession(db,id)}
+   return {device_id:id,number_code:(await one(db,'SELECT number_code FROM v1_devices WHERE id=$1',[id])).number_code,session:await issueSession(db,id)}
   }))
  })
  app.post('/v1/auth/refresh',async c=>{
@@ -46,7 +46,7 @@ export function authRoutes(app,pool,{minimumVersion='1.9.1039'}={}){
  })
  app.get('/v1/status',async c=>{
   const seed=await one(pool,'SELECT state,install_id FROM v1_seed WHERE singleton=1')
-  const devices=(await pool.query("SELECT id device_id,name,platform,role,app_version,last_seen_at,(last_seen_at>now()-interval '45 seconds') online FROM v1_devices WHERE NOT revoked ORDER BY name")).rows
+  const devices=(await pool.query("SELECT id device_id,number_code,name,platform,role,app_version,last_seen_at,(last_seen_at>now()-interval '45 seconds') online FROM v1_devices WHERE NOT revoked ORDER BY name")).rows
   const sequence=Number((await one(pool,'SELECT COALESCE(max(seq),0) n FROM v1_changes')).n)
   return c.json({server_time:new Date().toISOString(),contract_version:1,schema_version:schema.schema_version,min_client_version:minimumVersion,server_seq:sequence,devices,seed:seed??{state:'empty',install_id:null}})
  })

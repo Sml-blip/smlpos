@@ -14,7 +14,8 @@ export async function transaction(pool,work){
 export const one = async (db,sql,args=[]) => (await db.query(sql,args)).rows[0]
 export async function migrate(pool){
  await transaction(pool,async db=>{
-  await db.query(`CREATE TABLE IF NOT EXISTS v1_devices(id uuid PRIMARY KEY,install_id text UNIQUE NOT NULL,name text NOT NULL,platform text NOT NULL,app_version text NOT NULL,role text NOT NULL CHECK(role IN ('seed','replica')),revoked boolean NOT NULL DEFAULT false,last_seen_at timestamptz DEFAULT now());
+  await db.query(`CREATE SEQUENCE IF NOT EXISTS v1_device_number_seq;
+   CREATE TABLE IF NOT EXISTS v1_devices(id uuid PRIMARY KEY,number_code text UNIQUE NOT NULL DEFAULT ('PC'||nextval('v1_device_number_seq')::text),install_id text UNIQUE NOT NULL,name text NOT NULL,platform text NOT NULL,app_version text NOT NULL,role text NOT NULL CHECK(role IN ('seed','replica')),revoked boolean NOT NULL DEFAULT false,last_seen_at timestamptz DEFAULT now());
    CREATE TABLE IF NOT EXISTS v1_enrollment(hash text PRIMARY KEY,role text NOT NULL CHECK(role IN ('seed','replica')),expires_at timestamptz NOT NULL,used_by text);
    CREATE TABLE IF NOT EXISTS v1_sessions(access_hash text PRIMARY KEY,refresh_hash text UNIQUE NOT NULL,device_id uuid NOT NULL REFERENCES v1_devices(id),access_until timestamptz NOT NULL,refresh_until timestamptz NOT NULL);
    CREATE TABLE IF NOT EXISTS v1_seed(singleton integer PRIMARY KEY CHECK(singleton=1),id uuid NOT NULL,device_id uuid NOT NULL REFERENCES v1_devices(id),install_id text NOT NULL,digest text NOT NULL,expected jsonb NOT NULL,state text NOT NULL CHECK(state IN ('seeding','seeded')));
@@ -42,13 +43,14 @@ export function text(value,max=128){if(typeof value!=='string'||!value.length||v
 export function privateSetting(key){return schema.localSettings.includes(key)||schema.secretFragments.some(part=>key.toLowerCase().includes(part))}
 export function validateRow(table,row,{live=false}={}){
  const definition=schema.tables[table]
- if(!definition||!row||typeof row!=='object'||Array.isArray(row))throw new Fault(422,'invalid_row')
+ if(!Object.hasOwn(schema.tables,table)||!row||typeof row!=='object'||Array.isArray(row))throw new Fault(422,'invalid_row')
  const pk=text(row[definition.pk])
  if(table==='app_settings'&&privateSetting(pk))throw new Fault(422,'private_setting')
  for(const [key,value] of Object.entries(row)){
   const column=definition.columns.find(column=>column.name===key)
   if(!column||live&&definition.counters.includes(key))throw new Fault(422,'invalid_column')
   if(value===null)continue
+  if(column.type.toUpperCase().includes('TEXT')&&typeof value!=='string')throw new Fault(422,'text_required')
   if(['money','integer'].includes(column.kind)&&!Number.isSafeInteger(value))throw new Fault(422,'integer_units_required')
   if(column.kind==='rate'&&(typeof value!=='number'||!Number.isFinite(value)))throw new Fault(422,'invalid_rate')
   if(column.kind==='real_unclassified')throw new Fault(422,'unclassified_column')
