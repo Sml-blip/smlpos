@@ -47,6 +47,9 @@ export interface FinalizeResult {
 export type LiveOp = { seq:number;table:string;pk:string;at:string } &
   ({op:'UPSERT';row:Record<string,unknown>} | {op:'DELETE'} | {op:'DELTA';field:string;value:number})
 export interface PushResult { results:{seq:number;status:'applied'|'duplicate'|'rejected';code?:string;message?:string}[];server_seq:number }
+export type LiveChange = Omit<LiveOp,'seq'|'at'> & { server_seq:number;origin_device:string;table:string;pk:string;op:'UPSERT'|'DELETE'|'DELTA';row?:Record<string,unknown>;field?:string;value?:number }
+export interface PullPage { changes:LiveChange[];next_seq:number;has_more:boolean }
+export interface BootstrapPage { rows:Record<string,unknown>[];as_of_seq:number;has_more:boolean }
 
 export class BackendError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly retryable: boolean) {
@@ -190,5 +193,9 @@ export class BackendClient {
   pushLive(deviceId:string,ops:LiveOp[]) {
     return this.request<PushResult>('POST','/v1/sync/push',{device_id:deviceId,ops},
       {idempotencyKey:`${deviceId}:${ops[0].seq}-${ops[ops.length-1].seq}`})
+  }
+  pullLive(since:number) { return this.request<PullPage>('GET',`/v1/sync/pull?since=${since}&limit=500`) }
+  bootstrapPage(table:string,after:string,asOf:number|null) {
+    return this.request<BootstrapPage>('GET',`/v1/sync/bootstrap?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}&limit=500${asOf===null?'':`&as_of_seq=${asOf}`}`)
   }
 }

@@ -26,6 +26,7 @@ export function installOutbox(db: Database.Database): string[] {
       op TEXT NOT NULL CHECK(op IN ('UPSERT','DELETE','DELTA')),row_json TEXT,delta_field TEXT,delta_value REAL,
       at TEXT NOT NULL,sent_at TEXT,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT);
       CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(sent_at,seq);
+      CREATE TABLE IF NOT EXISTS pull_rejects(server_seq INTEGER PRIMARY KEY,table_name TEXT,pk TEXT,reason TEXT NOT NULL,payload TEXT NOT NULL,at TEXT NOT NULL);
       INSERT OR IGNORE INTO sync_state(k,v) VALUES('apply_mute','0');
       INSERT OR IGNORE INTO sync_state(k,v) VALUES('device_id',''),('install_id',''),('pull_cursor','0');
       INSERT OR IGNORE INTO sync_state(k,v) VALUES('seed_finalized_at','');

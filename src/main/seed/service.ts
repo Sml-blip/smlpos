@@ -7,6 +7,7 @@ import { CONTRACT_VERSION, moneyColumnsOf } from './tables'
 import { installOutbox } from './outbox'
 import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptureState } from './gate'
 import { OutboxDrainer } from './drainer'
+import { PullClient } from './pull'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -72,6 +73,7 @@ export class SeedService {
   private client: BackendClient | null = null
   private checking = false
   private drainer: OutboxDrainer | null = null
+  private puller: PullClient | null = null
 
   constructor(private readonly d: SeedDeps) {
     // A crash while running must never resume by itself.
@@ -123,6 +125,8 @@ export class SeedService {
     this.d.ledger.set('base_url', baseUrl)
     this.client = null
     this.drainer = null
+    this.puller?.stopPolling()
+    this.puller = null
     const res = await this.getClient()!.register(enrollmentToken.trim(), {
       install_id: this.d.ledger.installId(),
       name: deviceName.trim().slice(0, 60),
@@ -398,15 +402,33 @@ export class SeedService {
   // ───────────────────────── panel status ─────────────────────────
 
   private assertIdle(): void {
-    if (this.running || this.checking || this.drainer?.busy) throw new Error('A sync operation is running — wait or pause it first')
+    if (this.running || this.checking || this.drainer?.busy || this.puller?.busy) throw new Error('A sync operation is running — wait or pause it first')
   }
 
   rejected(): RejectedOp[] { return this.d.ledger.rejected() }
   async drainLiveChanges() {
     const client=this.getClient()
-    if(!client||this.running||this.checking)return {applied:0,duplicates:0,rejected:0,gated:true,retryAt:0}
+    if(!client||this.running||this.checking||this.puller?.busy)return {applied:0,duplicates:0,rejected:0,gated:true,retryAt:0}
     if(!this.drainer)this.drainer=new OutboxDrainer(this.d.liveDb(),client)
     return this.drainer.once()
+  }
+  async pullLiveChanges() {
+    const client=this.getClient()
+    if(!client||this.running||this.checking||this.drainer?.busy||captureState(this.d.liveDb(),'apply_mute')===null)return {applied:0,rejected:0,skipped:0,hasMore:false,gated:true}
+    if(!this.puller)this.puller=new PullClient(this.d.liveDb(),client)
+    return this.puller.once()
+  }
+  async bootstrapReplica() {
+    this.assertIdle()
+    this.checking=true
+    try {
+    const backup=this.d.ledger.getJson<BackupVerification>('backup'),client=this.getClient()
+    if(!backup?.ok||!client)throw new Error('Register and prepare a verified backup before joining')
+    const verified=await verifyBackupFile(backup.path,null)
+    if(!verified.ok||verified.sha256!==backup.sha256)throw new Error('Protection backup changed; prepare it again')
+    if(!this.puller)this.puller=new PullClient(this.d.liveDb(),client)
+    return await this.puller.bootstrap()
+    }finally{this.checking=false}
   }
 
   async status(force = false): Promise<PanelStatus> {

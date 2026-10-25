@@ -17,7 +17,8 @@ export function closeSeedGate(db: Database.Database): void {
 }
 export function canDrainOutbox(db: Database.Database): boolean {
   return captureState(db, 'outbox_drain_enabled') === '1' && !!captureState(db, 'seed_finalized_at')
-    && !!captureState(db, 'verified_digest') && !!captureState(db, 'snapshot_hash')
+    && ((!!captureState(db, 'verified_digest') && !!captureState(db, 'snapshot_hash'))
+      || (captureState(db, 'bootstrap_complete') === '1' && captureState(db, 'bootstrap_as_of') !== null))
 }
 export function openVerifiedGate(db: Database.Database, digest: string, snapshotHash: string): void {
   if (captureState(db, 'snapshot_hash') !== snapshotHash) throw new Error('Snapshot does not match the verified seed')

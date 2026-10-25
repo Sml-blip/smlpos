@@ -1,7 +1,7 @@
 /** In-process mock of the seed backend (docs/SEED_CONTRACT.md). Used only by tests. */
 import { createHash } from 'crypto'
 import { moneyColumnsOf, COUNTER_COLUMNS } from '../tables'
-import type { PushResult } from '../client'
+import type { PushResult,LiveChange } from '../client'
 
 interface Opts {
   installId?: string | null
@@ -22,6 +22,9 @@ export class MockBackend {
   liveSeen = new Map<string,{hash:string;result:PushResult['results'][number]}>()
   liveSequence = 0
   dropPushResponses = 0
+  liveChanges:LiveChange[]=[]
+  bootstrapCopies=new Map<number,Map<string,Map<string,Record<string,unknown>>>>()
+  onBootstrapPage:(()=>void|Promise<void>)|null=null
   seedInstallId: string | null
   state: 'empty' | 'seeding' | 'seeded'
   tableSpec: Record<string, { columns: string[]; pk: string }>
@@ -57,7 +60,7 @@ export class MockBackend {
       if(this.state!=='seeded')return json(409,{code:'seed_not_finalized',message:'Finalize the seed first'})
       if(typeof body.device_id!=='string'||!Array.isArray(body.ops)||!body.ops.length||body.ops.length>200)return json(400,{code:'bad_request'})
       const rows=new Map([...this.rows].map(([table,data])=>[table,new Map([...data].map(([pk,row])=>[pk,{...row}]))]))
-      const seen=new Map(this.liveSeen),results:PushResult['results']=[];let serverSeq=this.liveSequence,last=0
+      const seen=new Map(this.liveSeen),results:PushResult['results']=[],changes=[...this.liveChanges];let serverSeq=this.liveSequence,last=0
       for(const op of body.ops){
         if(!Number.isSafeInteger(op.seq)||op.seq<=last)return json(400,{code:'sequence_order'});last=op.seq
         const key=`${body.device_id}:${op.seq}`,hash=createHash('sha256').update(JSON.stringify(op)).digest('hex'),old=seen.get(key)
@@ -76,11 +79,29 @@ export class MockBackend {
           else data.set(op.pk,{...data.get(op.pk),[op.field]:Number(data.get(op.pk)![op.field]??0)+op.value})
         }else if(!code)code='unknown_op'
         const result:PushResult['results'][number]={seq:op.seq,status:code?'rejected':'applied',...(code?{code,message:'Rejected by mock validation'}:{})}
-        if(!code){rows.set(op.table,data);serverSeq++}seen.set(key,{hash,result});results.push(result)
+        if(!code){rows.set(op.table,data);serverSeq++;const {seq,at,...operation}=op;changes.push({...operation,server_seq:serverSeq,origin_device:body.device_id})}seen.set(key,{hash,result});results.push(result)
       }
-      this.rows=rows;this.liveSeen=seen;this.liveSequence=serverSeq
+      this.rows=rows;this.liveSeen=seen;this.liveSequence=serverSeq;this.liveChanges=changes
       if(this.dropPushResponses>0){this.dropPushResponses--;throw new TypeError('Connection lost after server commit')}
       return json(200,{results,server_seq:serverSeq})
+    }
+    if(url.pathname==='/v1/sync/pull'){
+      if(this.state!=='seeded')return json(409,{code:'seed_not_finalized'})
+      const since=Number(url.searchParams.get('since')??0),limit=Number(url.searchParams.get('limit')??500)
+      if(!Number.isSafeInteger(since)||since<0||!Number.isInteger(limit)||limit<1||limit>500)return json(400,{code:'bad_cursor'})
+      const remaining=this.liveChanges.filter(change=>change.server_seq>since),changes=remaining.slice(0,limit)
+      return json(200,{changes,next_seq:changes.at(-1)?.server_seq??since,has_more:remaining.length>limit})
+    }
+    if(url.pathname==='/v1/sync/bootstrap'){
+      if(this.state!=='seeded')return json(409,{code:'seed_not_finalized'})
+      const table=url.searchParams.get('table')??'',after=url.searchParams.get('after')??'',requested=url.searchParams.get('as_of_seq')
+      if(!Object.hasOwn(this.tableSpec,table))return json(400,{code:'unknown_table'})
+      const asOf=requested===null?this.liveSequence:Number(requested)
+      if(requested===null&&!this.bootstrapCopies.has(asOf))this.bootstrapCopies.set(asOf,new Map([...this.rows].map(([name,data])=>[name,new Map([...data].map(([pk,row])=>[pk,{...row}]))])))
+      const frozen=this.bootstrapCopies.get(asOf);if(!frozen)return json(409,{code:'bootstrap_expired'})
+      const all=[...(frozen.get(table)?.entries()??[])].filter(([pk])=>Buffer.compare(Buffer.from(pk),Buffer.from(after))>0).sort(([a],[b])=>Buffer.compare(Buffer.from(a),Buffer.from(b)))
+      await this.onBootstrapPage?.()
+      return json(200,{rows:all.slice(0,500).map(([,row])=>row),as_of_seq:asOf,has_more:all.length>500})
     }
 
     if (url.pathname === '/v1/status') {
