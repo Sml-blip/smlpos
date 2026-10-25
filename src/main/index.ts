@@ -23,6 +23,7 @@ import {
   uploadR2Snapshot,
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
+import { registerSeedIpc } from './seed/ipc'
 import { importDefaultProductCatalog } from './seedProducts'
 import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
@@ -3944,6 +3945,14 @@ function setupIpcHandlers() {
   })
 
   const SYNC_MAX_ATTEMPTS = 10 // give up after 10 consecutive failures
+
+  // Seed / device-sync panel (new backend). Lazy: nothing is created or contacted until the panel is used.
+  registerSeedIpc(() => {
+    const q = (cond: string) => (db.prepare(
+      `SELECT COUNT(*) AS cnt FROM sync_queue WHERE synced_at IS NULL AND attempts ${cond} ${SYNC_MAX_ATTEMPTS}`,
+    ).get() as { cnt: number }).cnt ?? 0
+    return { pending: q('<'), failed: q('>=') }
+  })
   const SYNC_QUEUE_BATCH = 500
 
   ipcMain.handle('sync:queue:getPending', () => {

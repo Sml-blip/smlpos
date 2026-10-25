@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
-import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText } from 'lucide-react'
+import { Wifi, WifiOff, Clock, LogOut, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, X, Info, FileText, MonitorSmartphone } from 'lucide-react'
 import { formatPrice } from '../lib/utils'
 import FermetureCaisseModal from './FermetureCaisseModal'
+import SyncPanel from './SyncPanel'
 import DocumentPrintModal from '../modules/historique/DocumentPrintModal'
 import type { Document } from '../lib/types'
 import { getPendingCount, getFailedCount, processSyncQueue, pullSyncFromRemote, resetFailedItems, purgeFailedItems } from '../lib/sync'
@@ -26,7 +27,8 @@ const reminderTiming = (now: Date, timeValue: string) => {
 }
 
 export default function StatusBar() {
-  const { isOnline, currentShift } = useAppStore()
+  const { isOnline, currentShift, currentOperateur } = useAppStore()
+  const [showSyncPanel, setShowSyncPanel] = useState(false)
   const [time, setTime] = useState(new Date())
   const [showFermeture, setShowFermeture] = useState(false)
   const [dailyInvoicePreview, setDailyInvoicePreview] = useState<Document | null>(null)
@@ -179,6 +181,16 @@ export default function StatusBar() {
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {currentOperateur?.role === 'superadmin' && (
+            <button
+              onClick={() => setShowSyncPanel(true)}
+              className="flex items-center gap-1 text-text-muted hover:text-teal-600 transition-colors"
+              title="Synchronisation multi-postes"
+            >
+              <MonitorSmartphone size={11} />
+              Postes
+            </button>
+          )}
           {isSupabaseEnabled && (
             <>
               {/* Flash message */}
@@ -268,6 +280,8 @@ export default function StatusBar() {
           }}
         />
       )}
+
+      {showSyncPanel && <SyncPanel onClose={() => setShowSyncPanel(false)} />}
 
       {dailyInvoicePreview && (
         <DocumentPrintModal doc={dailyInvoicePreview} onClose={() => setDailyInvoicePreview(null)} />

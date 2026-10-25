@@ -26,6 +26,18 @@ const api = {
     return () => ipcRenderer.removeListener('update:status', handler)
   },
 
+  // Seed / device sync panel (new backend)
+  seedStatus: (force = false) => ipcRenderer.invoke('seed:status', force),
+  seedRegister: (baseUrl: string, token: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, token, name),
+  seedBackupAndCheck: () => ipcRenderer.invoke('seed:backupAndCheck'),
+  seedRecheck: () => ipcRenderer.invoke('seed:recheck'),
+  seedApprove: (phrase: string) => ipcRenderer.invoke('seed:approve', phrase),
+  seedRun: () => ipcRenderer.invoke('seed:run'),
+  seedPause: () => ipcRenderer.invoke('seed:pause'),
+  seedNewPass: () => ipcRenderer.invoke('seed:newPass'),
+  seedRejected: () => ipcRenderer.invoke('seed:rejected'),
+  seedExportReport: () => ipcRenderer.invoke('seed:exportReport'),
+
   // Operateurs
   operateursList: () => ipcRenderer.invoke('operateurs:list'),
   operateursUpsert: (op: unknown) => ipcRenderer.invoke('operateurs:upsert', op),
