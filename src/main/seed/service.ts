@@ -6,6 +6,7 @@ import { createVerifiedBackup, hashFile, verifyBackupFile, type BackupVerificati
 import { CONTRACT_VERSION, moneyColumnsOf } from './tables'
 import { installOutbox } from './outbox'
 import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptureState } from './gate'
+import { OutboxDrainer } from './drainer'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -70,6 +71,7 @@ export class SeedService {
   private memorySession: Session | null = null
   private client: BackendClient | null = null
   private checking = false
+  private drainer: OutboxDrainer | null = null
 
   constructor(private readonly d: SeedDeps) {
     // A crash while running must never resume by itself.
@@ -112,6 +114,7 @@ export class SeedService {
   }
 
   async registerDevice(baseUrlRaw: string, enrollmentToken: string, deviceName: string): Promise<void> {
+    this.assertIdle()
     const existingInstall = captureState(this.d.liveDb(), 'install_id')
     if (existingInstall) this.d.ledger.set('install_id', existingInstall)
     const baseUrl = validateBaseUrl(baseUrlRaw)
@@ -119,6 +122,7 @@ export class SeedService {
     if (!deviceName.trim()) throw new Error('Device name is required')
     this.d.ledger.set('base_url', baseUrl)
     this.client = null
+    this.drainer = null
     const res = await this.getClient()!.register(enrollmentToken.trim(), {
       install_id: this.d.ledger.installId(),
       name: deviceName.trim().slice(0, 60),
@@ -126,6 +130,8 @@ export class SeedService {
       app_version: this.d.appVersion,
       schema_version: this.schemaVersionLive(),
     })
+    const captureDevice = captureState(this.d.liveDb(), 'device_id')
+    if (captureDevice && captureDevice !== res.device_id) throw new Error('Device identity changed; refusing to relabel recorded operations')
     this.saveSession(res.session)
     this.d.ledger.set('device_id', res.device_id)
     this.d.ledger.set('device_name', deviceName.trim().slice(0, 60))
@@ -392,10 +398,16 @@ export class SeedService {
   // ───────────────────────── panel status ─────────────────────────
 
   private assertIdle(): void {
-    if (this.running || this.checking) throw new Error('A seed operation is running — wait or pause it first')
+    if (this.running || this.checking || this.drainer?.busy) throw new Error('A sync operation is running — wait or pause it first')
   }
 
   rejected(): RejectedOp[] { return this.d.ledger.rejected() }
+  async drainLiveChanges() {
+    const client=this.getClient()
+    if(!client||this.running||this.checking)return {applied:0,duplicates:0,rejected:0,gated:true,retryAt:0}
+    if(!this.drainer)this.drainer=new OutboxDrainer(this.d.liveDb(),client)
+    return this.drainer.once()
+  }
 
   async status(force = false): Promise<PanelStatus> {
     const L = this.d.ledger

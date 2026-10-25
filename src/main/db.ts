@@ -27,6 +27,7 @@ export function connectDatabase(): Database.Database {
   const dbDir = join(dbFilePath, '..')
   if (!existsSync(dbDir)) mkdirSync(dbDir, { recursive: true })
   dbInstance = new Database(dbFilePath)
+  dbInstance.pragma('recursive_triggers = ON') // Restore REPLACE capture after every restart.
   return dbInstance
 }
 

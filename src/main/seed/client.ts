@@ -44,6 +44,9 @@ export interface FinalizeResult {
   ok: boolean
   diffs: { table: string; field: string; expected: number | string; actual: number | string }[]
 }
+export type LiveOp = { seq:number;table:string;pk:string;at:string } &
+  ({op:'UPSERT';row:Record<string,unknown>} | {op:'DELETE'} | {op:'DELTA';field:string;value:number})
+export interface PushResult { results:{seq:number;status:'applied'|'duplicate'|'rejected';code?:string;message?:string}[];server_seq:number }
 
 export class BackendError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly retryable: boolean) {
@@ -183,5 +186,9 @@ export class BackendClient {
   }
   seedFinalize(body: { seed_id: string; expected: Record<string, unknown> }) {
     return this.request<FinalizeResult>('POST', '/v1/seed/finalize', body, { idempotencyKey: `finalize:${body.seed_id}` })
+  }
+  pushLive(deviceId:string,ops:LiveOp[]) {
+    return this.request<PushResult>('POST','/v1/sync/push',{device_id:deviceId,ops},
+      {idempotencyKey:`${deviceId}:${ops[0].seq}-${ops[ops.length-1].seq}`})
   }
 }

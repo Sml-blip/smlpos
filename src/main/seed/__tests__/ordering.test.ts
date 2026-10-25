@@ -7,7 +7,7 @@ import Database from 'better-sqlite3'
 import { SeedService } from '../service'
 import { SeedLedger } from '../ledger'
 import { MockBackend } from './mockBackend'
-import { COUNTER_COLUMNS, moneyColumnsOf, primaryKeyOf, syncedTableNames, toMillimes } from '../tables'
+import { primaryKeyOf, syncedTableNames } from '../tables'
 import { canDrainOutbox, captureState, pendingLiveRows } from '../gate'
 import { verifyBackupFile } from '../snapshot'
 
@@ -55,23 +55,8 @@ test('capture precedes snapshot; 20 sales, 3 returns, adjustment and deleted dra
     assert.equal(canDrainOutbox(f.db),false);f.backend.onBatch=null;await f.service.run()
     assert.equal(f.ledger.state(),'done',f.ledger.get('message')??'');assert.equal(canDrainOutbox(f.db),true)
     const ops=pendingLiveRows(f.db,500);assert.ok(ops.length>20)
-    // Direct mock projection only: the HTTP drainer is Step 3. This proves the
-    // snapshot boundary and the retained delta stream without inventing a route.
-    const applied=new Set<string>()
-    for(const op of [...ops,...ops]){
-      const key=`fixture:${op.seq}`;if(applied.has(key))continue;applied.add(key)
-      const table=String(op.table_name),pk=String(op.pk),rows=f.backend.rows.get(table)??new Map<string,Record<string,unknown>>()
-      f.backend.rows.set(table,rows)
-      if(op.op==='DELETE'){rows.delete(pk);continue}
-      const old=rows.get(pk)??{}
-      if(op.op==='DELTA'){
-        const field=String(op.delta_field),money=moneyColumnsOf(table).includes(field),value=money?toMillimes(op.delta_value):null
-        assert.ok(!money||value?.ok);rows.set(pk,{...old,[field]:Number(old[field]??0)+(value?.ok?value.millimes:Number(op.delta_value))});continue
-      }
-      const row=JSON.parse(String(op.row_json)) as Record<string,unknown>
-      for(const field of moneyColumnsOf(table))if(row[field]!=null){const value=toMillimes(row[field]);assert.ok(value.ok);if(value.ok)row[field]=value.millimes}
-      assert.ok((COUNTER_COLUMNS[table]??[]).every(field=>!(field in row)));rows.set(pk,{...old,...row})
-    }
+    const drained=await f.service.drainLiveChanges();assert.equal(drained.error,undefined);assert.equal(drained.applied,ops.length)
+    assert.equal(f.backend.liveSeen.size,ops.length);assert.deepEqual(pendingLiveRows(f.db),[])
     assert.equal(f.backend.count('ventes'),20);assert.equal(f.backend.count('retours'),3);assert.equal(f.backend.count('documents'),0)
     assert.equal([...f.backend.rows.get('ventes')!.values()].reduce((n,row)=>n+Number(row.total_ttc),0),20*12345)
     assert.equal(f.backend.rows.get('produits')!.get('p')!.stock_actuel,83)

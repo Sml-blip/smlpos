@@ -1,6 +1,7 @@
 /** In-process mock of the seed backend (docs/SEED_CONTRACT.md). Used only by tests. */
 import { createHash } from 'crypto'
-import { moneyColumnsOf } from '../tables'
+import { moneyColumnsOf, COUNTER_COLUMNS } from '../tables'
+import type { PushResult } from '../client'
 
 interface Opts {
   installId?: string | null
@@ -18,6 +19,9 @@ export class MockBackend {
   refreshCount = 0
   accessTokenTtlMs = 3_600_000
   onBatch: ((table: string) => void | Promise<void>) | null = null
+  liveSeen = new Map<string,{hash:string;result:PushResult['results'][number]}>()
+  liveSequence = 0
+  dropPushResponses = 0
   seedInstallId: string | null
   state: 'empty' | 'seeding' | 'seeded'
   tableSpec: Record<string, { columns: string[]; pk: string }>
@@ -49,6 +53,35 @@ export class MockBackend {
       return json(200, this.session(`a${1 + this.refreshCount}`))
     }
     if (!auth?.startsWith('Bearer ')) return json(401, { code: 'unauthorized', message: 'no token' })
+    if (url.pathname === '/v1/sync/push') {
+      if(this.state!=='seeded')return json(409,{code:'seed_not_finalized',message:'Finalize the seed first'})
+      if(typeof body.device_id!=='string'||!Array.isArray(body.ops)||!body.ops.length||body.ops.length>200)return json(400,{code:'bad_request'})
+      const rows=new Map([...this.rows].map(([table,data])=>[table,new Map([...data].map(([pk,row])=>[pk,{...row}]))]))
+      const seen=new Map(this.liveSeen),results:PushResult['results']=[];let serverSeq=this.liveSequence,last=0
+      for(const op of body.ops){
+        if(!Number.isSafeInteger(op.seq)||op.seq<=last)return json(400,{code:'sequence_order'});last=op.seq
+        const key=`${body.device_id}:${op.seq}`,hash=createHash('sha256').update(JSON.stringify(op)).digest('hex'),old=seen.get(key)
+        if(old){if(old.hash!==hash)return json(409,{code:'op_changed'});results.push({...old.result,status:old.result.status==='rejected'?'rejected':'duplicate'});continue}
+        const definition=Object.hasOwn(this.tableSpec,op.table)?this.tableSpec[op.table]:undefined,data=rows.get(op.table)??new Map<string,Record<string,unknown>>()
+        let code=this.rejectPks.has(op.pk)?'validation_failed':!definition?'unknown_table':''
+        if(!code && definition && op.op==='UPSERT'){
+          if(!op.row||String(op.row[definition.pk])!==op.pk)code='invalid_pk'
+          else if(Object.keys(op.row).some(column=>!definition.columns.includes(column)||(COUNTER_COLUMNS[op.table]??[]).includes(column)))code='unknown_column'
+          else if(moneyColumnsOf(op.table).some(column=>op.row[column]!=null&&!Number.isSafeInteger(op.row[column])))code='money_not_integer'
+          else data.set(op.pk,{...data.get(op.pk),...op.row})
+        }else if(!code && op.op==='DELETE')data.delete(op.pk)
+        else if(!code && op.op==='DELTA'){
+          if(!(COUNTER_COLUMNS[op.table]??[]).includes(op.field)||!Number.isSafeInteger(op.value))code='invalid_delta'
+          else if(!data.has(op.pk))code='missing_row'
+          else data.set(op.pk,{...data.get(op.pk),[op.field]:Number(data.get(op.pk)![op.field]??0)+op.value})
+        }else if(!code)code='unknown_op'
+        const result:PushResult['results'][number]={seq:op.seq,status:code?'rejected':'applied',...(code?{code,message:'Rejected by mock validation'}:{})}
+        if(!code){rows.set(op.table,data);serverSeq++}seen.set(key,{hash,result});results.push(result)
+      }
+      this.rows=rows;this.liveSeen=seen;this.liveSequence=serverSeq
+      if(this.dropPushResponses>0){this.dropPushResponses--;throw new TypeError('Connection lost after server commit')}
+      return json(200,{results,server_seq:serverSeq})
+    }
 
     if (url.pathname === '/v1/status') {
       return json(200, {

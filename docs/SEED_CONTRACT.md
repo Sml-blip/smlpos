@@ -102,3 +102,21 @@ Primary key is `id` for every table except `app_settings` (`key`). Existing ids 
    `lignes_*` carry `numero_serie`. These must be accepted, not dropped; the legacy Supabase sync stripped them.
 3. Any new REAL column added to the app later must be classified in `tables.ts` (money or rate) or the dry run
    blocks — silent guessing about money is not allowed.
+
+## Live push — Step 3
+
+`POST /v1/sync/push`, authenticated, header `Idempotency-Key: <device_id>:<firstSeq>-<lastSeq>`:
+
+```json
+{"device_id":"dev-1","ops":[{"seq":1201,"table":"ventes","pk":"sale-id","op":"UPSERT","row":{"id":"sale-id","total_ttc":12345},"at":"ISO"},{"seq":1202,"table":"produits","pk":"product-id","op":"DELTA","field":"stock_actuel","value":-1,"at":"ISO"}]}
+```
+
+Response: `{"results":[{"seq":1201,"status":"applied"},{"seq":1202,"status":"duplicate"}],"server_seq":9731}`. Rejections use `status: "rejected"` with `code` and `message`. Return exactly one result for every submitted sequence. DELETE includes `seq`, `table`, `pk`, `op: "DELETE"` and `at`, without a row.
+
+- One transaction per request. Process operations in increasing local sequence; allocate server sequences only on applied changes. Device timestamps are audit data, never ordering keys.
+- Durable identity is `(authenticated device_id, seq)`. Repeats of applied operations return duplicate; a changed payload under the same identity is a conflict. A repeated rejected operation remains rejected, never a duplicate ACK. Reject body/token device mismatches.
+- UPSERT preserves existing counters and must not include any counter field from `COUNTER_COLUMNS`. DELTA carries integer stock units or integer millimes and appends to the server ledger. Unknown tables/fields are per-op rejections, without blocking valid later operations.
+- Refuse live writes before seed finalization. Registration must preserve an installation's device identity; the client refuses to relabel captured operations after an identity change.
+- Client marks sent only after a complete, validated reply, in one local transaction. Rejects stay unsent with `rejected:` errors and are excluded from automatic retry pages. Network/HTTP failures retain operations and use persisted backoff. No outbox pruning is implemented; audit rows remain on disk.
+
+Backend-owner open points: this endpoint currently exists only in the in-process mock. The live service must implement the transaction/deduplication contract, stable enrollment identity, counter ledger, authoritative column validation, immutable financial records and UNIQUE-conflict handling before release. SQLite REPLACE may produce DELETE followed by UPSERT of the same mutable identity; preserve their sequence semantics. No new endpoint besides `/v1/sync/push` was added in Step 3.

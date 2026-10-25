@@ -36,5 +36,5 @@ export function openVerifiedGate(db: Database.Database, digest: string, snapshot
 export function pendingLiveRows(db: Database.Database, limit = 200): Record<string, unknown>[] {
   if (!canDrainOutbox(db)) return []
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('Invalid outbox page size')
-  return db.prepare('SELECT * FROM outbox WHERE sent_at IS NULL ORDER BY seq LIMIT ?').all(limit) as Record<string, unknown>[]
+  return db.prepare("SELECT * FROM outbox WHERE sent_at IS NULL AND (last_error IS NULL OR last_error NOT LIKE 'rejected:%') ORDER BY seq LIMIT ?").all(limit) as Record<string, unknown>[]
 }
