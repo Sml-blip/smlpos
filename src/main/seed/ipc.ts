@@ -8,6 +8,7 @@ import { SeedService, type SecretBox } from './service'
 import type { SeedReport } from './dryRun'
 import { liveIssues, liveStatus, retryPush } from './monitor'
 import { LegacySyncGate, startLiveRuntime } from './runtime'
+import { reserveNumber } from './numbering'
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string }
 
@@ -52,6 +53,7 @@ async function wrap<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
 
 export function registerSeedIpc(legacyQueue: () => { pending: number; failed: number }): void {
   const svc = () => getService(legacyQueue)
+  ipcMain.handle('sync2:reserveNumber', (_e, table: string, proposed: string) => reserveNumber(getDb(), table, proposed))
   ipcMain.handle('sync2:legacyBegin', () => legacySyncGate.begin())
   ipcMain.handle('sync2:legacyEnd', (_e, token: string) => legacySyncGate.end(String(token)))
   startLiveRuntime(getDb, { drain: () => svc().drainLiveChanges(), pull: () => svc().pullLiveChanges() })

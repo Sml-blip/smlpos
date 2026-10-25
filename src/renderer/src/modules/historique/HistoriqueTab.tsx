@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useEffect, useCallback, Fragment, type ReactNode } from 'react'
 import type { Vente, LigneVente, Reparation, Document as DocType, Produit } from '../../lib/types'
 
@@ -1532,7 +1533,7 @@ function NewDocumentModal({
       const lastNum = await api.documentsGetLastNumber(typeDoc) as number
       const prefix = typeDoc === 'FACTURE_VENTE' ? 'FAC' : typeDoc === 'DEVIS' ? 'DEV' : 'BL'
       const date = now.slice(0, 10).replace(/-/g, '')
-      const numero = `${prefix}-${date}-${String((lastNum ?? 0) + 1).padStart(3, '0')}`
+      const numero = await reserveDocumentNumber('documents', `${prefix}-${date}-${String((lastNum ?? 0) + 1).padStart(3, '0')}`)
 
       const lignesData = filled.map(l => {
         const ttc = l.quantite * l.prix_unitaire * (1 - l.remise_pct / 100)

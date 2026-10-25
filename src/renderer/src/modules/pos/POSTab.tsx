@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import Fuse from 'fuse.js'
 import { useAppStore } from '../../store/appStore'
@@ -1399,7 +1400,7 @@ function CreditClientPaiementModal({
         created_at: new Date().toISOString(),
       }) as { before?: number; amount?: number; after?: number; organisation_nom?: string }
       await printCreditReceipt({
-        numero: `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`,
+        numero: await reserveDocumentNumber('ventes', `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`),
         clientNom: selected.nom, telephone: selected.telephone, adresse: selected.adresse,
         operateur: currentShift?.operateur_nom, date: new Date().toISOString(), note,
         before: Number(created.before ?? selected.solde_credit), paid: Number(created.amount ?? montantNum),
@@ -1688,7 +1689,7 @@ function ClientAdvanceModal({ currentShift, onClose, onSuccess, onCheckoutAdvanc
     setError('')
     await runAction('Avance client', async () => {
       const now = new Date().toISOString()
-      const numero = `AVC-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`
+      const numero = await reserveDocumentNumber('avances_clients', `AVC-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`)
       const id = crypto.randomUUID()
       const productDescription = typeAvance === 'PRODUIT' ? selectedProducts.map(item => `${item.product.nom} ×${item.quantity}`).join(' + ') : (description.trim() || 'Avance libre')
       const productRows = selectedProducts.map(item => ({ produit_id: item.product.id, designation: item.product.nom, quantite: item.quantity, prix_unitaire: item.product.prix_vente, numero_serie: item.serial || null, type_produit: item.product.type, tva_taux: item.product.tva_taux || 0 }))

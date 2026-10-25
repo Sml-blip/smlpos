@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Client, ModePaiement, Vente } from '../../lib/types'
@@ -196,7 +197,7 @@ export default function CheckoutModal({ items, total, sousTotal, totalRemises, i
     await runAction('Enregistrement vente', async () => {
       const prefix = `VTE-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
       const lastNum = await api.ventesGetLastNumber(prefix) as number
-      const numero = generateVenteNumber(lastNum)
+      const numero = await reserveDocumentNumber('ventes', generateVenteNumber(lastNum))
       const venteId = generateId()
       const now = new Date().toISOString()
 

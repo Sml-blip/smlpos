@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { TypeAppareil, Produit } from '../../lib/types'
@@ -144,7 +145,7 @@ export default function ReparationModal({ onClose }: { onClose: () => void }) {
     await runAction('Création réparation', async () => {
       const prefix = `REP-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
       const lastNum = await api.reparationsGetLastNumber(prefix) as number
-      const numero = generateReparationNumber(lastNum)
+      const numero = await reserveDocumentNumber('reparations', generateReparationNumber(lastNum))
       const repId = generateId()
       const now = new Date().toISOString()
 

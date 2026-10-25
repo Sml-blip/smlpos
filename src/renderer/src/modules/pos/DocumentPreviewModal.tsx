@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
 import { generateId } from '../../lib/utils'
@@ -164,7 +165,7 @@ export default function DocumentPreviewModal({
     const nextSeq = prevSeq + 1
     await api.settingsSet(seqKey, String(nextSeq))
     const prefix = typeVente === 'BL_VENTE' ? 'BL' : typeVente === 'DEVIS' ? 'DEV' : ''
-    return `${prefix}${yy}/#${String(nextSeq).padStart(5, '0')}`
+    return reserveDocumentNumber('documents', `${prefix}${yy}/#${String(nextSeq).padStart(5, '0')}`)
   }
 
   const createDocument = async (): Promise<string> => {

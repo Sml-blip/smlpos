@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { formatPrice, generateId } from '../../lib/utils'
 import { cn } from '../../lib/utils'
@@ -931,7 +932,7 @@ function AddTrancheModal({
       if (!movement) {
         const result = created as { before?: number; amount?: number; after?: number; organisation_nom?: string }
         await printCreditMovementReceipt({
-          numero: `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`,
+          numero: await reserveDocumentNumber('ventes', `CR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-5)}`),
           clientNom: client.nom, telephone: client.telephone, adresse: client.adresse, operateur: agent.trim() || 'superadmin', date: new Date().toISOString(), note: note.trim() || undefined,
           type, before: Number(result.before ?? client.solde_credit), amount: Number(result.amount ?? montantNum), after: Number(result.after ?? newSolde), organisation: result.organisation_nom,
         })

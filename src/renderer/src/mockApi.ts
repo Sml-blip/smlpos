@@ -173,6 +173,7 @@ let nextFacFourn = FACTURES_FOURNISSEURS.length
 
 const mockApi = {
   ...seedMock,
+  sync2ReserveNumber: async (_table: string, proposed: string) => proposed,
   dbQuery: async () => [],
   dbRun: async () => ({ changes: 1, lastInsertRowid: 1 }),
   dbGet: async () => null,

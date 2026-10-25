@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useEffect, useCallback } from 'react'
 import { formatPrice, generateId } from '../../lib/utils'
 import { cn } from '../../lib/utils'
@@ -272,7 +273,7 @@ function NouvelleCommandeModal({ onClose, onSaved, shift }: { onClose: () => voi
       const s = shift as { id?: string; operateur_nom?: string } | null
       const prefix = `VL-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
       const lastNum = await api.ventesLigneGetLastNumber(prefix) as number
-      const numero = `${prefix}-${String(lastNum + 1).padStart(3, '0')}`
+      const numero = await reserveDocumentNumber('ventes_en_ligne', `${prefix}-${String(lastNum + 1).padStart(3, '0')}`)
       await api.ventesLigneCreate({
         id: generateId(), numero,
         shift_id: s?.id ?? null, operateur_nom: s?.operateur_nom ?? null,

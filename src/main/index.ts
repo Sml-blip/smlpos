@@ -24,6 +24,7 @@ import {
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { registerSeedIpc, legacySyncGate } from './seed/ipc'
+import { newCashId, reserveNumber } from './seed/numbering'
 import { importDefaultProductCatalog } from './seedProducts'
 import { PrinterService, type GainschaPrintJob, registerPrinterIPC } from './printer/PrinterService'
 import { registerAppProtocol, getAppIndexUrl } from './appProtocol'
@@ -724,7 +725,7 @@ function setupIpcHandlers() {
     if (!cash) {
       const previous = db.prepare('SELECT solde_ouverture,total_entrees,total_sorties FROM caisse_interne WHERE date_journal < ? ORDER BY date_journal DESC LIMIT 1').get(date) as { solde_ouverture?: number; total_entrees?: number; total_sorties?: number } | undefined
       const opening = previous ? money3(Number(previous.solde_ouverture) + Number(previous.total_entrees) - Number(previous.total_sorties)) : 100
-      db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(`ci-${date}`, date, opening)
+      db.prepare('INSERT OR IGNORE INTO caisse_interne (id,date_journal,solde_ouverture) VALUES (?,?,?)').run(newCashId(db, date), date, opening)
       cash = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(date) as Record<string, unknown>
     }
     return { date, cash }
@@ -1300,7 +1301,7 @@ function setupIpcHandlers() {
           ? String(shift.session_type)
           : (reportInput.session_type === 'MATIN' ? 'MATIN' : 'SOIR')
         const sequence = existing ? 1 : ((db.prepare(`SELECT COUNT(*) AS count FROM rapports_caisse WHERE date_journal=? AND session_type=?`).get(dateJournal, sessionType) as { count: number }).count + 1)
-        const numero = String(existing?.numero ?? `RAP-${dateJournal.replace(/-/g, '')}-${sessionType === 'MATIN' ? 'M' : 'S'}-${String(sequence).padStart(2, '0')}`)
+        const numero = String(existing?.numero ?? reserveNumber(db, 'rapports_caisse', `RAP-${dateJournal.replace(/-/g, '')}-${sessionType === 'MATIN' ? 'M' : 'S'}-${String(sequence).padStart(2, '0')}`))
         const soldeReel = reportInput.solde_reel === null || reportInput.solde_reel === undefined ? null : money3(reportInput.solde_reel)
         const report = {
           id: String(existing?.id ?? randomUUID()), numero, shift_id: id, date_journal: dateJournal, session_type: sessionType,
@@ -3938,7 +3939,7 @@ function setupIpcHandlers() {
       const soldeOuverture = yesterday
         ? yesterday.solde_ouverture + yesterday.total_entrees - yesterday.total_sorties
         : 100
-      const id = `ci-${today}`
+      const id = newCashId(db, today)
       db.prepare(`INSERT OR IGNORE INTO caisse_interne (id, date_journal, solde_ouverture) VALUES (?, ?, ?)`).run(id, today, soldeOuverture)
       row = db.prepare('SELECT * FROM caisse_interne WHERE date_journal = ?').get(today) as Record<string, unknown>
       if (row) enqueueSync('caisse_interne', 'INSERT', row)
@@ -5624,7 +5625,7 @@ function setupIpcHandlers() {
     const seqPrefix = `${prefixAvoir}-${dateStr}-`
     const lastNum = db.prepare(`SELECT numero FROM documents WHERE numero LIKE ? ORDER BY created_at DESC LIMIT 1`).get(`${seqPrefix}%`) as { numero: string } | undefined
     const nextSeq = lastNum ? (parseInt(lastNum.numero.split('-').pop() || '0') || 0) + 1 : 1
-    const avoirNumero = `${seqPrefix}${String(nextSeq).padStart(3, '0')}`
+    const avoirNumero = reserveNumber(db, 'documents', `${seqPrefix}${String(nextSeq).padStart(3, '0')}`)
 
     const lignes = db.prepare(`SELECT * FROM lignes_document WHERE document_id = ?`).all(id) as Record<string, unknown>[]
     const now = new Date().toISOString()

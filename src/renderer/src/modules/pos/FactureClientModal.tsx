@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useRef } from 'react'
 import { useAppStore } from '../../store/appStore'
 import type { CartItem, Vente } from '../../lib/types'
@@ -50,7 +51,7 @@ export default function FactureClientModal({ items, vente, onClose, onSuccess, i
       const prevSeq = parseInt(prevSeqRaw ?? '0') || 0
       const nextSeq = prevSeq + 1
       await api.settingsSet(seqKey, String(nextSeq))
-      const numero = `${yy}/#${String(nextSeq).padStart(5, '0')}`
+      const numero = await reserveDocumentNumber('factures_clients', `${yy}/#${String(nextSeq).padStart(5, '0')}`)
 
       const facture = {
         id: generateId(),

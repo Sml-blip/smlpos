@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useEffect } from 'react'
 import type { Vente, LigneVente } from '../../lib/types'
 import { generateId } from '../../lib/utils'
@@ -137,7 +138,7 @@ export function ConvertVenteDocModal({
       const next = prev + 1
       await api.settingsSet(seqKey, String(next))
       const prefix = type === 'BON_LIVRAISON' ? 'BL' : type === 'DEVIS' ? 'DEV' : ''
-      const numero = `${prefix}${yy}/#${String(next).padStart(5, '0')}`
+      const numero = await reserveDocumentNumber('documents', `${prefix}${yy}/#${String(next).padStart(5, '0')}`)
       const now = new Date().toISOString()
       
       const doc = {

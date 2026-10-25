@@ -12,6 +12,7 @@ import { installOutbox } from '../outbox'
 import { captureState,openVerifiedGate,setCaptureState } from '../gate'
 import { MockBackend } from './mockBackend'
 import { seedProductsIfEmpty } from '../../seedProducts'
+import { reserveNumber } from '../numbering'
 function fixture(empty=false,shared?:MockBackend,device='dev-2') {
  const directory=mkdtempSync(join(tmpdir(),'sml-pull-')),path=join(directory,'fixture.db');let db=new Database(path)
  db.exec('CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL)')
@@ -26,6 +27,24 @@ function fixture(empty=false,shared?:MockBackend,device='dev-2') {
 const stock=(db:Database.Database)=>(db.prepare("SELECT stock_actuel n FROM produits WHERE id='p'").get() as {n:number}).n
 const queued=(db:Database.Database)=>(db.prepare('SELECT count(*) n FROM outbox').get() as {n:number}).n
 const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1})
+
+test('two offline PCs reserve distinct sale numbers and pull all twenty sales without a UNIQUE collision', async () => {
+ const a=fixture(false,undefined,'10000000-0000-4000-8000-000000000001'),b=fixture(false,a.backend,'20000000-0000-4000-8000-000000000002')
+ try {
+  for(const [index,pc] of [a,b].entries()){
+   pc.enable();setCaptureState(pc.db,'sync_backend','vps')
+   for(let sale=0;sale<10;sale++)pc.db.prepare('INSERT INTO ventes VALUES(?,?,?)').run(`pc${index}-${sale}`,reserveNumber(pc.db,'ventes','VTE-20261025-0001'),10)
+   pc.reopen() // Reservation state must survive process/database restart.
+   assert.match(reserveNumber(pc.db,'ventes','VTE-20261025-0001'),/-000011$/)
+  }
+  await new OutboxDrainer(a.db,a.client()).once();await new OutboxDrainer(b.db,b.client()).once()
+  for(const pc of [a,b]){
+   await new PullClient(pc.db,pc.client()).once()
+   assert.equal((pc.db.prepare('SELECT count(*) n FROM ventes').get() as {n:number}).n,20)
+   assert.equal((pc.db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,0)
+  }
+ }finally{a.close();b.close()}
+})
 test('50 remote deltas produce no echo; failed cursor commit rolls back data and replay applies once',()=>{
  const f=fixture();try{
   const pull=new PullClient(f.db,f.client()),page:PullPage={changes:Array.from({length:50},(_,i)=>delta(i+1)),next_seq:50,has_more:false}
