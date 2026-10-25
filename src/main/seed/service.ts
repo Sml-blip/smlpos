@@ -4,6 +4,8 @@ import { buildReport, pendingRows, type PendingRow, type SeedReport } from './dr
 import { SeedLedger, type RejectedOp, type SeedState } from './ledger'
 import { createVerifiedBackup, hashFile, verifyBackupFile, type BackupVerification } from './snapshot'
 import { CONTRACT_VERSION, moneyColumnsOf } from './tables'
+import { installOutbox } from './outbox'
+import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptureState } from './gate'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -67,12 +69,15 @@ export class SeedService {
   private serverCache: { at: number; value: ServerStatus | null; error: string | null; kind: PanelStatus['connection'] } | null = null
   private memorySession: Session | null = null
   private client: BackendClient | null = null
+  private checking = false
 
   constructor(private readonly d: SeedDeps) {
     // A crash while running must never resume by itself.
     if (d.ledger.state() === 'running' || d.ledger.state() === 'finalizing') {
-      d.ledger.setState('paused')
-      d.ledger.set('message', 'Interrupted (app closed). Review and resume manually.')
+      const report = d.ledger.getJson<SeedReport>('report')
+      const verified = canDrainOutbox(d.liveDb()) && captureState(d.liveDb(), 'verified_digest') === report?.digest
+      d.ledger.setState(verified ? 'done' : 'paused')
+      d.ledger.set('message', verified ? 'Seed verification was already committed.' : 'Interrupted (app closed). Review and resume manually.')
     }
   }
 
@@ -107,6 +112,8 @@ export class SeedService {
   }
 
   async registerDevice(baseUrlRaw: string, enrollmentToken: string, deviceName: string): Promise<void> {
+    const existingInstall = captureState(this.d.liveDb(), 'install_id')
+    if (existingInstall) this.d.ledger.set('install_id', existingInstall)
     const baseUrl = validateBaseUrl(baseUrlRaw)
     if (!enrollmentToken.trim()) throw new Error('Enrollment token is required')
     if (!deviceName.trim()) throw new Error('Device name is required')
@@ -135,20 +142,49 @@ export class SeedService {
 
   // ───────────────────────── step 1+2: backup + checks ─────────────────────────
 
-  /** Backup the live DB (read-only on live), verify the copy, run the offline dry run on the COPY. */
+  /** Verified migration backup -> capture installation -> consistent seed copy.
+   * Business data is never normalized or rewritten in the live database. */
   async backupAndCheck(): Promise<SeedReport> {
     this.assertIdle()
+    this.checking = true
     const L = this.d.ledger
+    const live = this.d.liveDb()
+    L.set('approval', null)
     L.set('message', null)
-    const backup = await createVerifiedBackup(this.d.liveDb(), this.d.archiveDir)
+    closeSeedGate(live)
+    try {
+    const protection = await createVerifiedBackup(live, this.d.archiveDir)
+    L.setJson('migration_backup', protection)
+    if (!protection.ok) throw new Error(`Pre-migration backup failed: ${protection.problems.join(', ')}`)
+    installOutbox(live)
+    closeSeedGate(live)
+    const installId = captureState(live, 'install_id') || L.installId()
+    L.set('install_id', installId)
+    setCaptureState(live, 'install_id', installId)
+    if (L.get('device_id')) setCaptureState(live, 'device_id', L.get('device_id')!)
+    const backup = await createVerifiedBackup(live, this.d.archiveDir)
     L.setJson('backup', backup)
     if (!backup.ok) {
       L.setState('blocked')
       L.set('message', `Backup verification failed: ${backup.problems.join(', ')}`)
       throw new Error(L.get('message')!)
     }
+    const copy = new Database(backup.path, { readonly: true, fileMustExist: true })
+    let fence: number
+    try { fence = (copy.prepare('SELECT COALESCE(MAX(seq),0) n FROM outbox').get() as { n: number }).n }
+    finally { copy.close() }
+    if (!Number.isSafeInteger(fence)) throw new Error('Snapshot boundary is out of range')
+    live.transaction(() => {
+      setCaptureState(live, 'snapshot_fence', String(fence))
+      setCaptureState(live, 'snapshot_hash', backup.sha256)
+    })()
     L.setState('backup_ok')
-    return this.runChecks(backup.path, backup.sha256, true)
+    return await this.runChecks(backup.path, backup.sha256, true)
+    } catch (error) {
+      closeSeedGate(live)
+      L.setState('blocked')
+      throw error
+    } finally { this.checking = false }
   }
 
   /** Re-run the checks on the already verified backup (e.g. after the backend changed). */
@@ -230,7 +266,7 @@ export class SeedService {
 
   canRun(): boolean {
     const s = this.d.ledger.state()
-    return ['approved', 'paused', 'failed', 'needs_review'].includes(s) && !!this.d.ledger.getJson('approval') && !this.running
+    return ['approved', 'paused', 'failed', 'needs_review'].includes(s) && !!this.d.ledger.getJson('approval') && !this.running && !this.checking
   }
 
   pause(): void { if (this.running) this.cancel = true }
@@ -248,6 +284,7 @@ export class SeedService {
 
     this.running = true
     this.cancel = false
+    closeSeedGate(this.d.liveDb())
     try {
       // The backup must be byte-identical to what was checked and approved.
       const sha = await hashFile(report.backupPath)
@@ -315,9 +352,11 @@ export class SeedService {
       }
 
       L.setState('finalizing')
+      if (await hashFile(report.backupPath) !== approval.backupSha256) throw new Error('Backup file changed during upload')
       const fin = await client.seedFinalize({ seed_id: seedId, expected })
       const rejected = L.rejectedCount()
-      if (fin.ok && rejected === 0) {
+      if (fin.ok === true && Array.isArray(fin.diffs) && fin.diffs.length === 0 && rejected === 0) {
+        openVerifiedGate(this.d.liveDb(), report.digest, report.backupSha256)
         L.setState('done')
         L.set('message', 'Seed complete. Server totals match this PC.')
         L.setJson('last_seed', { at: new Date().toISOString(), digest: report.digest })
@@ -327,6 +366,7 @@ export class SeedService {
         L.set('message', `Seed finished but needs review: ${rejected} rejected, ${fin.diffs.length} total mismatch(es).`)
       }
     } catch (e) {
+      closeSeedGate(this.d.liveDb())
       const msg = e instanceof Error ? e.message : String(e)
       const permanent = e instanceof BackendError && !e.retryable
       L.setState(permanent ? 'failed' : 'paused')
@@ -342,6 +382,7 @@ export class SeedService {
   /** After 'done'/'needs_review': start a fresh backup+check; only changed rows will upload (ledger skips the rest). */
   resetForNewPass(): void {
     this.assertIdle()
+    closeSeedGate(this.d.liveDb())
     this.d.ledger.set('approval', null)
     this.d.ledger.set('seed_id', null)
     this.d.ledger.set('seed_digest', null)
@@ -351,7 +392,7 @@ export class SeedService {
   // ───────────────────────── panel status ─────────────────────────
 
   private assertIdle(): void {
-    if (this.running) throw new Error('A seed upload is running — pause it first')
+    if (this.running || this.checking) throw new Error('A seed operation is running — wait or pause it first')
   }
 
   rejected(): RejectedOp[] { return this.d.ledger.rejected() }

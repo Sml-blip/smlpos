@@ -65,11 +65,9 @@ export async function verifyBackupFile(path: string, live: Database.Database | n
     }
     if (liveTables) {
       for (const t of liveTables) if (!backupTables.includes(t)) problems.push(`table_missing_in_backup:${t}`)
-      for (const t of backupTables) {
-        const row = result.tables[t]
-        // A backup can never contain MORE rows than the live DB it was taken from.
-        if (row.live != null && row.backup > row.live) problems.push(`backup_ahead_of_live:${t}`)
-      }
+      // Sales and deletions can both occur after the backup's read snapshot.
+      // Counts are informational; consistency is guaranteed by SQLite backup,
+      // and changes after its in-copy outbox fence are retained for live sync.
     }
   } catch (e) {
     problems.push(`backup_open_failed:${String(e).slice(0, 200)}`)

@@ -17,6 +17,7 @@ export class MockBackend {
   batchesReceived = 0
   refreshCount = 0
   accessTokenTtlMs = 3_600_000
+  onBatch: ((table: string) => void | Promise<void>) | null = null
   seedInstallId: string | null
   state: 'empty' | 'seeding' | 'seeded'
   tableSpec: Record<string, { columns: string[]; pk: string }>
@@ -89,6 +90,7 @@ export class MockBackend {
         tbl.set(pk, row)
         accepted++
       }
+      await this.onBatch?.(body.table)
       return json(200, { accepted, duplicates, rejected })
     }
     if (url.pathname === '/v1/seed/finalize') {
