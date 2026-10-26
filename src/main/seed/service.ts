@@ -10,6 +10,7 @@ import { OutboxDrainer } from './drainer'
 import { PullClient } from './pull'
 import { liveStatus } from './monitor'
 import { prepareEmptyReplica } from './replica'
+import { prepareProtocolSchema } from './protocolSchema'
 
 export const CONFIRM_PHRASE = 'SEED'
 
@@ -171,6 +172,8 @@ export class SeedService {
     L.setJson('migration_backup', protection)
     if (!protection.ok) throw new Error(`Pre-migration backup failed: ${protection.problems.join(', ')}`)
     await this.d.quiesceLegacy?.()
+    const contract = this.loadSession() ? await this.getClient()!.preflight() : null
+    if (contract) prepareProtocolSchema(live, contract.tables)
     installOutbox(live)
     const deviceId = ensureDeviceId(live, L.get('device_id'))
     setCaptureState(live, 'sync_backend', 'vps')
@@ -378,7 +381,12 @@ export class SeedService {
       )
       const rejected = L.rejectedCount()
       if (fin.ok === true && Array.isArray(fin.diffs) && fin.diffs.length === 0 && rejected === 0) {
-        openVerifiedGate(this.d.liveDb(), report.digest, report.backupSha256)
+        const live=this.d.liveDb()
+        live.transaction(()=>{
+          if(fin.snapshot_seq!==undefined)setCaptureState(live,'pull_cursor',String(Math.max(Number(captureState(live,'pull_cursor')??0),fin.snapshot_seq)))
+          openVerifiedGate(live, report.digest, report.backupSha256)
+          live.prepare("UPDATE app_settings SET value='0' WHERE key='first_touch_pending'").run()
+        })()
         L.setState('done')
         L.set('message', 'Seed complete. Server totals match this PC.')
         L.setJson('last_seed', { at: new Date().toISOString(), digest: report.digest })
@@ -430,6 +438,8 @@ export class SeedService {
       if(!backup.ok)throw new Error('Protection backup verification failed')
       this.d.ledger.setJson('backup',backup)
       await this.d.quiesceLegacy?.()
+      const contract = await this.getClient()!.preflight()
+      prepareProtocolSchema(live, contract.tables)
       installOutbox(live)
       setCaptureState(live,'install_id',this.d.ledger.installId());setCaptureState(live,'device_id',status.deviceId!)
       if(this.d.ledger.get('number_code'))setCaptureState(live,'number_code',this.d.ledger.get('number_code')!)
@@ -455,6 +465,8 @@ export class SeedService {
     try {
     const backup=this.d.ledger.getJson<BackupVerification>('backup'),client=this.getClient()
     if(!backup?.ok||!client||captureState(this.d.liveDb(),'replica_join_pending')!=='1')throw new Error('Prepare this secondary PC before joining')
+    setCaptureState(this.d.liveDb(),'bootstrap_state','downloading')
+    setCaptureState(this.d.liveDb(),'pull_last_error','')
     const verified=await verifyBackupFile(backup.path,null)
     if(!verified.ok||verified.sha256!==backup.sha256)throw new Error('Protection backup changed; prepare it again')
     if(!this.puller)this.puller=new PullClient(this.d.liveDb(),client)

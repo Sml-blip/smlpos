@@ -10,7 +10,7 @@ import type { Pool } from './db.ts'
 import { registerSeedRoutes } from './seed.ts'
 import { registerSync2Routes } from './sync2.ts'
 
-export type Config = { privateKey: string; issuer: string; keyId: string; minimumVersion: string; liveWrites: boolean; syncUrl: string; seedStaging?:boolean; sync2Enabled?:boolean }
+export type Config = { privateKey: string; issuer: string; keyId: string; minimumVersion: string; liveWrites: boolean; syncUrl: string; seedStaging?:boolean; sync2Enabled?:boolean; stagingOnly?:boolean }
 type Identity = { userId: string; deviceId: string; role: string }
 const loginSchema = z.object({ username: z.string().min(1).max(80), password: z.string().min(1).max(256), deviceId: uuid7, deviceName: z.string().trim().min(1).max(80), platform: z.enum(['windows','android','development']) }).strict()
 const identifier = (value: string) => `"${value}"` // Only called after registry whitelist validation.
@@ -26,6 +26,13 @@ export function createApp(pool: Pool, config: Config) {
   }
   app.use('*', bodyLimit({maxSize:2*1024*1024,onError:c=>c.json({code:'BODY_TOO_LARGE'},413)}))
   app.use('*', async(c,next)=>{ c.header('Cache-Control','no-store'); c.header('X-Content-Type-Options','nosniff'); await next() })
+  app.use('*',async(c,next)=>{
+    if(config.stagingOnly){
+      const host=(c.req.header('host')??'').toLowerCase()
+      if(!['localhost','localhost:3000','localhost:13001','127.0.0.1','127.0.0.1:3000','127.0.0.1:13001','[::1]','[::1]:3000','[::1]:13001'].includes(host))return c.json({code:'STAGING_LOCAL_ONLY'},404)
+    }
+    await next()
+  })
   app.onError((error,c)=>{
     if(error instanceof z.ZodError) return c.json({code:'INVALID_PAYLOAD',message:'Données invalides'},422)
     if(error instanceof ApiError) return c.json({code:error.code,message:error.message},error.status as 400)
@@ -34,7 +41,7 @@ export function createApp(pool: Pool, config: Config) {
   })
   app.get('/health',async c=>{
     await pool.query('SELECT 1')
-    return c.json({ok:true,stage:'staging',schemaVersion:1,minClientVersion:config.minimumVersion,liveWritesEnabled:config.liveWrites,seedingEnabled:false,seedStagingEnabled:config.seedStaging===true})
+    return c.json({ok:true,stage:'staging',schemaVersion:1,minClientVersion:config.minimumVersion,liveWritesEnabled:config.liveWrites,seedingEnabled:false,seedStagingEnabled:config.seedStaging===true,sync2Enabled:config.sync2Enabled===true,stagingOnly:config.stagingOnly===true})
   })
   app.get('/.well-known/jwks.json',c=>c.json({keys:[jwk]}))
   app.post('/auth/login',async c=>{

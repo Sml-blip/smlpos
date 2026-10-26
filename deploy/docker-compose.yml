@@ -84,6 +84,8 @@ services:
       MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-1.9.1038}
       LIVE_WRITES_ENABLED: ${LIVE_WRITES_ENABLED:-false}
       SEED_STAGING_ENABLED: ${SEED_STAGING_ENABLED:-false}
+      SYNC2_ENABLED: ${SYNC2_ENABLED:-false}
+      STAGING_ONLY: ${STAGING_ONLY:-false}
       SYNC_URL: https://sync.${DOMAIN}
       JWT_ISSUER: https://api.${DOMAIN}
     volumes:

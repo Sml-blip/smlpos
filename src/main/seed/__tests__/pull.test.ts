@@ -32,6 +32,7 @@ const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',tabl
 
 test('sync2 pull metadata applies money DELTA in millimes rather than as an UPSERT',async()=>{
  const f=fixture();try{
+  f.enable()
   setCaptureState(f.db,'apply_mute','1');f.db.prepare("INSERT INTO clients VALUES('client','Client',10,2,'dev-2')").run();setCaptureState(f.db,'apply_mute','0')
   f.backend.liveSequence=1;f.backend.liveChanges=[{server_seq:1,origin_device:'dev-1',table:'clients',pk:'client',op:'DELTA',field:'solde_credit',value:-1250,row:{id:'client',nom:'Client',device_id:'dev-1'}}]
   const result=await new PullClient(f.db,f.client()).once()
@@ -113,7 +114,9 @@ test('two offline stock changes send ledger-backed DELTAs and converge on pull',
   assert.equal(da.applied,2);assert.equal(da.rejected,0);assert.equal(db.applied,2);assert.equal(db.rejected,0)
   assert.equal(a.backend.rows.get('produits')!.get('p')!.stock_actuel,95)
   await new PullClient(a.db,a.client()).once();await new PullClient(b.db,b.client()).once()
-  assert.equal(stock(a.db),95);assert.equal(stock(b.db),95);assert.equal(queued(a.db),0);assert.equal(queued(b.db),0)
+  assert.equal(stock(a.db),95);assert.equal(stock(b.db),95)
+  assert.equal((a.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
+  assert.equal((b.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
  }finally{a.close();b.close()}
 })
 test('remote state overrides an unsent edit; its later own echo restores the winning server state',async()=>{
@@ -125,16 +128,35 @@ test('remote state overrides an unsent edit; its later own echo restores the win
   await f.client().pushLive('dev-1',[{seq:2,table:'categories',pk:'c',op:'DELETE',at:'2020-01-01T00:00:00Z'}]);await pull.once();assert.equal(f.db.prepare("SELECT id FROM categories WHERE id='c'").get(),undefined);assert.equal(queued(f.db),1)
  }finally{f.close()}
 })
-test('bootstrap pulls the activated snapshot from sequence zero',async()=>{
+test('fresh replica receives the full snapshot and verifies row counts plus money totals before enabling POS',async()=>{
  const f=fixture(true);try{
-  const pull=new PullClient(f.db,f.client());await pull.bootstrap();assert.equal(stock(f.db),100);assert.equal(captureState(f.db,'pull_cursor'),'1');assert.equal(queued(f.db),0)
+  const pull=new PullClient(f.db,f.client());await pull.bootstrap();assert.equal(stock(f.db),100);assert.equal(captureState(f.db,'pull_cursor'),'2');assert.equal(queued(f.db),0)
+  assert.equal(captureState(f.db,'bootstrap_complete'),'1');assert.equal(captureState(f.db,'outbox_drain_enabled'),'1')
+  assert.deepEqual(JSON.parse(captureState(f.db,'bootstrap_verification')!),{serverSeq:2,tables:6,rows:2,moneyFields:5})
+  assert.equal((f.db.prepare("SELECT prix_vente FROM produits WHERE id='p'").get() as {prix_vente:number}).prix_vente,10)
+ }finally{f.close()}
+})
+test('fresh replica stays locked when a server money total differs from the downloaded snapshot',async()=>{
+ const f=fixture(true);try{
+  f.db.exec('CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT)')
+  f.backend.tableSpec.app_settings={pk:'key',columns:['key','value']}
+  prepareEmptyReplica(f.db)
+  const mismatched:typeof fetch=async(input,init)=>{
+   const response=await f.backend.fetch(input,init),url=new URL(String(input))
+   if(url.pathname!=='/sync2/verification')return response
+   const data=await response.json() as {tables:Record<string,{moneyTotals:Record<string,string>}>}
+   data.tables.produits.moneyTotals.prix_vente='10001'
+   return new Response(JSON.stringify(data),{status:response.status,headers:{'content-type':'application/json'}})
+  }
+  await assert.rejects(new PullClient(f.db,f.client(mismatched)).bootstrap(),/Vérification du téléchargement échouée/)
+  assert.notEqual(captureState(f.db,'bootstrap_complete'),'1');assert.notEqual(captureState(f.db,'outbox_drain_enabled'),'1');assert.equal(captureState(f.db,'bootstrap_state'),'error');assert.match(captureState(f.db,'pull_last_error')!,/Vérification du téléchargement échouée/)
  }finally{f.close()}
 })
 test('a 600-row bootstrap resumes after a failed page without duplicate or echo rows',async()=>{
  const f=fixture(true);try{
   f.backend.rows.set('produits',new Map(Array.from({length:600},(_,i)=>{const id=`p${String(i).padStart(4,'0')}`;return [id,{id,nom:'Remote',reference:`R${i}`,prix_vente:10000,stock_actuel:1}]})))
   const broken:typeof fetch=async(input,init)=>{const url=new URL(String(input));if(url.pathname==='/sync2/pull'&&Number(url.searchParams.get('since'))>0)throw new TypeError('connection lost');return f.backend.fetch(input,init)}
-  await assert.rejects(new PullClient(f.db,f.client(broken)).bootstrap(),/connection lost/);assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,500)
+  await assert.rejects(new PullClient(f.db,f.client(broken)).bootstrap(),/connection lost/);assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,499)
   f.reopen();await new PullClient(f.db,f.client()).bootstrap();assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,600);assert.equal(queued(f.db),0);assert.equal(captureState(f.db,'bootstrap_complete'),'1')
  }finally{f.close()}
 })
@@ -142,5 +164,32 @@ test('an interrupted join never repopulates the bundled catalog on restart',()=>
  const f=fixture(true);try{
   setCaptureState(f.db,'bootstrap_tables','["produits"]');f.reopen();seedProductsIfEmpty(f.db)
   assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,0);assert.equal(queued(f.db),0)
+ }finally{f.close()}
+})
+
+test('bootstrap retries foreign-key dependencies without losing the deferred line',async()=>{
+ const f=fixture(true);try{
+  f.db.pragma('foreign_keys=ON')
+  f.backend.rows.set('lignes_vente',new Map([['line',{id:'line',vente_id:'sale',designation:'Synthetic',total_ligne:2500}]]))
+  f.backend.rows.set('ventes',new Map([['sale',{id:'sale',numero:'SYNTHETIC',total_ttc:2500}]]))
+  await new PullClient(f.db,f.client()).bootstrap()
+  assert.equal(captureState(f.db,'bootstrap_complete'),'1')
+  assert.equal((f.db.prepare('SELECT total_ligne n FROM lignes_vente').get() as {n:number}).n,2.5)
+  assert.equal((f.db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,0)
+ }finally{f.close()}
+})
+test('bootstrap verifies its snapshot boundary then receives a concurrent money DELTA through live pull',async()=>{
+ const f=fixture(true);try{
+  f.backend.rows.set('clients',new Map([['customer',{id:'customer',nom:'Synthetic',solde_credit:20000,solde_fidelite:0}]]))
+  f.backend.onBootstrapPage=()=>{
+   f.backend.onBootstrapPage=null
+   const row=f.backend.rows.get('clients')!.get('customer')!
+   f.backend.rows.get('clients')!.set('customer',{...row,solde_credit:21000})
+   f.backend.liveChanges.push({server_seq:++f.backend.liveSequence,origin_device:'dev-1',table:'clients',pk:'customer',op:'DELTA',field:'solde_credit',value:1000})
+  }
+  const pull=new PullClient(f.db,f.client());await pull.bootstrap()
+  const amount=()=>(f.db.prepare("SELECT solde_credit n FROM clients WHERE id='customer'").get() as {n:number}).n
+  assert.equal(amount(),20);assert.equal(captureState(f.db,'bootstrap_complete'),'1')
+  await pull.once();assert.equal(amount(),21);await pull.once();assert.equal(amount(),21)
  }finally{f.close()}
 })

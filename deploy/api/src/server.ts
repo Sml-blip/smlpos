@@ -12,6 +12,8 @@ const app=createApp(pool,{
  minimumVersion:process.env.MIN_CLIENT_VERSION??'1.10.0',liveWrites:process.env.LIVE_WRITES_ENABLED==='true',
  syncUrl:process.env.SYNC_URL??'https://sync.pos.sml.boutique',
  seedStaging:process.env.SEED_STAGING_ENABLED==='true',
+ sync2Enabled:process.env.SYNC2_ENABLED==='true',
+ stagingOnly:process.env.STAGING_ONLY==='true',
 })
 const server=serve({fetch:app.fetch,port:Number(process.env.PORT??3000),hostname:'0.0.0.0'})
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{server.close(()=>{void pool.end().then(()=>process.exit(0))})})

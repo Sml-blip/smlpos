@@ -10,3 +10,5 @@ ALTER TABLE sync2_changes ADD COLUMN IF NOT EXISTS delta_field text;
 ALTER TABLE sync2_changes ADD COLUMN IF NOT EXISTS delta_value bigint;
 CREATE TABLE IF NOT EXISTS sync2_operations(op_id text PRIMARY KEY,device_id uuid NOT NULL REFERENCES devices(id),payload_hash text NOT NULL,result jsonb NOT NULL);
 
+
+ALTER TABLE sync2_seeds ADD COLUMN IF NOT EXISTS snapshot_seq bigint;

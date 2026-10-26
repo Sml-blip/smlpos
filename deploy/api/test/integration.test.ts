@@ -27,7 +27,9 @@ test('Postgres/API: auth, replay, rollback, permissions, device limits and revoc
   assert.ok(session.accessToken)
   const auth=session.accessToken
   await t.test('health is public; device data requires authentication and current version',async()=>{
-   assert.equal((await request('/health')).status,200)
+   const health=await request('/health');assert.equal(health.status,200)
+   const status=await health.json() as {seedStagingEnabled?:boolean;sync2Enabled?:boolean;liveWritesEnabled?:boolean}
+   assert.equal(status.seedStagingEnabled,false);assert.equal(status.sync2Enabled,false);assert.equal(status.liveWritesEnabled,true)
    assert.equal((await request('/devices')).status,401)
    assert.equal((await request('/devices',undefined,auth,'1.0.0')).status,426)
    assert.equal((await request('/devices/heartbeat',{},auth)).status,200)

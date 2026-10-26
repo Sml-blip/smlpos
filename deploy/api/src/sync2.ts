@@ -15,7 +15,7 @@ async function tx<T>(pool:Pool,work:(client:PoolClient)=>Promise<T>){const clien
 async function seed(client:PoolClient,id:string,identity:Identity){
  const row=(await client.query('SELECT * FROM sync2_seeds WHERE id=$1 AND device_id=$2 FOR UPDATE',[id,identity.deviceId])).rows[0]
  if(!row)throw new ApiError(404,'SEED_NOT_FOUND','Préparation introuvable')
- return row as {id:string;manifest:Manifest;manifest_hash:string;status:string}
+ return row as {id:string;manifest:Manifest;manifest_hash:string;status:string;snapshot_seq:string|null}
 }
 async function stats(client:PoolClient,seedId:string,table:string){
  const result=emptyStats(table);let cursor=''
@@ -37,6 +37,27 @@ const business=(payload:Record<string,unknown>)=>Object.fromEntries(Object.entri
 export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
  app.use('/sync2/*',async(c,next)=>{if(!enabled)throw new ApiError(503,'SYNC2_DISABLED','Synchronisation VPS en préparation');await next()})
  app.get('/sync2/contract',c=>c.json({schemaVersion:2,tables:contract,seedActivationSupported:true}))
+ app.get('/sync2/verification',async c=>{
+  const client=await pool.connect()
+  try{
+   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+   if(!(await client.query("SELECT 1 FROM sync2_seeds WHERE status='active' LIMIT 1")).rowCount)throw new ApiError(409,'SEED_REQUIRED','Les données de l’entreprise ne sont pas encore prêtes')
+   const seq=(await client.query('SELECT COALESCE(MAX(seq),0)::text server_seq FROM sync2_changes')).rows[0].server_seq
+   const serverSeq=Number(seq)
+   if(!Number.isSafeInteger(serverSeq)||serverSeq<0)throw new ApiError(500,'SYNC_SEQUENCE_RANGE','Position de synchronisation invalide')
+   const tables:Record<string,{count:number;moneyTotals:Record<string,string>}>=Object.create(null)
+   for(const [table,schema] of Object.entries(contract)){
+    const fields=Object.entries(schema.columns).filter(([,kind])=>kind==='money').map(([field])=>field)
+    const sums=fields.map((field,index)=>`COALESCE(SUM(COALESCE((payload->>$${index+2})::numeric,0)),0)::text AS "${field.replaceAll('"','""')}"`)
+    const result=await client.query(`SELECT COUNT(*)::text AS count${sums.length?`,${sums.join(',')}`:''} FROM sync2_records WHERE table_name=$1 AND deleted=false`,[table,...fields])
+    const count=Number(result.rows[0].count)
+    if(!Number.isSafeInteger(count)||count<0)throw new ApiError(500,'SYNC_COUNT_RANGE','Nombre de lignes invalide')
+    tables[table]={count,moneyTotals:Object.fromEntries(fields.map(field=>[field,String(result.rows[0][field]??'0')]))}
+   }
+   await client.query('COMMIT')
+   return c.json({serverSeq,tables})
+  }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+ })
  app.use('/sync2/seed/*',async(c,next)=>{if(c.get('identity').role!=='admin')throw new ApiError(403,'ROLE_FORBIDDEN','Administrateur requis');await next()})
  app.post('/sync2/seed/validate',async c=>{
   const input=z.object({table:z.string(),rows:z.array(jsonRow).max(500)}).strict().parse(await c.req.json())
@@ -86,12 +107,31 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
   return c.json(await tx(pool,async client=>{
    const job=await seed(client,seedId,identity)
    if(job.manifest_hash!==reviewedManifestHash)throw new ApiError(409,'REVIEW_CHANGED','Le rapport approuvé ne correspond pas')
-   if(job.status==='active')return {ok:true,replayed:true}
+   if(job.status==='active'){
+    if(job.snapshot_seq===null)throw new ApiError(409,'SEED_BOUNDARY_REQUIRED','Cette préparation ancienne nécessite une vérification de sa position de synchronisation')
+    return {ok:true,replayed:true,snapshotSeq:Number(job.snapshot_seq)}
+   }
    if(job.status!=='verified')throw new ApiError(409,'SEED_NOT_VERIFIED','Vérification requise')
    if((await client.query('SELECT 1 FROM sync2_records LIMIT 1')).rowCount)throw new ApiError(409,'BUSINESS_NOT_EMPTY','Activation refusée sur une base non vide')
    await client.query("INSERT INTO sync2_records(table_name,row_id,payload,version) SELECT table_name,row_id,payload,nextval('sync2_seq') FROM sync2_seed_rows WHERE seed_id=$1 ORDER BY table_name,row_id",[seedId])
    await client.query('INSERT INTO sync2_changes(seq,table_name,row_id,payload,deleted) SELECT version,table_name,row_id,payload,deleted FROM sync2_records ORDER BY version')
-   await client.query("UPDATE sync2_seeds SET status='active' WHERE id=$1",[seedId]);return {ok:true,replayed:false}
+   const snapshotSeq=Number((await client.query('SELECT COALESCE(MAX(seq),0)::text n FROM sync2_changes')).rows[0].n)
+   if(!Number.isSafeInteger(snapshotSeq))throw new ApiError(500,'SYNC_SEQUENCE_RANGE','Position de synchronisation invalide')
+   // The verified desktop stock is the opening balance. Any ledger already
+   // supplied by the seed is retained; only its difference is established here.
+   const products=(await client.query("SELECT row_id,payload FROM sync2_records WHERE table_name='produits' AND deleted=false")).rows
+   const totals=new Map((await client.query("SELECT payload->>'produit_id' id, SUM((payload->>'delta')::numeric)::text total FROM sync2_records WHERE table_name='stock_movements' AND deleted=false GROUP BY payload->>'produit_id'")).rows.map(row=>[String(row.id),BigInt(row.total)]))
+   for(const product of products){
+    const difference=BigInt(product.payload.stock_actuel??0)-(totals.get(product.row_id)??0n)
+    if(difference===0n)continue
+    const delta=Number(difference)
+    if(!Number.isSafeInteger(delta))throw new ApiError(422,'INVALID_STOCK','Solde initial hors limites')
+    const id='seed-opening:'+digest(product.row_id)
+    const movement={id,produit_id:product.row_id,delta,reason:'OPENING_BALANCE',ref_id:seedId,device_id:identity.deviceId,created_at:new Date().toISOString()}
+    validateRow('stock_movements',movement)
+    await publish(client,'stock_movements',id,movement)
+   }
+   await client.query("UPDATE sync2_seeds SET status='active',snapshot_seq=$2 WHERE id=$1",[seedId,snapshotSeq]);return {ok:true,replayed:false,snapshotSeq}
   }))
  })
  app.post('/sync2/push',async c=>{
@@ -121,14 +161,14 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
       const movement={id:movementId,produit_id:op.rowId,delta:op.value,reason:'SYNC2_DELTA',ref_id:op.opId,device_id:identity.deviceId,created_at:new Date().toISOString()}
       try{validateRow('stock_movements',movement)}catch(error){return reject(error instanceof ApiError?error.code:'INVALID_STOCK',error instanceof Error?error.message:'Mouvement de stock invalide')}
       await publish(client,'stock_movements',movementId,movement)
-      const nextProduct={...product.payload,stock_actuel:stock}
+      const nextProduct={...product.payload,stock_actuel:stock,device_id:identity.deviceId}
       const eventPayload=Object.fromEntries(Object.entries(nextProduct).filter(([field])=>!counterFields('produits').includes(field)))
       const version=await publish(client,'produits',op.rowId,nextProduct,false,{operation:'DELTA',field:op.field,value:op.value,payload:eventPayload})
       const result={opId:op.opId,status:'applied',version};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result
      }
      const nextValue=current+op.value
      if(!Number.isSafeInteger(nextValue))return reject('COUNTER_RANGE','Le compteur dépasse la plage entière sûre')
-     const nextPayload={...target.payload,[op.field]:nextValue}
+     const nextPayload={...target.payload,[op.field]:nextValue,device_id:identity.deviceId}
      const eventPayload={...nextPayload};delete eventPayload[op.field]
      const version=await publish(client,op.table,op.rowId,nextPayload,false,{operation:'DELTA',field:op.field,value:op.value,payload:eventPayload})
      const result={opId:op.opId,status:'applied',version};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result
@@ -173,7 +213,7 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
     let version=await publish(client,op.table,op.rowId,payload,op.op==='DELETE',{payload:eventPayload})
     if(op.table==='stock_movements'){
      const qty=(await client.query("SELECT COALESCE(sum((payload->>'delta')::numeric),0)::text n FROM sync2_records WHERE table_name='stock_movements' AND deleted=false AND payload->>'produit_id'=$1",[String(payload.produit_id)])).rows[0].n
-     const nextProduct={...stockProduct,stock_actuel:Number(qty)}
+     const nextProduct={...stockProduct,stock_actuel:Number(qty),device_id:identity.deviceId}
      const productEvent=Object.fromEntries(Object.entries(nextProduct).filter(([field])=>!counterFields('produits').includes(field)))
      version=await publish(client,'produits',String(payload.produit_id),nextProduct,false,{operation:'DELTA',field:'stock_actuel',value:stockDelta!,payload:productEvent})
     }
@@ -185,7 +225,7 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
  app.get('/sync2/pull',async c=>{
   const since=z.string().regex(/^\d+$/).max(20).parse(c.req.query('since')??'0');const limit=z.coerce.number().int().min(1).max(500).parse(c.req.query('limit')??500)
   if(!(await pool.query("SELECT 1 FROM sync2_seeds WHERE status='active' LIMIT 1")).rowCount)throw new ApiError(409,'SEED_REQUIRED','Import initial non activé')
-  const rows=(await pool.query('SELECT seq::text,table_name,row_id,payload,deleted,operation,delta_field,delta_value::text FROM sync2_changes WHERE seq>$1 ORDER BY seq LIMIT $2',[since,limit])).rows
+  const rows=(await pool.query('SELECT seq::text,table_name,row_id,payload,deleted,operation,delta_field,delta_value::text FROM sync2_changes WHERE seq>$1 ORDER BY sync2_changes.seq LIMIT $2',[since,limit])).rows
   const changes=rows.map(row=>({seq:row.seq,table_name:row.table_name,row_id:row.row_id,payload:row.payload,deleted:row.deleted,op:row.deleted?'DELETE':row.operation,...(row.operation==='DELTA'?{field:row.delta_field,value:Number(row.delta_value)}:{})}))
   return c.json({rows:changes,nextSeq:rows.at(-1)?.seq??since,hasMore:rows.length===limit})
  })

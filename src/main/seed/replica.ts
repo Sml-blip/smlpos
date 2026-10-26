@@ -17,6 +17,7 @@ export function prepareEmptyReplica(db:Database.Database){
   setCaptureState(db,'apply_mute','1')
   for(const table of [...names].reverse())if(table!=='app_settings')db.prepare(`DELETE FROM ${quote(table)}`).run()
   for(const {key} of db.prepare('SELECT key FROM app_settings').all() as {key:string}[])if(isSeedableSetting(key))db.prepare('DELETE FROM app_settings WHERE key=?').run(key)
+  db.prepare("INSERT INTO app_settings(key,value) VALUES('first_touch_pending','1') ON CONFLICT(key) DO UPDATE SET value='1'").run()
   setCaptureState(db,'sync_backend','vps');setCaptureState(db,'replica_join_pending','1')
   for(const table of names)if(table!=='app_settings')for(const op of ['INSERT','UPDATE','DELETE'])db.exec(`CREATE TRIGGER IF NOT EXISTS ${quote(`join_lock_${table}_${op}`)} BEFORE ${op} ON ${quote(table)} WHEN (SELECT v FROM sync_state WHERE k='replica_join_pending')='1' AND (SELECT v FROM sync_state WHERE k='apply_mute')='0' BEGIN SELECT RAISE(ABORT,'Finish joining this PC before making business changes'); END;`)
   setCaptureState(db,'apply_mute','0')

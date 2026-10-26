@@ -226,7 +226,7 @@ test('rejected operations are listed, not acked, and retried on the next run', a
   assert.equal(ledger.state(), 'done', ledger.get('message') ?? '')
 })
 
-test('product UPSERT waits for the server stock ledger instead of overwriting stock', async () => {
+test('product UPSERT is accepted without counters and preserves server stock', async () => {
   const be = new MockBackend({ tables: serverTablesFrom(getDb()) })
   const { svc } = newService(be)
   await svc.registerDevice('https://sync.example.com', 'good-user', 'good-pass', 'PC Principal')
@@ -236,11 +236,15 @@ test('product UPSERT waits for the server stock ledger instead of overwriting st
   const originalServerStock = be.rows.get('produits')!.get('p3')!.stock_actuel
   getDb().prepare(`UPDATE produits SET prix_vente = 99.999 WHERE id = 'p3'`).run()
   const drained = await svc.drainLiveChanges()
-  assert.equal(drained.rejected, 1)
-  assert.equal(be.rows.get('produits')!.get('p3')!.prix_vente, 13345)
+  assert.equal(drained.rejected, 0)
+  assert.equal(drained.applied, 1)
+  assert.equal(be.rows.get('produits')!.get('p3')!.prix_vente, 99999)
   assert.equal(be.rows.get('produits')!.get('p3')!.stock_actuel, originalServerStock)
+  const productWrite=be.pushBatches.at(-1)!.ops.find(op=>op.table==='produits')!
+  assert.equal(productWrite.op,'INSERT')
+  assert.equal(Object.hasOwn(productWrite.payload as object,'stock_actuel'),false)
   const status = await svc.status(true)
-  assert.equal((status.live as { rejected: number }).rejected, 1)
+  assert.equal((status.live as { rejected: number }).rejected, 0)
 })
 
 test('refuses to seed into a backend that holds another installation\'s data', async () => {

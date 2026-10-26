@@ -8,6 +8,8 @@
     "dev": "electron-vite dev",
     "dev:browser": "vite --config vite.browser.config.ts",
     "build": "electron-vite build",
+    "test": "node scripts/seed-test/run.mjs",
+    "test:ipc": "node scripts/check-ipc-handlers.mjs",
     "prepackage": "node scripts/check-env.mjs && node scripts/generate-icon.mjs",
     "preview": "electron-vite preview",
     "test:seed": "node scripts/seed-test/run.mjs",

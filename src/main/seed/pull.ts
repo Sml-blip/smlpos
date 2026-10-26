@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import type { BackendClient,LiveChange,PullPage } from './client'
 import { captureState,setCaptureState,canDrainOutbox } from './gate'
-import { CONTRACT_VERSION,COUNTER_COLUMNS,moneyColumnsOf,primaryKeyOf,syncedTableNames } from './tables'
+import { CONTRACT_VERSION,COUNTER_COLUMNS,moneyColumnsOf,primaryKeyOf,syncedTableNames,toMillimes } from './tables'
 import { isSeedableSetting,describeColumns } from './dryRun'
 const q=(name:string)=>`"${name.replaceAll('"','""')}"`
 export class PullClient {
@@ -69,7 +69,10 @@ export class PullClient {
   }
   private isolated(change:LiveChange,bootstrap=false){
     this.db.exec('SAVEPOINT pull_change')
-    try{const changed=this.apply(change,bootstrap);this.db.exec('RELEASE pull_change');return changed?'applied':'skipped'}
+    try{
+      // Preserve event order for a row whose parent has not arrived yet.
+      if(bootstrap&&this.db.prepare('SELECT 1 FROM pull_rejects WHERE table_name=? AND pk=? AND server_seq<? LIMIT 1').get(change.table,change.pk,change.server_seq))throw new Error('Earlier bootstrap event is waiting for its dependency')
+      const changed=this.apply(change,bootstrap);this.db.exec('RELEASE pull_change');return changed?'applied':'skipped'}
     catch(error){
       this.db.exec('ROLLBACK TO pull_change; RELEASE pull_change')
       this.db.prepare('INSERT OR REPLACE INTO pull_rejects(server_seq,table_name,pk,reason,payload,at) VALUES(?,?,?,?,?,?)').run(change.server_seq,change.table,change.pk,(error instanceof Error?error.message:'Invalid change').slice(0,300),JSON.stringify(change),new Date().toISOString())
@@ -123,6 +126,14 @@ export class PullClient {
         for(const table of names)if(!['app_settings','operateurs','categories','services_pos'].includes(table)&&(this.db.prepare(`SELECT 1 FROM ${q(table)} LIMIT 1`).get()))throw new Error('This PC contains business data; review it before joining')
         setCaptureState(this.db,'bootstrap_tables',encoded)
       }
+      const verification=await this.client.sync2Verification()
+      if(!Number.isSafeInteger(verification.serverSeq)||verification.serverSeq<0||!verification.tables||
+        names.length!==Object.keys(verification.tables).length||names.some(table=>!verification.tables[table]))throw new Error('Le serveur a renvoyé un résumé de vérification incomplet')
+      for(const table of names){
+        const expected=verification.tables[table]
+        if(!Number.isSafeInteger(expected.count)||expected.count<0||!expected.moneyTotals||Object.values(expected.moneyTotals).some(value=>!/^[-]?\d+$/.test(value)))throw new Error(`Résumé de vérification invalide pour ${table}`)
+      }
+      setCaptureState(this.db,'bootstrap_server_seq',String(verification.serverSeq))
       setCaptureState(this.db,'bootstrap_state','downloading')
       let downloaded=Number(captureState(this.db,'bootstrap_rows')??0)
       let pages=Number(captureState(this.db,'bootstrap_pages')??0)
@@ -134,28 +145,56 @@ export class PullClient {
         if(table==='app_settings')for(const id of [...ids])if(!isSeedableSetting(id))ids.delete(id)
         expectedIds.set(table,ids)
       }
-      // sync2 has no table/bootstrap endpoint. Seed activation publishes the
-      // full snapshot to the change log, so a fresh device starts at since=0.
-      // Cursor commits make an interrupted join resumable without replaying rows.
-      while(true){
+      // A previous bootstrap attempt may have committed its cursor while
+      // deferring a child row until its parent arrives. Include those events
+      // when rebuilding the expected snapshot after restart.
+      const deferred=this.db.prepare('SELECT payload FROM pull_rejects WHERE server_seq<=? ORDER BY server_seq').all(verification.serverSeq) as {payload:string}[]
+      for(const item of deferred){
+        const change=JSON.parse(item.payload) as LiveChange,ids=expectedIds.get(change.table)
+        if(!ids||change.table==='app_settings'&&!isSeedableSetting(change.pk))continue
+        if(change.op==='DELETE')ids.delete(change.pk)
+        else if(change.op==='UPSERT')ids.add(change.pk)
+      }
+      // Seed activation publishes the full snapshot to the change log. Download
+      // through the verification snapshot's sequence so concurrent later writes
+      // remain for normal live polling after this replica is verified.
+      while(Number(captureState(this.db,'pull_cursor')??0)<verification.serverSeq){
         if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap; review before continuing')
         const cursor=Number(captureState(this.db,'pull_cursor')??0)
         const page=await this.client.pullLive(cursor)
         if(!page||!Array.isArray(page.changes)||page.changes.length>500||typeof page.has_more!=='boolean'||!Number.isSafeInteger(page.next_seq)||page.next_seq<cursor||page.has_more&&!page.changes.length)throw new Error('Bootstrap pull page is invalid')
         if(page.changes.some(change=>!Number.isSafeInteger(change.server_seq)||change.server_seq<=cursor))throw new Error('Bootstrap pull cursor did not advance')
         if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap')
-        for(const change of page.changes){
+        const changes=page.changes.filter(change=>change.server_seq<=verification.serverSeq)
+        if(!changes.length)throw new Error('Le téléchargement n’a pas atteint la position de vérification du serveur')
+        for(const change of changes){
           const ids=expectedIds.get(change.table)
           if(!ids||change.table==='app_settings'&&!isSeedableSetting(change.pk))continue
           if(change.op==='DELETE')ids.delete(change.pk)
           else if(change.op==='UPSERT')ids.add(change.pk)
         }
-        this.applyPage(page,true)
-        downloaded+=page.changes.length;pages++
+        const nextSeq=changes.at(-1)!.server_seq
+        this.applyPage({changes,next_seq:nextSeq,has_more:nextSeq<verification.serverSeq},true)
+        downloaded+=changes.length;pages++
         setCaptureState(this.db,'bootstrap_rows',String(downloaded));setCaptureState(this.db,'bootstrap_pages',String(pages))
-        setCaptureState(this.db,'bootstrap_as_of',String(page.next_seq))
-        if(!page.has_more)break
+        setCaptureState(this.db,'bootstrap_as_of',String(nextSeq))
       }
+      setCaptureState(this.db,'bootstrap_state','verifying')
+      // Seed rows arrive in server sequence, not foreign-key order. Retry the
+      // deferred rows before comparing totals, keeping each row's event order.
+      this.db.transaction(()=>{
+        const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')
+        for(let pass=0;pass<=names.length;pass++){
+          const retries=this.db.prepare('SELECT server_seq,payload FROM pull_rejects ORDER BY server_seq').all() as {server_seq:number;payload:string}[]
+          let applied=0
+          for(const retry of retries)if(this.isolated(JSON.parse(retry.payload) as LiveChange,true)!=='rejected'){
+            this.db.prepare('DELETE FROM pull_rejects WHERE server_seq=?').run(retry.server_seq);applied++
+          }
+          if(!applied)break
+        }
+        setCaptureState(this.db,'apply_mute',mute)
+      })()
+      setCaptureState(this.db,'bootstrap_as_of',captureState(this.db,'pull_cursor')??'0')
       const countMismatches:string[]=[]
       for(const table of names){
         const actual=table==='app_settings'
@@ -163,20 +202,33 @@ export class PullClient {
           : (this.db.prepare(`SELECT count(*) n FROM ${q(table)}`).get() as {n:number}).n
         const expected=expectedIds.get(table)!.size
         if(actual!==expected)countMismatches.push(`${table}: attendu ${expected}, reçu ${actual}`)
+        const server=verification.tables[table]
+        if(actual!==server.count)countMismatches.push(`${table}: serveur ${server.count}, reçu ${actual}`)
+        const fields=Object.keys(server.moneyTotals).sort(),localFields=moneyColumnsOf(table).filter(field=>describeColumns(this.db,table).some(column=>column.name===field)).sort()
+        if(JSON.stringify(fields)!==JSON.stringify(localFields))countMismatches.push(`${table}: colonnes monétaires différentes`)
+        else for(const field of fields){
+          const rows=this.db.prepare(`SELECT ${q(field)} AS value FROM ${q(table)}`).all() as {value:unknown}[]
+          let total=0n
+          for(const row of rows){const converted=toMillimes(row.value??0);if(!converted.ok)throw new Error(`Montant local invalide : ${table}.${field}`);total+=BigInt(converted.millimes)}
+          if(total!==BigInt(server.moneyTotals[field]))countMismatches.push(`${table}.${field}: total serveur ${server.moneyTotals[field]} millimes, reçu ${total} millimes`)
+        }
       }
       if(countMismatches.length)throw new Error(`Vérification du téléchargement échouée — ${countMismatches.slice(0,8).join('; ')}`)
+      setCaptureState(this.db,'bootstrap_verification',JSON.stringify({serverSeq:verification.serverSeq,tables:names.length,rows:names.reduce((sum,table)=>sum+verification.tables[table].count,0),moneyFields:names.reduce((sum,table)=>sum+Object.keys(verification.tables[table].moneyTotals).length,0)}))
       this.db.transaction(()=>{
         const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')
-        const retries=this.db.prepare('SELECT server_seq,payload FROM pull_rejects WHERE server_seq<0').all() as {server_seq:number;payload:string}[]
-        retries.sort((a,b)=>names.indexOf((JSON.parse(a.payload) as LiveChange).table)-names.indexOf((JSON.parse(b.payload) as LiveChange).table))
-        for(const retry of retries)if(this.isolated(JSON.parse(retry.payload) as LiveChange,true)!=='rejected')this.db.prepare('DELETE FROM pull_rejects WHERE server_seq=?').run(retry.server_seq)
         const rejected=!!this.db.prepare('SELECT 1 FROM pull_rejects LIMIT 1').get()
         setCaptureState(this.db,'bootstrap_state',rejected?'review':'complete')
         setCaptureState(this.db,'pull_cursor',captureState(this.db,'bootstrap_as_of')!);setCaptureState(this.db,'bootstrap_complete',rejected?'0':'1')
         setCaptureState(this.db,'seed_finalized_at',new Date().toISOString());setCaptureState(this.db,'outbox_drain_enabled',rejected?'0':'1')
         setCaptureState(this.db,'replica_join_pending',rejected?'1':'0')
+        if(!rejected&&names.includes('app_settings'))this.db.prepare("UPDATE app_settings SET value='0' WHERE key='first_touch_pending'").run()
         setCaptureState(this.db,'apply_mute',mute);setCaptureState(this.db,'pull_last_error',rejected?'Initial reception has rejected rows; review the diagnostic before retrying':'')
       })()
+    }catch(error){
+      setCaptureState(this.db,'bootstrap_state','error')
+      setCaptureState(this.db,'pull_last_error',(error instanceof Error?error.message:'Initial reception failed').slice(0,300))
+      throw error
     }finally{this.running=false}
   }
 }

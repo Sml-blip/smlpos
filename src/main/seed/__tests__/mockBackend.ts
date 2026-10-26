@@ -26,6 +26,7 @@ export class MockBackend {
   accessTokenTtlMs = 3_600_000
   onBatch: ((table: string) => void | Promise<void>) | null = null
   liveSeen = new Map<string,{hash:string;result:PushResult['results'][number]&{version?:string;reason?:string}}>()
+  seedSnapshotSeq = 0
   liveSequence = 0
   dropPushResponses = 0
   liveChanges:LiveChange[]=[]
@@ -75,10 +76,23 @@ export class MockBackend {
       const tables=Object.fromEntries(Object.entries(this.tableSpec).map(([name,table])=>[name,{pk:table.pk,columns:Object.fromEntries(table.columns.map(column=>[column,moneyColumnsOf(name).includes(column)?'money':'text']))}]))
       return json(200,{schemaVersion:2,tables})
     }
+    if (url.pathname === '/sync2/verification') {
+      if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})
+      if(!this.liveChanges.length&&this.rows.size){for(const [table,rows]of this.rows)for(const[pk,row]of rows){this.liveSequence++;this.liveChanges.push({server_seq:this.liveSequence,origin_device:'seed',table,pk,op:'UPSERT',row})}}
+      const tables=Object.fromEntries(Object.keys(this.tableSpec).map(table=>{
+        const rows=this.rows.get(table)??new Map<string,Record<string,unknown>>(),fields=moneyColumnsOf(table).filter(field=>this.tableSpec[table]?.columns.includes(field))
+        const moneyTotals=Object.fromEntries(fields.map(field=>[field,[...rows.values()].reduce((sum,row)=>sum+BigInt(String(row[field]??0)),0n).toString()]))
+        return [table,{count:rows.size,moneyTotals}]
+      }))
+      const snapshot={serverSeq:this.liveSequence,tables}
+      // Let the test publish a concurrent event only after verification has
+      // captured its consistent snapshot, not during the earlier preflight pull.
+      await this.onBootstrapPage?.()
+      return json(200,snapshot)
+    }
     if (url.pathname === '/sync2/pull') {
       if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})
       if(!this.liveChanges.length&&this.rows.size){for(const [table,rows]of this.rows)for(const[pk,row]of rows){this.liveSequence++;this.liveChanges.push({server_seq:this.liveSequence,origin_device:'seed',table,pk,op:'UPSERT',row})}}
-      await this.onBootstrapPage?.()
       const since=Number(url.searchParams.get('since')??0),limit=Number(url.searchParams.get('limit')??500)
       const remaining=this.liveChanges.filter(change=>change.server_seq>since).slice(0,limit)
       return json(200,{rows:remaining.map(change=>({seq:String(change.server_seq),table_name:change.table,row_id:change.pk,payload:change.row??{[change.table==='app_settings'?'key':'id']:change.pk},deleted:change.op==='DELETE',op:change.op,...(change.op==='DELTA'?{field:change.field,value:change.value}:{})})),nextSeq:String(remaining.at(-1)?.server_seq??since),hasMore:this.liveChanges.filter(change=>change.server_seq>since).length>limit})
@@ -109,10 +123,10 @@ export class MockBackend {
     }
     if (url.pathname === '/sync2/seed/activate') {
       if(body.reviewedManifestHash!==this.manifestHash)return json(409,{code:'REVIEW_CHANGED'})
-      if(this.state==='seeded')return json(200,{ok:true,replayed:true})
+      if(this.state==='seeded')return json(200,{ok:true,replayed:true,snapshotSeq:this.seedSnapshotSeq})
       this.liveChanges=[]
       for(const [table,rows] of this.rows)for(const [pk,row] of rows){this.liveSequence++;this.liveChanges.push({server_seq:this.liveSequence,origin_device:'seed',table,pk,op:'UPSERT',row})}
-      this.state='seeded';return json(200,{ok:true,replayed:false})
+      this.seedSnapshotSeq=this.liveSequence;this.state='seeded';return json(200,{ok:true,replayed:false,snapshotSeq:this.seedSnapshotSeq})
     }
     if (url.pathname === '/sync2/push') {
       if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})

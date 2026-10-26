@@ -15,6 +15,8 @@ export default function ShiftModal() {
   const [pin, setPin] = useState('')
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const canChooseOperator = settingsLoaded && settings.first_touch_pending !== '1' && operateurs.length > 0
   const [alert, setAlert] = useState('')
   const [dayStatus, setDayStatus] = useState<{ openedCount: number; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean; staleOpen?: Shift | null } | null>(null)
   const [resumeStale, setResumeStale] = useState(false)
@@ -26,12 +28,13 @@ export default function ShiftModal() {
       .then(([s, status]) => {
         setSettings((s ?? {}) as Record<string, string>)
         setDayStatus(status)
+        setSettingsLoaded(true)
       })
       .catch(() => setSettings({}))
   }, [])
 
   const handleStart = async () => {
-    if (!selectedOp) return
+    if (!canChooseOperator || !selectedOp) return
     const expectedPin = settings[`pin_${selectedOp.identifiant.toLowerCase()}`] ?? 'sml2023'
     if (pin !== expectedPin) {
       setAlert('PIN opérateur incorrect.')
@@ -75,6 +78,7 @@ export default function ShiftModal() {
   }
 
   const enterPreview = () => {
+    if (!canChooseOperator) return
     setCurrentShift(null)
     setCurrentOperateur(null)
     setPreviewMode(true)
@@ -96,12 +100,12 @@ export default function ShiftModal() {
             <img src={logoUrl} alt="SML POS" className="w-12 h-12 object-contain" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-text-primary">Démarrage de Caisse</h1>
-            <p className="text-sm text-text-secondary">SMLPOS — Qui prend la caisse ?</p>
+            <h1 className="text-xl font-bold text-text-primary">{canChooseOperator ? 'Démarrage de Caisse' : 'Bienvenue dans SMLPOS'}</h1>
+            <p className="text-sm text-text-secondary">{canChooseOperator ? 'SMLPOS — Qui prend la caisse ?' : 'Rejoignez votre entreprise pour configurer ce poste.'}</p>
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-2 gap-3">
+        {canChooseOperator && <div className="mb-6 grid grid-cols-2 gap-3">
           <div className={`rounded-xl border p-3 ${dayStatus?.morningDone ? 'border-emerald-200 bg-emerald-50' : dayStatus?.nextSession === 'MATIN' ? 'border-amber-300 bg-amber-50' : 'border-border bg-muted'}`}>
             <div className="flex items-center gap-2 text-sm font-bold"><Sun size={15} className="text-amber-600"/> Caisse matin {dayStatus?.morningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
             <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.morningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'MATIN' ? 'Prochaine ouverture' : 'Non disponible'}</p>
@@ -110,16 +114,16 @@ export default function ShiftModal() {
             <div className="flex items-center gap-2 text-sm font-bold"><Moon size={15} className="text-indigo-600"/> Caisse soir {dayStatus?.eveningDone && <CheckCircle2 size={14} className="ml-auto text-emerald-600"/>}</div>
             <p className="mt-1 text-[11px] text-text-secondary">{dayStatus?.eveningDone ? 'Terminée aujourd’hui' : dayStatus?.nextSession === 'SOIR' ? 'Prochaine ouverture' : dayStatus?.nextSession === 'MATIN' ? 'Après la caisse matin' : 'Non disponible'}</p>
           </div>
-        </div>
+        </div>}
 
-        {dayStatus?.staleOpen && (
+        {canChooseOperator && dayStatus?.staleOpen && (
           <div className="mb-6 rounded-xl border border-orange-300 bg-orange-50 p-3 text-xs text-orange-950">
             <div className="flex items-start gap-2"><AlertCircle size={15} className="mt-0.5 shrink-0 text-orange-700"/><div className="flex-1"><b>Caisse précédente non clôturée — données conservées</b><p className="mt-1">{dayStatus.staleOpen.operateur_nom} · ouverte le {new Date(dayStatus.staleOpen.started_at).toLocaleString('fr-TN')}. Les transactions ne sont pas supprimées.</p></div></div>
             <button type="button" onClick={() => { const op = operateurs.find(item => item.id === dayStatus.staleOpen?.operateur_id || item.nom === dayStatus.staleOpen?.operateur_nom) || null; setSelectedOp(op); setPin(''); setResumeStale(true); setAlert('Saisissez le PIN de cet opérateur pour reprendre puis clôturer la caisse précédente.') }} className="mt-3 w-full rounded-lg border border-orange-300 bg-white px-3 py-2 font-bold text-orange-900 hover:bg-orange-100">Reprendre cette caisse pour la clôturer</button>
           </div>
         )}
 
-        {dayStatus && !dayStatus.canOpen && (
+        {canChooseOperator && dayStatus && !dayStatus.canOpen && (
           <div className="mb-6 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
             <Lock size={15} className="mt-0.5 flex-shrink-0"/>
             <span>Les deux ouvertures autorisées aujourd’hui sont terminées. Une nouvelle caisse sera disponible demain.</span>
@@ -129,7 +133,7 @@ export default function ShiftModal() {
         {/* Operator selection */}
         <div className="mb-6">
           <label className="block text-sm font-semibold text-text-primary mb-3">Opérateur</label>
-          <div className="grid grid-cols-3 gap-3">
+          {canChooseOperator ? <div className="grid grid-cols-3 gap-3">
             {operateurs.map(op => (
               <button
                 key={op.id}
@@ -149,11 +153,17 @@ export default function ShiftModal() {
                 )}
               </button>
             ))}
-          </div>
+          </div> : <div className="rounded-xl border border-dashed border-teal-300 bg-teal-50 p-5 text-center">
+            <p className="font-semibold text-teal-950">Configurez ce poste avant d’ouvrir la caisse.</p>
+            <p className="mt-1 text-sm text-teal-900">Rejoignez l’entreprise pour recevoir les opérateurs, les produits et les données de caisse.</p>
+          </div>}
+          <button type="button" onClick={() => window.dispatchEvent(new Event('smlpos:open-company-join'))} className="mt-3 w-full rounded-xl border border-teal-300 bg-white px-4 py-2.5 text-sm font-bold text-teal-800 transition hover:bg-teal-50">
+            Rejoindre une entreprise
+          </button>
         </div>
 
         {/* Operator PIN */}
-        {selectedOp && (
+        {canChooseOperator && selectedOp && (
           <div className="mb-6">
             <label className="block text-sm font-semibold text-text-primary mb-2">PIN opérateur</label>
             <div className="flex items-center gap-2 bg-muted rounded-xl px-4 py-3 border border-border focus-within:border-accent-500 focus-within:bg-accent-50 transition-colors">
@@ -172,7 +182,7 @@ export default function ShiftModal() {
         )}
 
         {/* Fond de caisse */}
-        <div className="mb-6">
+        {canChooseOperator && <div className="mb-6">
           <label className="block text-sm font-semibold text-text-primary mb-2">Fond de Caisse Initial</label>
           <div className="flex items-center gap-2 bg-muted rounded-xl px-4 py-3 border border-border focus-within:border-accent-500 focus-within:bg-accent-50 transition-colors">
             <Wallet size={18} className="text-text-secondary" />
@@ -186,10 +196,10 @@ export default function ShiftModal() {
             />
             <span className="text-text-secondary font-medium">DT</span>
           </div>
-        </div>
+        </div>}
 
         {/* Alert */}
-        {alert && (
+        {canChooseOperator && alert && (
           <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-4 text-sm text-yellow-800">
             <AlertCircle size={14} />
             {alert}
@@ -197,7 +207,7 @@ export default function ShiftModal() {
         )}
 
         {/* Start button */}
-        <button
+        {canChooseOperator && <button
           type="button"
           onClick={handleStart}
           disabled={!selectedOp || !pin || loading}
@@ -206,17 +216,17 @@ export default function ShiftModal() {
         >
           <Play size={18} />
           {loading ? 'Démarrage...' : resumeStale ? 'Reprendre la caisse précédente' : `Ouvrir la caisse ${dayStatus?.nextSession === 'SOIR' ? 'soir' : 'matin'}`}
-        </button>
+        </button>}
 
-        <button
+        {canChooseOperator && <button
           type="button"
           onClick={enterPreview}
           className="mt-3 w-full flex items-center justify-center gap-2 border border-border bg-white hover:bg-muted text-text-primary font-bold py-3 rounded-xl transition-colors text-sm"
         >
           <Eye size={17}/>
           Entrer en mode aperçu (lecture seule)
-        </button>
-        <p className="mt-2 text-center text-[10px] text-text-muted">Navigation autorisée, aucune création ni modification possible.</p>
+        </button>}
+        {canChooseOperator && <p className="mt-2 text-center text-[10px] text-text-muted">Navigation autorisée, aucune création ni modification possible.</p>}
       </div>
     </div>
   )

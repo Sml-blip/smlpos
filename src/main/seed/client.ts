@@ -45,6 +45,7 @@ export interface BatchResult {
 }
 
 export interface FinalizeResult {
+  snapshot_seq?: number
   ok: boolean
   diffs: { table: string; field: string; expected: number | string; actual: number | string }[]
 }
@@ -54,6 +55,7 @@ export interface PushResult { results:{seq:number;status:'applied'|'duplicate'|'
 export type LiveChange = Omit<LiveOp,'seq'|'at'> & { server_seq:number;origin_device:string;table:string;pk:string;op:'UPSERT'|'DELETE'|'DELTA';row?:Record<string,unknown>;field?:string;value?:number }
 export interface PullPage { changes:LiveChange[];next_seq:number;has_more:boolean }
 export interface BootstrapPage { rows:Record<string,unknown>[];as_of_seq:number;has_more:boolean }
+export interface Sync2Verification { serverSeq:number; tables:Record<string,{count:number;moneyTotals:Record<string,string>}> }
 
 export class BackendError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly retryable: boolean) {
@@ -90,6 +92,7 @@ export class BackendClient {
   }
   status() { return this.adapter.status() }
   preflight() { return this.adapter.preflight() }
+  sync2Verification() { return this.adapter.sync2Verification() }
   seedBegin(body: { install_id: string; report_digest: string; expected: Record<string, unknown> }, snapshot: { path: string; installId: string; tables: string[]; snapshotHash: string }) {
     return this.adapter.seedBegin(body, snapshot)
   }

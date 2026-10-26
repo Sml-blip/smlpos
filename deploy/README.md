@@ -1,5 +1,11 @@
 # SMLPOS sync staging deployment
 
+> **Current status (2026-10-26): blocked.** The verification record below is
+> historical. Hetzner Console shows the existing `smlpos-sync-01` at
+> `2.28.64.69`, which is also the previously observed production API IP. Do
+> not deploy staging to that server. The separate staging VM and host-key pin
+> have not been created/verified.
+
 Verified on 2026-10-24 at `/opt/pos/staging` on `smlpos-sync-01` (`2.28.64.69`). This is a staging foundation, not a production migration.
 
 ## Running services
@@ -16,20 +22,41 @@ PowerSync logs confirm all 42 publication tables were snapshotted and the replic
 
 ## Reproduce the backend validation
 
+The staging override is deliberately separate from the base compose file. It
+pins the project and Postgres volume to the staging names, enables only the
+staging seed and sync2 routes, keeps legacy live writes off, and binds the API
+to loopback port 13001 and PowerSync to loopback port 13002. Its login response
+uses those same loopback endpoints and does not advertise production URLs. It
+does not start the public Caddy profile. A test PC can reach it through SSH
+tunnels without changing production DNS.
+
 From the staging directory on the server:
 
 ```sh
-docker compose config --quiet
-docker compose up -d --build postgres api powersync
-docker compose --profile test run --build --rm tests
-docker compose --profile public up -d caddy
+docker compose -f docker-compose.yml -f docker-compose.staging.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build postgres api powersync
+docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile test run --build --rm tests
+docker compose -f docker-compose.yml -f docker-compose.staging.yml exec -T api node -e "fetch('http://localhost:3000/health').then(async r=>{const x=await r.json();console.log(JSON.stringify({ok:r.ok,stage:x.stage,seedStagingEnabled:x.seedStagingEnabled,sync2Enabled:x.sync2Enabled,liveWritesEnabled:x.liveWritesEnabled}));if(!r.ok||x.stage!=='staging'||!x.seedStagingEnabled||!x.sync2Enabled||x.liveWritesEnabled)process.exit(1)})"
 ```
 
 The test runner creates a uniquely named synthetic PostgreSQL schema, runs migrations twice, exercises the API, then removes only that schema. It does not populate the public business tables. The verified result is 29 passing tests, zero failures and zero skipped tests.
 
-`infra/hetzner/stage_backend.py` transfers source without `.env`, private keys, node_modules or database files. It preserves existing volumes and secrets. The first run creates server-side random database passwords and an RSA signing key. Never print `docker compose config` without `--quiet`, copy private keys into the repository, or remove the database volume to rerun initialization.
+`infra/hetzner/stage_backend.py` transfers source without `.env`, private keys, node_modules or database files. It preserves existing volumes and secrets. It requires `SMLPOS_STAGING_HOST`, a pinned known-hosts file, and a separate key at `~/.ssh/smlpos-staging` (or `SMLPOS_STAGING_SSH_KEY`). It rejects the production API hostname/IP and keeps strict SSH host-key checking enabled. The first run creates server-side random database passwords and an RSA signing key. Never print `docker compose config` without `--quiet`, copy private keys into the repository, or remove the database volume to rerun initialization.
 
 `schema.sql`, the upload registry and PowerSync rules are generated from the audited source inventory with `python deploy/generate-schema.py`. Review generated migrations before applying to any populated production database. The present migrations create the initial staging schema; they are not a general production schema-upgrade system.
+
+Before a synthetic seed is attempted, audit the sync boundary without changing
+rows:
+
+```sql
+SELECT id, status, snapshot_seq
+FROM sync2_seeds
+ORDER BY created_at;
+```
+
+An existing active row with `snapshot_seq IS NULL` must not be reactivated. Use
+a new isolated staging database or prepare a reviewed boundary backfill on
+staging; never infer a boundary from an unrelated production sequence.
 
 ## Activation requirements
 

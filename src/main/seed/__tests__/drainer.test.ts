@@ -29,13 +29,22 @@ test('seed gate prevents requests; allowlisted stock DELTA and product UPSERT ar
   f.db.exec("UPDATE categories SET nom='Changed' WHERE id='c'; UPDATE produits SET stock_actuel=8 WHERE id='p'; UPDATE categories SET nom='Category' WHERE id='c'")
   const drainer=new OutboxDrainer(f.db,f.client(),f.clock)
   assert.equal((await drainer.once()).gated,true);assert.equal(f.backend.calls.length,0)
-  f.enable();const result=await drainer.once();assert.equal(result.applied,3);assert.equal(result.rejected,0)
+  f.enable();const result=await drainer.once();assert.equal(result.applied,4);assert.equal(result.rejected,0)
   assert.equal(f.backend.rows.get('categories')!.get('c')!.nom,'Category')
   assert.equal(f.backend.rows.get('produits')!.get('p')!.stock_actuel,8)
-  assert.equal(f.backend.liveSeen.size,3);assert.equal((f.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
+  assert.equal(f.backend.liveSeen.size,4);assert.equal((f.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
   const sent=f.backend.pushBatches.at(-1)!.ops
   assert.ok(sent.some(op=>op.table==='produits'&&op.op==='DELTA'&&op.field==='stock_actuel'&&op.value===-2&&!('payload' in op)))
   assert.ok(sent.some(op=>op.table==='produits'&&op.op==='INSERT'&& !('stock_actuel' in (op.payload as Record<string,unknown>))))
+ }finally{f.close()}
+})
+test('counter DELTAs outside the allowlist remain visible and are not sent',async()=>{
+ const f=fixture();try{
+  f.enable();f.db.prepare("INSERT INTO outbox(table_name,pk,op,delta_field,delta_value,at) VALUES('produits','p','DELTA','prix_vente',1,'2026-01-01T00:00:00Z')").run()
+  const result=await new OutboxDrainer(f.db,f.client(),f.clock).once()
+  assert.equal(result.rejected,1);assert.equal(result.applied,0);assert.equal(f.backend.pushBatches.length,0)
+  const rejected=f.db.prepare("SELECT sent_at,last_error FROM outbox WHERE op='DELTA'").get() as {sent_at:string|null;last_error:string}
+  assert.equal(rejected.sent_at,null);assert.match(rejected.last_error,/rejected:local_validation:Invalid counter delta/)
  }finally{f.close()}
 })
 test('money counter is sent as integer millime DELTA, never as an absolute UPSERT',async()=>{

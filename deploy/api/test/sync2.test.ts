@@ -62,7 +62,7 @@ test('TEXT-ID seed, 20 post-snapshot sales, replay and two-device offline stock'
     received+=page.rows.length;since=page.nextSeq
     if(!page.hasMore)break
    }while(true)
-   assert.ok(received>=28)
+   assert.equal(received,Number((await pool.query('SELECT count(*) n FROM sync2_changes')).rows[0].n))
    assert.equal((await (await request(`/sync2/pull?since=${since}`,undefined,second)).json()).rows.length,0)
    const frozen=await request('/sync2/push',{ops:[{opId:'change-final-sale',table:'ventes',rowId:'legacy-sale',op:'UPDATE',payload:{...rows.ventes[0],total_ttc:1}}]},first)
    assert.equal((await frozen.json()).results[0].code,'IMMUTABLE_ROW')
@@ -80,6 +80,21 @@ test('TEXT-ID seed, 20 post-snapshot sales, replay and two-device offline stock'
    assert.equal(Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n),before+1)
    const pulled=(await (await request('/sync2/pull?since=0&limit=500',undefined,second)).json()).rows.filter((row:Record<string,unknown>)=>row.op==='DELTA'&&row.table_name==='produits'&&row.row_id==='legacy-product')
    assert.equal(pulled.at(-1).field,'stock_actuel');assert.equal(pulled.at(-1).value,-2)
+   assert.equal(pulled.at(-1).payload.device_id,(await pool.query('SELECT device_id FROM sync2_operations WHERE op_id=$1',[op.opId])).rows[0].device_id)
+  })
+  await t.test('concurrent stock DELTAs serialize and both create exactly one movement',async()=>{
+   const before=Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n)
+   const ops=[
+    {opId:'parallel-stock-delta-pc1',table:'produits',rowId:'legacy-product',op:'DELTA',field:'stock_actuel',value:-4},
+    {opId:'parallel-stock-delta-pc2',table:'produits',rowId:'legacy-product',op:'DELTA',field:'stock_actuel',value:3},
+   ]
+   const responses=await Promise.all(ops.map((op,index)=>request('/sync2/push',{ops:[op]},index===0?first:second)))
+   assert.deepEqual(responses.map(response=>response.status),[200,200])
+   const results=await Promise.all(responses.map(response=>response.json()))
+   assert.deepEqual(results.map(result=>result.results[0].status),['applied','applied'])
+   assert.equal(Number((await pool.query("SELECT payload->>'stock_actuel' n FROM sync2_records WHERE table_name='produits' AND row_id='legacy-product'")).rows[0].n),95)
+   assert.equal(Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements' AND payload->>'ref_id' IN ('parallel-stock-delta-pc1','parallel-stock-delta-pc2')")).rows[0].n),2)
+   assert.equal(Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n),before+2)
   })
   await t.test('money counter DELTA updates the stored value and pull event by integer millimes',async()=>{
    const op={opId:'client-credit-delta',table:'clients',rowId:'client-1',op:'DELTA',field:'solde_credit',value:-1235}
@@ -89,10 +104,15 @@ test('TEXT-ID seed, 20 post-snapshot sales, replay and two-device offline stock'
    assert.equal((await (await request('/sync2/push',{ops:[op]},first)).json()).results[0].status,'duplicate')
    const pulled=(await (await request('/sync2/pull?since=0&limit=500',undefined,second)).json()).rows.filter((row:Record<string,unknown>)=>row.op==='DELTA'&&row.table_name==='clients'&&row.row_id==='client-1')
    assert.equal(pulled.at(-1).field,'solde_credit');assert.equal(pulled.at(-1).value,-1235);assert.equal(pulled.at(-1).payload.solde_credit,undefined)
+   assert.equal(pulled.at(-1).payload.device_id,(await pool.query('SELECT device_id FROM sync2_operations WHERE op_id=$1',[op.opId])).rows[0].device_id)
    const stale={opId:'stale-absolute-client-balance',table:'clients',rowId:'client-1',op:'UPDATE',payload:{id:'client-1',nom:'Customer',solde_credit:100000,solde_fidelite:500}}
    const staleResult=(await (await request('/sync2/push',{ops:[stale]},first)).json()).results[0]
    assert.equal(staleResult.code,'COUNTER_DELTA_REQUIRED')
    assert.equal(Number((await pool.query("SELECT payload->>'solde_credit' n FROM sync2_records WHERE table_name='clients' AND row_id='client-1'")).rows[0].n),98765)
+   const verified=await (await request('/sync2/verification',undefined,second)).json()
+   assert.ok(Number.isSafeInteger(verified.serverSeq));assert.equal(verified.tables.produits.count,1)
+   assert.equal(verified.tables.produits.moneyTotals.prix_vente,'12345')
+   assert.equal(verified.tables.clients.count,1);assert.equal(verified.tables.clients.moneyTotals.solde_credit,'98765')
   })
   await t.test('invalid DELTAs are individually rejected without blocking a valid later op',async()=>{
    const ops=[

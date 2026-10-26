@@ -15,7 +15,7 @@ export const deltaAllowlist:Record<string,Readonly<Record<string,'stock'|'money'
 export const counterFields=(table:string)=>Object.keys(deltaAllowlist[table]??{})
 export const rowId=z.string().min(1).max(512)
 export const snapshotHash=z.string().regex(/^[0-9a-f]{64}$/)
-export const secretSetting=(key:string)=>/^(r2_|pin_|device_|seed_|sync2_|backup_|supabase_)/i.test(key)||/(secret|token|password|passwd|pin|api[_-]?key|access[_-]?key|private)/i.test(key)||['sync_backend','backend_url','schema_version','bootstrap_completed_at','bootstrap_last_errors','pull_last_at'].includes(key)
+export const secretSetting=(key:string)=>/^(r2_|pin_|device_|seed_|sync2_|backup_|supabase_)/i.test(key)||/(secret|token|password|passwd|pin|api[_-]?key|access[_-]?key|private)/i.test(key)||['first_touch_pending','sync_backend','backend_url','schema_version','bootstrap_completed_at','bootstrap_last_errors','pull_last_at'].includes(key)
 export function validateRow(table:string,payload:Record<string,unknown>){
  if(!Object.hasOwn(contract,table))throw new ApiError(422,'UNKNOWN_TABLE','Table non autorisée')
  const definition=contract[table];rowId.parse(payload[definition.pk])

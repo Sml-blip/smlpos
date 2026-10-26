@@ -3,7 +3,7 @@ import Database from 'better-sqlite3'
 import { convertRow, describeColumns, iterateSeedRows } from './dryRun'
 import { COUNTER_COLUMNS, primaryKeyOf } from './tables'
 import type {
-  BackendError, BatchResult, BootstrapPage, ClientOptions, FinalizeResult, LiveChange,
+  BackendError, BatchResult, BootstrapPage, ClientOptions, FinalizeResult, LiveChange, Sync2Verification,
   LiveOp, PullPage, PushResult, Preflight, ServerStatus, Session,
 } from './client'
 
@@ -196,6 +196,10 @@ export class ServerAdapter {
     }
   }
 
+  async sync2Verification(): Promise<Sync2Verification> {
+    return this.authorized<Sync2Verification>('GET', '/sync2/verification')
+  }
+
   async seedBegin(body: { install_id: string; report_digest: string; expected: Record<string, unknown> }, snapshot: SeedSnapshot) {
     if (snapshot.snapshotHash !== body.report_digest) throw new Error('Seed snapshot hash differs from the approved report')
     const contract = await this.loadContract()
@@ -239,8 +243,9 @@ export class ServerAdapter {
     if (!verified.ok) return {
       ok: false, diffs: verified.mismatches.map(table => ({ table, field: 'manifest', expected: 'approved snapshot', actual: 'server mismatch' })),
     }
-    await this.authorized('POST', '/sync2/seed/activate', { seedId: body.seed_id, reviewedManifestHash: manifestHash })
-    return { ok: true, diffs: [] }
+    const activated=await this.authorized<{snapshotSeq:number}>('POST', '/sync2/seed/activate', { seedId: body.seed_id, reviewedManifestHash: manifestHash })
+    if(!Number.isSafeInteger(activated.snapshotSeq)||activated.snapshotSeq<0)throw new Error('Server did not return a valid seed snapshot boundary')
+    return { ok: true, diffs: [], snapshot_seq: activated.snapshotSeq }
   }
 
   async pushLive(deviceId: string, ops: LiveOp[]): Promise<PushResult> {
@@ -261,7 +266,7 @@ export class ServerAdapter {
     if (supported.length) {
       const payloadOps = supported.map(op => {
         const base = { opId: sha(`${deviceId}:${op.seq}`), table: op.table, rowId: op.pk }
-      if (op.op === 'DELTA') return { ...base, op: 'DELTA' as const, field: op.field, value: op.value }
+        if (op.op === 'DELTA') return { ...base, op: 'DELTA' as const, field: op.field, value: op.value }
         const primaryKey = primaryKeyOf(op.table)
         const payload = op.op === 'UPSERT' ? op.row : { [primaryKey]: op.pk }
         return { ...base, op: op.op === 'DELETE' ? 'DELETE' as const : 'INSERT' as const, payload }
