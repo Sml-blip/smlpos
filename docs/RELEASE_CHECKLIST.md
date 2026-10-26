@@ -11,7 +11,7 @@ validation.
 ## Safety boundary
 
 - No request was sent to `api.pos.sml.boutique` or any production database.
-- No Hetzner deployment, migration, seed, release, merge, or Git push was run.
+- No Hetzner deployment, migration, seed, release, or merge was run for this plan. Local commits were pushed to the feature branch.
 - Public DNS resolution returned `api.pos.sml.boutique -> 2.28.64.69` and
   `sync.pos.sml.boutique -> 2.28.64.69`. The repository's deployment helper
   targets `2.28.64.69`; this is therefore not a separately named staging
@@ -25,16 +25,16 @@ validation.
 
 ## Code and staging configuration prepared
 
-- Added `deploy/docker-compose.staging.yml`. It pins Compose to
-  `pos-sync-staging`, uses the dedicated volume `pos-sync-staging_pgdata`, sets
-  `SEED_STAGING_ENABLED=true` and `SYNC2_ENABLED=true`, keeps
-  `LIVE_WRITES_ENABLED=false`, enables `STAGING_ONLY=true`, and binds the API
-  only to `127.0.0.1:13001`.
+- The standalone `deploy/docker-compose.staging.yml` uses project
+  `smlpos-staging`, volume `smlpos-staging_pgdata`, and loopback API/PowerSync
+  ports `23001`/`23002`. Every service has CPU and memory limits. Staging
+  flags for seed, sync2, live writes, and staging-only mode are enabled only
+  in its own generated environment.
 - Added an API `SYNC2_ENABLED` toggle and made `/health` report the sync2,
   staging seed, live-write, and staging-only states. In staging-only mode, API
   requests whose Host is not loopback receive 404. This keeps a staging API
   from being exposed through the production hostname.
-- Updated `infra/hetzner/stage_backend.py` to use the staging override for
+- Updated `infra/hetzner/stage_backend.py` to use only the standalone staging file for
   compose config, deployment, and database tests. The helper has **not** been
   run against Hetzner.
 - Added root npm scripts `test` and `test:ipc`; npm itself is not installed or
@@ -51,8 +51,8 @@ validation.
 | Electron desktop build | **PASS** | `node node_modules/electron-vite/bin/electron-vite.js build` — main, preload, and renderer built. One existing non-blocking warning remains for dynamic and static imports of `src/main/seed/client.ts`. |
 | API unit/config tests | **PASS** | API run below — staging flag/Host tests and database-independent tests pass. |
 | API database integrations | **BLOCKED** | Same API run reports `pass 12`, `fail 0`, `skipped 3`. The skipped tests are auth/Postgres, seed staging/Postgres, and sync2/Postgres because no `TEST_DATABASE_URL` for isolated staging was available. These are not counted as passing. |
-| Compose YAML syntax | **PASS (YAML only)** | `js-yaml` parsed `deploy/docker-compose.yml` and `deploy/docker-compose.staging.yml`. Docker Compose's merge/runtime validation was not possible because Docker Compose is unavailable here. |
-| Staging API deployment/migration | **BLOCKED — NOT RUN** | No verified host-key pin; DNS shows the documented host IP is also the production API IP. `stage_backend.py` was not invoked. |
+| Compose YAML syntax | **PASS (YAML only)** | `js-yaml` parsed `deploy/docker-compose.yml` and `deploy/docker-compose.staging.yml`. Docker Compose runtime validation was not possible because Docker Compose is unavailable here. |
+| Staging API deployment/migration | **BLOCKED — NOT RUN** | No verified host-key pin; DNS shows the documented host IP is also the production API IP. the helper was not executed against the server. |
 | `snapshot_seq` staging audit | **NOT RUN** | No staging database connection. Read-only audit query is below. |
 | Physical/manual PC validation | **NOT RUN** | No two staging Windows test PCs were available. |
 | `npm test` / `npm run test:ipc` invocations | **NOT RUN** | npm is unavailable in the environment. Their underlying commands passed directly as listed above. |
@@ -95,29 +95,25 @@ boundary reconciliation. Do not infer a boundary from a production sequence.
 
 ## Staging deployment and test-PC procedure
 
-These steps remain **pending** until a separately billed staging server has
-been provisioned and its host key verified. The existing Hetzner server
-`smlpos-sync-01` is `2.28.64.69`, the same IP previously returned for the
-production API names, so it must not be treated as isolated staging. The new
-staging Compose override binds the API and PowerSync to server loopback ports
-`13001` and `13002`; a test PC must tunnel both ports and use
-`http://127.0.0.1:13001` as its API address.
+These steps remain **pending** until the independently verified host-key
+fingerprint and user “go” are received and the read-only and backup/restore
+checks in [the shared-host plan](../infra/hetzner/shared-host-staging-plan.md)
+pass. No server purchase is authorized. The shared production host must not be
+considered an isolated machine; isolation is by a separate project, directory,
+volume and loopback ports. Stop for unexpected results and the specified
+RAM/disk thresholds.
 
-1. Create a separate staging VM. Confirm its SSH host key against the Hetzner
-   console and pin it in the ignored `infra/hetzner/.generated/known_hosts`
-   file. Set `SMLPOS_STAGING_HOST` to that IP/hostname. The deployment helper
-   rejects the production IP and production API hostnames and requires strict
-   host-key checking. Confirm the target path is `/opt/pos/staging`, Compose
-   project is `pos-sync-staging`, and the Postgres volume is
-   `pos-sync-staging_pgdata`.
-2. Deploy with the updated staging helper. Confirm `/health` reports
-   `stage=staging`, `seedStagingEnabled=true`, `sync2Enabled=true`,
-   `stagingOnly=true`, and `liveWritesEnabled=false`. Confirm requests with the
-   production Host are rejected. Confirm staging login returns only loopback
-   JWT/PowerSync URLs and both ports are reachable only through SSH tunnels.
-3. Run `docker compose -f docker-compose.yml -f docker-compose.staging.yml
-   --profile test run --build --rm tests` from `/opt/pos/staging`. Require zero
-   skipped tests and zero failures. Audit `snapshot_seq` using the query above.
+1. Verify and pin the ED25519 host key; use the existing `deploy` identity only
+   if access works. Inspect and record production container IDs, start times,
+   volumes, flags, resource usage and ports. Prove a production `pg_dump`
+   restores into a separate scratch cluster before deployment.
+2. Deploy with the explicit `--shared-host-staging` and `--step-b-clean` gates
+   after the reviewed checks. Confirm `/health` reports `stage=staging`,
+   `seedStagingEnabled=true`, `sync2Enabled=true`, `stagingOnly=true`, and
+   `liveWritesEnabled=true` in staging only. Confirm login URLs are loopback.
+3. Run tests using only project `smlpos-staging` and standalone
+   `/opt/smlpos-staging/docker-compose.staging.yml`. Require zero failures;
+   audit `snapshot_seq` in the staging database and report skipped tests.
 4. On the staging source PC only, take and verify a local backup. Install the
    same staging build on both test PCs. Do not connect either PC to the
    production API or use business data.
@@ -138,38 +134,19 @@ staging Compose override binds the API and PowerSync to server loopback ports
 8. Record screenshots, build version, test-PC OS versions, network steps, and
    observed error messages here before marking physical validation **PASS**.
 
-## Staging isolation follow-up — 2026-10-26
+## Shared-host isolation and cleanup
 
-- Hetzner Console shows one existing server, `smlpos-sync-01`, at
-  `2.28.64.69`. The staging deployment helper previously hardcoded that IP.
-- The existing `smlpos-public` firewall allows inbound TCP 22, 80, 443, UDP
-  443, and ICMP from any IPv4/IPv6 source. It must not be reused for staging;
-  a separate SSH-only firewall is required.
-- The helper now requires an explicit `SMLPOS_STAGING_HOST`, rejects the
-  production API hostnames/IP, and requires a non-empty pinned known-hosts file
-  while keeping `StrictHostKeyChecking=yes`. It uses a dedicated key at
-  `~/.ssh/smlpos-staging` (or `SMLPOS_STAGING_SSH_KEY`), not the production key.
-- A new local Ed25519 key pair named `smlpos-staging` was generated. Its
-  SHA-256 fingerprint differs from `smlpos-hetzner-deploy`; the public key has
-  been added to the Hetzner project with fingerprint
-  `a1:25:d3:02:f2:17:f5:23:0a:9d:d3:59:24:13:ee:b7`; the private key remains
-  on this development PC at `~/.ssh/smlpos-staging`.
-- The `smlpos-staging-ssh` firewall form is prepared with only a TCP/22 rule;
-  its default ICMP rule was removed. It has not been saved because the current
-  public IPv4 source must be set before creation.
-- The staging override now uses loopback-only API (`13001`) and PowerSync
-  (`13002`) endpoints. Staging login no longer advertises production API or
-  PowerSync URLs.
-- No new server was created and no deployment or migration was run. The
-  Hetzner create page showed CPX22 (2 vCPU, 4 GB RAM, 80 GB SSD) at
-  `$23.59/month` including IPv4, excluding VAT. A human must complete the
-  purchase step; this recurring charge has not been authorized with a cap. The
-  draft used the name `smlpos-staging-01` and Nuremberg; no SSH key or firewall
-  has been attached and the purchase button has not been used.
-- Overall status remains **BLOCKED** pending a separately identified staging
-  host, current-IP-restricted firewall, host-key pin, API deployment, database
-  test output, and physical two-PC validation. Production rollout remains
-  blocked until those staging gates pass.
+The existing `smlpos-sync-01` hosts production. Use only
+`/opt/smlpos-staging`, project `smlpos-staging`, and its dedicated volume and
+network. Do not attach the `smlpos-staging-ssh` firewall or change DNS, Caddy,
+ports 80/443, production containers, or production volume names. The new
+`smlpos-staging` key uploaded to Hetzner is not installed on this existing
+server. Do not alter SSH configuration to add it.
+
+After successful tests, tear down only the staging project and its volumes.
+Compare raw before/after production container IDs, start times, restart counts,
+volume lists and attachments, and flags. Uptime should advance naturally.
+Keep the verified production dump and test evidence. These steps have not run.
 
 ## Administrator runbook after staging validation
 
@@ -223,8 +200,8 @@ api.pos.sml.boutique  2.28.64.69
 sync.pos.sml.boutique 2.28.64.69
 ```
 
-No SSH connection was attempted because the strict known-hosts pin is absent
-and the target IP is also the production API address. No container command,
+At that historical check no SSH connection was attempted because the strict known-hosts pin was absent
+and the target IP was also the production API address. No container command,
 database migration, or physical test-PC action was run. The desktop suite was
 re-run in this phase and again reported `tests 43`, `pass 43`, `fail 0`,
 `skipped 0`; IPC reported `Base handlers: 203`, `Working handlers: 203`,

@@ -23,20 +23,28 @@ class SafetyTests(unittest.TestCase):
             return local.main()
 
     def test_preview_never_connects(self):
-        self.assertEqual(self.call_main(['--shared-host-staging']), 0)
+        self.assertEqual(self.call_main(['--shared-host-staging','--show-plan']), 0)
+
+    def test_no_target_and_unpinned_production_are_refused(self):
+        with self.assertRaisesRegex(SystemExit, 'no target selected'):
+            self.call_main(['--shared-host-staging'])
+        with self.assertRaisesRegex(SystemExit, 'Refusing production host'):
+            self.call_main(['--shared-host-staging'], {'SMLPOS_STAGING_HOST':local.HOST})
 
     def test_explicit_shared_acknowledgement_required(self):
         with self.assertRaises(SystemExit):
             self.call_main([])
 
     def test_execution_requires_clean_step_b(self):
-        with self.assertRaises(SystemExit):
-            self.call_main(['--shared-host-staging','--execute'])
+        with patch.object(local, 'validate_pin'), patch.object(Path, 'is_file', return_value=True):
+            with self.assertRaisesRegex(SystemExit, 'complete and review Step B'):
+                self.call_main(['--shared-host-staging','--execute'],
+                    {'SMLPOS_STAGING_HOST':local.HOST,'SMLPOS_STAGING_HOST_FINGERPRINT':'SHA256:'+'A'*43})
 
     def test_placeholder_cannot_connect(self):
         with self.assertRaisesRegex(SystemExit, 'fingerprint required'):
             self.call_main(['--shared-host-staging','--execute','--step-b-clean'],
-                           {'SMLPOS_STAGING_HOST_FINGERPRINT':'<PASTE SHA256:... (ED25519) HERE>'})
+                           {'SMLPOS_STAGING_HOST':local.HOST,'SMLPOS_STAGING_HOST_FINGERPRINT':'<PASTE SHA256:... (ED25519) HERE>'})
 
     def test_production_directory_and_project_refused(self):
         for env in [{'SMLPOS_STAGING_DIR':'/opt/pos'},
@@ -44,7 +52,7 @@ class SafetyTests(unittest.TestCase):
                     {'COMPOSE_PROJECT_NAME':'pos-sync-staging'},
                     {'SMLPOS_STAGING_HOST':'api.pos.sml.boutique'}]:
             with self.subTest(env=env), self.assertRaises(SystemExit):
-                self.call_main(['--shared-host-staging'], env)
+                self.call_main(['--shared-host-staging','--show-plan'], env)
 
     def test_pin_matches_exact_ed25519_key_only(self):
         blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + bytes(range(32))

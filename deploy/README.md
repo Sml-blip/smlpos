@@ -1,47 +1,45 @@
-# SMLPOS sync staging deployment
+# SMLPOS shared-host staging plan
 
-> **Current status (2026-10-26): blocked.** The verification record below is
-> historical. Hetzner Console shows the existing `smlpos-sync-01` at
-> `2.28.64.69`, which is also the previously observed production API IP. Do
-> not deploy staging to that server. The separate staging VM and host-key pin
-> have not been created/verified.
+**Status: blocked before server access.** The user must supply the independently
+verified ED25519 SHA256 host-key fingerprint and say “go”. No staging deployment
+or production backup/restore verification has been performed for this plan.
+No purchase is authorized. See [the staging plan](../infra/hetzner/shared-host-staging-plan.md).
 
-Verified on 2026-10-24 at `/opt/pos/staging` on `smlpos-sync-01` (`2.28.64.69`). This is a staging foundation, not a production migration.
+The historical stack at `/opt/pos/staging` serves the production API. It is not
+the staging target and must not be modified. The new isolated stack uses
+`/opt/smlpos-staging`, project `smlpos-staging`, volume
+`smlpos-staging_pgdata`, network `smlpos-staging_internal`, and the standalone
+`docker-compose.staging.yml`. Never combine it with `docker-compose.yml`.
+API and PowerSync ports are bound only to `127.0.0.1:23001` and `:23002` and
+require SSH tunnels. Every container has CPU and memory limits. There is no
+staging Caddy or published Postgres port. No production Caddy, DNS, firewall,
+containers or volumes may be changed.
 
-## Running services
+`infra/hetzner/stage_backend.py` requires `--shared-host-staging`, explicit
+`SMLPOS_STAGING_HOST=2.28.64.69`, and a known-hosts ED25519 key matching the
+independently supplied `SMLPOS_STAGING_HOST_FINGERPRINT`. Without those the
+dry run refuses the target. `--show-plan` only prints the commands and remote
+Python payload; it does not select or contact a target. Executing also requires
+`--execute --step-b-clean` after the user’s go and reviewed Step B. The
+production project, `/opt/pos`, external/production volumes, and unexpected
+resource names are refused. The new `.env` and passwords are generated on the
+server, and the staging API enables `LIVE_WRITES_ENABLED`,
+`SEED_STAGING_ENABLED`, `SYNC2_ENABLED`, and `STAGING_ONLY` for the synthetic
+staging tests only. Production flags remain false.
 
-PostgreSQL 16, PowerSync 1.27.2, the Node 24 upload API and Caddy run in Docker Compose. PostgreSQL is private to the Docker network; the API diagnostic port binds only to server loopback. Caddy serves:
+After user go: pin the verified host key, perform and paste the read-only
+resource and production baseline checks, stop at the agreed RAM/disk thresholds,
+then verify a production database dump in a separate scratch PostgreSQL
+container. Only after clean Step B may staging be deployed and tested. Stop on
+unexpected results. Follow the linked plan for teardown and before/after proof.
+The existing two-PC fixture uses its own local API; its output alone does not
+prove physical two-PC streaming through the deployed staging API.
 
-- `https://api.pos.sml.boutique/health`: HTTP 200, database check succeeds, both business writes and seeding disabled.
-- `https://api.pos.sml.boutique/.well-known/jwks.json`: HTTP 200, public signing key only.
-- `https://sync.pos.sml.boutique`: TLS works. The root returns HTTP 404; it is not a client streaming test.
-
-DNS is authoritative at Vercel, with A records `api.pos` and `sync.pos` under `sml.boutique`, pointing to the VPS. The domain registrar is OVH. No nameserver change is needed.
-
-PowerSync logs confirm all 42 publication tables were snapshotted and the replication stream activated. The desktop does not yet connect a PowerSync database. No main-PC business data has been uploaded. No real login accounts have been provisioned.
-
-## Reproduce the backend validation
-
-The staging override is deliberately separate from the base compose file. It
-pins the project and Postgres volume to the staging names, enables only the
-staging seed and sync2 routes, keeps legacy live writes off, and binds the API
-to loopback port 13001 and PowerSync to loopback port 13002. Its login response
-uses those same loopback endpoints and does not advertise production URLs. It
-does not start the public Caddy profile. A test PC can reach it through SSH
-tunnels without changing production DNS.
-
-From the staging directory on the server:
+The only server-side Compose file selection is:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.staging.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build postgres api powersync
-docker compose -f docker-compose.yml -f docker-compose.staging.yml --profile test run --build --rm tests
-docker compose -f docker-compose.yml -f docker-compose.staging.yml exec -T api node -e "fetch('http://localhost:3000/health').then(async r=>{const x=await r.json();console.log(JSON.stringify({ok:r.ok,stage:x.stage,seedStagingEnabled:x.seedStagingEnabled,sync2Enabled:x.sync2Enabled,liveWritesEnabled:x.liveWritesEnabled}));if(!r.ok||x.stage!=='staging'||!x.seedStagingEnabled||!x.sync2Enabled||x.liveWritesEnabled)process.exit(1)})"
+docker compose --project-name smlpos-staging --project-directory /opt/smlpos-staging --env-file /opt/smlpos-staging/.env -f /opt/smlpos-staging/docker-compose.staging.yml
 ```
-
-The test runner creates a uniquely named synthetic PostgreSQL schema, runs migrations twice, exercises the API, then removes only that schema. It does not populate the public business tables. The verified result is 29 passing tests, zero failures and zero skipped tests.
-
-`infra/hetzner/stage_backend.py` transfers source without `.env`, private keys, node_modules or database files. It preserves existing volumes and secrets. It requires `SMLPOS_STAGING_HOST`, a pinned known-hosts file, and a separate key at `~/.ssh/smlpos-staging` (or `SMLPOS_STAGING_SSH_KEY`). It rejects the production API hostname/IP and keeps strict SSH host-key checking enabled. The first run creates server-side random database passwords and an RSA signing key. Never print `docker compose config` without `--quiet`, copy private keys into the repository, or remove the database volume to rerun initialization.
 
 `schema.sql`, the upload registry and PowerSync rules are generated from the audited source inventory with `python deploy/generate-schema.py`. Review generated migrations before applying to any populated production database. The present migrations create the initial staging schema; they are not a general production schema-upgrade system.
 

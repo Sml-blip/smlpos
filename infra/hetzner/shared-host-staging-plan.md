@@ -74,8 +74,9 @@ proof that Step B passed. Never supply them before the review is complete.
 
 ```powershell
 $env:SMLPOS_STAGING_HOST_FINGERPRINT = 'REAL_TRUSTED_SHA256_FINGERPRINT'
+$env:SMLPOS_STAGING_HOST = '2.28.64.69'
 # No connection: writes only the command preview to stdout.
-& C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging
+& C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --show-plan
 # After approval, clean Step B and pinning ONLY:
 & C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --execute --step-b-clean
 ```

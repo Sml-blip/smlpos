@@ -56,10 +56,16 @@ def build_archive() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shared-host-staging', action='store_true', required=True)
+    parser.add_argument('--show-plan', action='store_true', help='Print commands without selecting or contacting a target')
     parser.add_argument('--execute', action='store_true', help='Default is local preview only')
     parser.add_argument('--step-b-clean', action='store_true', help='Attest reviewed Step B passed')
     args = parser.parse_args()
-    if os.environ.get('SMLPOS_STAGING_HOST', HOST) != HOST:
+    if args.show_plan and (args.execute or args.step_b_clean):
+        raise SystemExit('--show-plan cannot be combined with execution flags.')
+    host = os.environ.get('SMLPOS_STAGING_HOST', '').strip()
+    if not args.show_plan and not host:
+        raise SystemExit('Refusing: set SMLPOS_STAGING_HOST explicitly; no target selected.')
+    if host and host != HOST:
         raise SystemExit('This reviewed plan allows only 2.28.64.69.')
     # Exact allowlists: no directory/project/volume overrides, including through env.
     for name, expected in {'SMLPOS_STAGING_DIR':DIRECTORY,
@@ -71,6 +77,13 @@ def main() -> int:
         raise SystemExit('Invalid SSH account')
     key = Path(os.environ.get('SMLPOS_STAGING_SSH_KEY', str(Path.home()/'.ssh'/'pos_codex')))
     known_hosts = Path(os.environ.get('SMLPOS_STAGING_KNOWN_HOSTS', str(GENERATED/'known_hosts')))
+    if not args.show_plan:
+        fingerprint = os.environ.get('SMLPOS_STAGING_HOST_FINGERPRINT', '')
+        if not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', fingerprint):
+            raise SystemExit('Refusing production host: verified ED25519 SHA256 fingerprint required.')
+        if not known_hosts.is_file():
+            raise SystemExit('Refusing production host: pinned known-hosts file required.')
+        validate_pin(known_hosts, fingerprint)
     common = ['-i',str(key),'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
               '-o','StrictHostKeyChecking=yes','-o','GlobalKnownHostsFile=none',
               '-o',f'UserKnownHostsFile={known_hosts}','-o','HostKeyAlgorithms=ssh-ed25519',
@@ -83,17 +96,16 @@ def main() -> int:
         ['scp',*common,str(ARCHIVE),f'{target}:{DIRECTORY}/sync-backend.tar.gz'],
         ['ssh',*common,target,'sudo -n python3 -'],
     ]
-    print('LOCAL PREVIEW: no connection without --execute and --step-b-clean.')
+    print('LOCAL PLAN ONLY' if args.show_plan else 'PINNED LOCAL PREVIEW; no connection without --execute and --step-b-clean.')
     print(f'SSH user: {user}; identity file: {key}; host: {HOST}')
     for command in commands:
         print(shlex.join(command))
     print('--- Exact Python stdin for the final SSH command ---')
     print(REMOTE)
-    if not args.execute:
+    if args.show_plan or not args.execute:
         return 0
     if not args.step_b_clean:
         raise SystemExit('Refusing execution: complete and review Step B first.')
-    validate_pin(known_hosts, os.environ.get('SMLPOS_STAGING_HOST_FINGERPRINT',''))
     if not key.is_file():
         raise SystemExit('SSH identity absent; no connection attempted.')
     build_archive()
