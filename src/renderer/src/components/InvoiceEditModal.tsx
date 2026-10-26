@@ -145,7 +145,7 @@ export default function InvoiceEditModal({ mode, documentId, onClose, onSaved }:
             nouveau_prix_achat: Number(l.nouveau_prix_achat) || 0,
             tva_taux: Number(l.tva_taux) || 0,
             produit_id: l.produit_id ? String(l.produit_id) : undefined,
-            numeros_serie_json: l.numeros_serie_json ?? null,
+            numeros_serie_json: typeof l.numeros_serie_json === 'string' ? l.numeros_serie_json : null,
           })))
         }
       } catch {

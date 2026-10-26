@@ -16,6 +16,7 @@ export type BackupReason =
   | 'quit'
   | 'legacy_wipe'
   | 'auto_recover'
+  | 'pre_seed'
 
 /** Critical backups are never auto-deleted from the archive. */
 const PROTECTED_ARCHIVE_PREFIXES = [
@@ -25,6 +26,7 @@ const PROTECTED_ARCHIVE_PREFIXES = [
   'smlpos_quit_',
   'smlpos_legacy_wipe_',
   'smlpos_auto_recover_',
+  'smlpos_pre_seed_',
 ]
 
 export function getBackupDir(): string {

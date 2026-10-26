@@ -3,6 +3,8 @@ import type Database from 'better-sqlite3'
 import { shouldSkipProductSeed } from './userDataWipe'
 
 export function seedProductsIfEmpty(db: Database.Database): void {
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_state'").get()
+    && db.prepare("SELECT 1 FROM sync_state WHERE k IN ('install_id','bootstrap_tables') AND COALESCE(v,'')<>'' LIMIT 1").get()) return
   if (shouldSkipProductSeed()) {
     console.log('[seed] Skipped product catalog — factory reset / empty catalog requested')
     return

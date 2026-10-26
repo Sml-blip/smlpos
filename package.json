@@ -1,6 +1,6 @@
 {
   "name": "smlpos",
-  "version": "1.9.1001",
+  "version": "1.9.1039",
   "description": "SMLPOS — Système de Point de Vente Intelligent",
   "main": "./out/main/index.js",
   "type": "module",
@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "prepackage": "node scripts/check-env.mjs && node scripts/generate-icon.mjs",
     "preview": "electron-vite preview",
+    "test:seed": "node scripts/seed-test/run.mjs",
     "package": "npm run prepackage && npm run build && electron-builder",
     "package:msi": "npm run prepackage && npm run build && electron-builder --win msi",
     "package:nsis": "npm run prepackage && npm run build && electron-builder --win nsis",
@@ -108,7 +109,9 @@
       "**/node_modules/zlibjs/**/*"
     ],
     "files": [
-      "out/**/*",
+      "out/main/**/*",
+      "out/preload/**/*",
+      "out/renderer/**/*",
       "node_modules/**/*",
       "resources/**/*",
       "!node_modules/**/*.{ts,map}",

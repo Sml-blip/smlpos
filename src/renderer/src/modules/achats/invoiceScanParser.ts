@@ -138,8 +138,8 @@ export function parseInvoiceLines(text: string): ParsedInvoiceLine[] {
       totalEnd: number
       error: number
     } | null = null
-    tokens.forEach((qtyToken, qtyIndex) => {
-      if (!Number.isInteger(qtyToken.value) || qtyToken.value <= 0 || qtyToken.value > 10000) return
+    for (const [qtyIndex, qtyToken] of tokens.entries()) {
+      if (!Number.isInteger(qtyToken.value) || qtyToken.value <= 0 || qtyToken.value > 10000) continue
       for (const unit of candidates) {
         if (unit.start <= qtyIndex || unit.value <= 0) continue
         for (const total of candidates) {
@@ -157,7 +157,7 @@ export function parseInvoiceLines(text: string): ParsedInvoiceLine[] {
           }
         }
       }
-    })
+    }
 
     let qtyToken = arithmeticMatch ? tokens[arithmeticMatch.qtyIndex] : explicitlyMarkedQty
     let qtyValue = qtyToken?.value ?? 0

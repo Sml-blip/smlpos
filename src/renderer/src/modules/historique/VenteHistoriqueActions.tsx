@@ -1,3 +1,4 @@
+import { reserveDocumentNumber } from '../../lib/numbering'
 import { useState, useEffect } from 'react'
 import type { Vente, LigneVente } from '../../lib/types'
 import { generateId } from '../../lib/utils'
@@ -126,7 +127,7 @@ export function ConvertVenteDocModal({
         return s + brut * ((l.remise_pct || 0) / 100)
       }, 0)
       const remisePanier = Math.max(0, (vente.total_remises ?? 0) - lineRemiseTotal)
-      const isFacture = type === 'FACTURE_VENTE' || type === 'FACTURE_JOURNALIERE_F'
+      const isFacture = type === 'FACTURE_VENTE'
       const timbre = isFacture ? 1.0 : 0.0
       const netPay = Math.max(0, sums.total_ttc + timbre - remisePanier)
 
@@ -137,7 +138,7 @@ export function ConvertVenteDocModal({
       const next = prev + 1
       await api.settingsSet(seqKey, String(next))
       const prefix = type === 'BON_LIVRAISON' ? 'BL' : type === 'DEVIS' ? 'DEV' : ''
-      const numero = `${prefix}${yy}/#${String(next).padStart(5, '0')}`
+      const numero = await reserveDocumentNumber('documents', `${prefix}${yy}/#${String(next).padStart(5, '0')}`)
       const now = new Date().toISOString()
       
       const doc = {
@@ -168,6 +169,7 @@ export function ConvertVenteDocModal({
       if (result?.success === false) throw new Error(result.error || 'Document non cree')
       setCreatedDoc({
         ...doc,
+        imprimee: 0,
         id: result?.id || docId,
         numero: result?.numero || numero,
       } as DocType)
@@ -182,14 +184,13 @@ export function ConvertVenteDocModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[120]">
       <div className="bg-white rounded-2xl shadow-2xl w-[420px] p-5">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-sm">Convertir vente {vente.numero}</h3>
+          <h3 className="font-bold text-sm">Créer un document pour {vente.numero}</h3>
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <div className="space-y-2 mb-4">
           {([
             ['FACTURE_VENTE', 'Facture', FileText],
             ['BON_LIVRAISON', 'Bon de livraison', FileCheck],
-            ['DEVIS', 'Devis', FileText],
           ] as const).map(([id, label, Icon]) => (
             <button key={id} type="button" onClick={() => setType(id)}
               className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-semibold ${type === id ? 'border-accent-500 bg-accent-50' : 'border-border hover:bg-muted'}`}>

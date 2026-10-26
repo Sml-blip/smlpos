@@ -117,6 +117,7 @@ export function migrateLegacyDataToCanonical(): {
 } {
   const canonical = getCanonicalUserDataPath()
   const canonicalDb = getCanonicalDbPath()
+  if (existsSync(canonicalDb)) return { dbMerged: false, backupsMerged: 0 }
   const canonicalBackups = getCanonicalBackupDir()
   const archiveDir = getArchiveDir()
   let backupsMerged = 0

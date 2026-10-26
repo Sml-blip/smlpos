@@ -26,6 +26,31 @@ const api = {
     return () => ipcRenderer.removeListener('update:status', handler)
   },
 
+  // Seed / device sync panel (new backend)
+  sync2Issues: () => ipcRenderer.invoke('sync2:issues'),
+  onSync2Changed: (callback: (count: number) => void) => {
+    const handler=(_event: Electron.IpcRendererEvent,count:number)=>callback(count)
+    ipcRenderer.on('sync2:changed',handler)
+    return ()=>{ ipcRenderer.removeListener('sync2:changed',handler) }
+  },
+  sync2PrepareReplica: (phrase: string) => ipcRenderer.invoke('sync2:prepareReplica', phrase),
+  sync2JoinReplica: () => ipcRenderer.invoke('sync2:joinReplica'),
+  sync2ReserveNumber: (table: string, proposed: string) => ipcRenderer.invoke('sync2:reserveNumber', table, proposed),
+  sync2LegacyBegin: () => ipcRenderer.invoke('sync2:legacyBegin'),
+  sync2LegacyEnd: (token: string) => ipcRenderer.invoke('sync2:legacyEnd', token),
+  sync2Retry: () => ipcRenderer.invoke('sync2:retry'),
+  sync2Export: () => ipcRenderer.invoke('sync2:export'),
+  seedStatus: (force = false) => ipcRenderer.invoke('seed:status', force),
+  seedRegister: (baseUrl: string, token: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, token, name),
+  seedBackupAndCheck: () => ipcRenderer.invoke('seed:backupAndCheck'),
+  seedRecheck: () => ipcRenderer.invoke('seed:recheck'),
+  seedApprove: (phrase: string) => ipcRenderer.invoke('seed:approve', phrase),
+  seedRun: () => ipcRenderer.invoke('seed:run'),
+  seedPause: () => ipcRenderer.invoke('seed:pause'),
+  seedNewPass: () => ipcRenderer.invoke('seed:newPass'),
+  seedRejected: () => ipcRenderer.invoke('seed:rejected'),
+  seedExportReport: () => ipcRenderer.invoke('seed:exportReport'),
+
   // Operateurs
   operateursList: () => ipcRenderer.invoke('operateurs:list'),
   operateursUpsert: (op: unknown) => ipcRenderer.invoke('operateurs:upsert', op),
@@ -35,8 +60,11 @@ const api = {
   shiftsClose: (id: string, data: unknown) => ipcRenderer.invoke('shifts:close', id, data),
   shiftsGetActive: () => ipcRenderer.invoke('shifts:getActive'),
   shiftsGetToday: () => ipcRenderer.invoke('shifts:getToday'),
+  shiftsGetTodayStatus: () => ipcRenderer.invoke('shifts:getTodayStatus'),
   shiftsGetSummary: (shiftId: string) => ipcRenderer.invoke('shifts:getSummary', shiftId),
   shiftsCountClosedToday: () => ipcRenderer.invoke('shifts:countClosedToday'),
+  rapportsCaisseList: (filters?: unknown) => ipcRenderer.invoke('rapportsCaisse:list', filters),
+  rapportsCaisseGet: (id: string) => ipcRenderer.invoke('rapportsCaisse:get', id),
 
   // Saved POS carts (SQLite-backed, survives updates)
   savedPaniersList: () => ipcRenderer.invoke('savedPaniers:list'),
@@ -88,6 +116,7 @@ const api = {
   ventesList: (filters?: unknown) => ipcRenderer.invoke('ventes:list', filters),
   ventesGetLignes: (venteId: string) => ipcRenderer.invoke('ventes:getLignes', venteId),
   ventesGetLastNumber: (prefix: string) => ipcRenderer.invoke('ventes:getLastNumber', prefix),
+  ventesListFreeReasons: () => ipcRenderer.invoke('ventes:listFreeReasons'),
 
   // Factures clients
   facturesClientsList: (filters?: unknown) => ipcRenderer.invoke('facturesClients:list', filters),
@@ -101,6 +130,7 @@ const api = {
   reparationsList: (filters?: unknown) => ipcRenderer.invoke('reparations:list', filters),
   reparationsUpdateStatut: (id: string, statut: string) => ipcRenderer.invoke('reparations:updateStatut', id, statut),
   reparationsFinalize: (id: string, totalFinal: number) => ipcRenderer.invoke('reparations:finalize', id, totalFinal),
+  reparationsMarkPayment: (id: string, data: unknown) => ipcRenderer.invoke('reparations:markPayment', id, data),
   reparationsGetPieces: (repId: string) => ipcRenderer.invoke('reparations:getPieces', repId),
   reparationsGetLastNumber: (prefix: string) => ipcRenderer.invoke('reparations:getLastNumber', prefix),
   reparationsGetBeneficeStats: (mois?: string) => ipcRenderer.invoke('reparations:getBeneficeStats', mois),
@@ -146,6 +176,10 @@ const api = {
   caisseInterneGetStats: (dateFrom: string, dateTo: string) => ipcRenderer.invoke('caisseInterne:getStats', dateFrom, dateTo),
   caisseInterneAddMouvement: (m: unknown) => ipcRenderer.invoke('caisseInterne:addMouvement', m),
   caisseInterneTransferShift: (shiftId: string) => ipcRenderer.invoke('caisseInterne:transferShift', shiftId),
+  caisseInternePendingCount: () => ipcRenderer.invoke('caisseInterne:pendingCount'),
+  caisseInternePendingList: () => ipcRenderer.invoke('caisseInterne:pendingList'),
+  caisseInterneAcceptPending: (id: string) => ipcRenderer.invoke('caisseInterne:acceptPending', id),
+  caisseInterneAcceptAllPending: () => ipcRenderer.invoke('caisseInterne:acceptAllPending'),
 
   // Logs
   logsAdd: (log: unknown) => ipcRenderer.invoke('logs:add', log),
@@ -173,6 +207,7 @@ const api = {
   // Crédits Clients
   creditsList: (clientId?: string) => ipcRenderer.invoke('credits:list', clientId),
   creditsCreate: (credit: unknown) => ipcRenderer.invoke('credits:create', credit),
+  creditsUpdate: (id: string, patch: unknown) => ipcRenderer.invoke('credits:update', id, patch),
   avancesClientsCreate: (advance: unknown) => ipcRenderer.invoke('avancesClients:create', advance),
   avancesClientsList: (clientId?: string) => ipcRenderer.invoke('avancesClients:list', clientId),
 
@@ -183,6 +218,7 @@ const api = {
 
   // Ventes: Annulation
   ventesAnnuler: (id: string, data: unknown) => ipcRenderer.invoke('ventes:annuler', id, data),
+  ventesExchange: (id: string, data: unknown) => ipcRenderer.invoke('ventes:exchange', id, data),
 
   // Organisations
   organisationsList: () => ipcRenderer.invoke('organisations:list'),
@@ -201,17 +237,20 @@ const api = {
   // Documents (Facture/Devis/BL)
   documentsList: (filters?: unknown) => ipcRenderer.invoke('documents:list', filters),
   documentsListAll: (filters?: unknown) => ipcRenderer.invoke('documents:listAll', filters),
+  documentsExportSalesBilan: (filters?: unknown) => ipcRenderer.invoke('documents:exportSalesBilan', filters),
+  documentsExportSalesTva: (filters?: unknown) => ipcRenderer.invoke('documents:exportSalesTva', filters),
   documentsGet: (id: string) => ipcRenderer.invoke('documents:get', id),
   documentsCreate: (doc: unknown, lignes: unknown[]) => ipcRenderer.invoke('documents:create', doc, lignes),
   documentsCreateDailyFactureF: (localDate?: string) => ipcRenderer.invoke('documents:createDailyFactureF', localDate),
   documentsListMissingDailyFactureFDays: (from?: string, to?: string) => ipcRenderer.invoke('documents:listMissingDailyFactureFDays', from, to),
   documentsUpdate: (id: string, data: unknown) => ipcRenderer.invoke('documents:update', id, data),
   documentsRevoquer: (id: string, motif: string, par: string) => ipcRenderer.invoke('documents:revoquer', id, motif, par),
-  documentsAnnulerAvecAvoir: (id: string, motif?: string) => ipcRenderer.invoke('documents:annulerAvecAvoir', id, motif),
+  documentsAnnulerAvecAvoir: (id: string, motif?: string, refund?: unknown) => ipcRenderer.invoke('documents:annulerAvecAvoir', id, motif, refund),
   documentsGetLignes: (documentId: string) => ipcRenderer.invoke('documents:getLignes', documentId),
   documentsReplaceLignes: (documentId: string, lignes: unknown[], totals: unknown) =>
     ipcRenderer.invoke('documents:replaceLignes', documentId, lignes, totals),
   documentsGetLastNumber: (prefix: string) => ipcRenderer.invoke('documents:getLastNumber', prefix),
+  exportsSaveExcel: (base64: string, suggestedName?: string) => ipcRenderer.invoke('exports:saveExcel', base64, suggestedName),
   facturesCountBLPending: () => ipcRenderer.invoke('factures:countBLPending'),
   facturesListBLPending: () => ipcRenderer.invoke('factures:listBLPending'),
 
@@ -276,6 +315,8 @@ const api = {
   r2UploadNow: () => ipcRenderer.invoke('r2:uploadNow'),
   r2Restore: (key: string) => ipcRenderer.invoke('r2:restore', key),
 }
+
+export type DesktopApi = typeof api
 
 if (process.contextIsolated) {
   try {

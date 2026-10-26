@@ -8,6 +8,17 @@ import { invalidateProduitsCache } from './produitsCache'
 import { stripPayloadForRemote } from './syncColumns'
 
 const api = window.api
+const admission = api as typeof api & {
+  sync2LegacyBegin?: () => Promise<string | null>
+  sync2LegacyEnd?: (token: string) => Promise<void>
+}
+async function withLegacyLease<T>(fallback: T, operation: () => Promise<T>): Promise<T> {
+  // Browser fixtures have no IPC; packaged apps always expose both methods.
+  if (!admission.sync2LegacyBegin) return operation()
+  const token = await admission.sync2LegacyBegin()
+  if (!token) return fallback
+  try { return await operation() } finally { await admission.sync2LegacyEnd!(token) }
+}
 
 let _running = false
 let _intervalId: ReturnType<typeof setInterval> | null = null
@@ -167,7 +178,8 @@ async function checkSupabaseReachable(): Promise<boolean> {
 }
 
 /** Lightweight ping so Supabase free tier stays active while the app runs. */
-export async function pingSupabaseKeepAlive(): Promise<boolean> {
+export const pingSupabaseKeepAlive = () => withLegacyLease(false, pingLegacy)
+async function pingLegacy(): Promise<boolean> {
   if (!isSupabaseEnabled || !supabase || !navigator.onLine) return false
   const now = Date.now()
   if (now - _lastKeepAliveAt < SUPABASE_KEEPALIVE_MS) return true
@@ -230,7 +242,7 @@ async function syncOneRow(row: {
 
 async function syncBatchUpsert(
   table_name: string,
-  rows: { id: string; operation: string; payload: string }[],
+  rows: { id: string; table_name: string; operation: string; payload: string }[],
 ): Promise<number> {
   if (!rows.length) return 0
   const pk = table_name === 'app_settings' ? 'key' : 'id'
@@ -287,7 +299,8 @@ async function syncBatchUpsert(
   return synced
 }
 
-export async function processSyncQueue(): Promise<number> {
+export const processSyncQueue = () => withLegacyLease(0, processLegacyQueue)
+async function processLegacyQueue(): Promise<number> {
   if (!isSupabaseEnabled || !supabase) return 0
   if (!navigator.onLine) return 0
   if (Date.now() < _circuitOpenUntil) return 0
@@ -397,7 +410,8 @@ async function fetchRemoteTable(table: string): Promise<Record<string, unknown>[
 }
 
 /** Download remote Supabase rows into local SQLite (multi-PC sync). */
-export async function pullSyncFromRemote(_opts?: { full?: boolean }): Promise<{ applied: number; errors: string[] }> {
+export const pullSyncFromRemote = (_opts?: { full?: boolean }) => withLegacyLease({ applied: 0, errors: [] as string[] }, pullLegacyRows)
+async function pullLegacyRows(): Promise<{ applied: number; errors: string[] }> {
   if (!isSupabaseEnabled || !supabase) return { applied: 0, errors: [] }
   if (!navigator.onLine) return { applied: 0, errors: [] }
   if (_pulling) return { applied: 0, errors: [] }
@@ -450,7 +464,8 @@ export async function dedupeSyncQueue(): Promise<number> {
   }
 }
 
-export async function bootstrapSync(): Promise<void> {
+export const bootstrapSync = () => withLegacyLease(undefined, bootstrapLegacy)
+async function bootstrapLegacy(): Promise<void> {
   if (!isSupabaseEnabled || !supabase) return
   if (!navigator.onLine) return
   if (!(await checkSupabaseReachable())) return

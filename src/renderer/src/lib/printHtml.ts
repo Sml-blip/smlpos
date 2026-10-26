@@ -1,8 +1,8 @@
 /** Wrap inner HTML for native Electron print (A4 or thermal). */
-export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | '58mm' | '80mm' = 'A4'): string {
-  const pageRule = pageSize === 'A4'
-    ? '@page{size:A4;margin:8mm}'
-    : `@page{size:${pageSize} auto;margin:2mm}`
+export function wrapPrintHtml(innerHTML: string, pageSize: 'A4' | 'A5' | '58mm' | '80mm' | '40x20mm' = 'A4'): string {
+  const pageRule = pageSize === 'A4' || pageSize === 'A5'
+    ? `@page{size:${pageSize};margin:8mm}`
+    : pageSize === '40x20mm' ? '@page{size:40mm 20mm;margin:0}' : `@page{size:${pageSize} auto;margin:2mm}`
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
     ${pageRule}
     html,body{margin:0;padding:0;font-family:'Inter',system-ui,-apple-system,sans-serif}

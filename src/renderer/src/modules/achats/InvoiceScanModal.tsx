@@ -83,7 +83,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
   const acquire = async (kind: 'scanner' | 'import') => {
     const action = kind === 'scanner' ? api.invoiceScanAcquireWia : api.invoiceScanChooseImage
     if (!action) {
-      showToast('Cette fonction nécessite l’application Windows.', 'error')
+      showToast('error', 'Cette fonction nécessite l’application Windows.')
       return
     }
     setBusy(kind)
@@ -91,7 +91,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
       const result = await action()
       if (result.canceled) return
       if (!result.success || !result.scanId || !result.previewDataUrl) {
-        showToast(result.error || 'Impossible de récupérer la facture.', 'error')
+        showToast('error', result.error || 'Impossible de récupérer la facture.')
         return
       }
       setSource({
@@ -105,7 +105,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
       setRawText('')
       setOcrConfidence(null)
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), 'error')
+      showToast('error', error instanceof Error ? error.message : String(error))
     } finally {
       setBusy(null)
     }
@@ -117,7 +117,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
     try {
       const result = await api.invoiceScanRecognize(source.scanId)
       if (!result.success) {
-        showToast(result.error || 'Analyse OCR impossible.', 'error')
+        showToast('error', result.error || 'Analyse OCR impossible.')
         return
       }
       const text = result.text || ''
@@ -138,10 +138,10 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
       setOcrConfidence(Number(result.confidence) || 0)
       setReviewLines(prepared)
       if (!prepared.length) {
-        showToast('Aucune ligne fiable détectée. Consultez le texte OCR et importez une image plus nette.', 'warning')
+        showToast('info', 'Aucune ligne fiable détectée. Consultez le texte OCR et importez une image plus nette.')
       }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), 'error')
+      showToast('error', error instanceof Error ? error.message : String(error))
     } finally {
       setBusy(null)
     }
@@ -154,7 +154,7 @@ export default function InvoiceScanModal({ produits, onClose, onImport }: Props)
   const confirmImport = () => {
     const accepted = reviewLines.filter(line => line.mode !== 'skip' && line.designation.trim() && line.quantite > 0)
     if (!accepted.length) {
-      showToast('Sélectionnez au moins une ligne à importer.', 'warning')
+      showToast('info', 'Sélectionnez au moins une ligne à importer.')
       return
     }
     const lines = accepted.map<FactureLigneState>((line) => {

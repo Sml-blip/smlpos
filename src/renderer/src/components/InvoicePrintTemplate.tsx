@@ -41,6 +41,7 @@ export interface InvoiceDocData {
 }
 
 export interface InvoiceLineData {
+  produit_id?: string | null
   id: string
   designation: string
   quantite: number
@@ -328,7 +329,7 @@ const InvoicePrintTemplate = forwardRef<HTMLDivElement, Props>(({ doc, lignes, s
                 </tr>
               </thead>
               <tbody>
-                {(tvaRows.length ? tvaRows : [[0, { base: 0, montant: 0 }]]).map(([taux, { base, montant }]) => (
+                {(tvaRows.length ? tvaRows : [[0, { base: 0, montant: 0 }]] as typeof tvaRows).map(([taux, { base, montant }]) => (
                   <tr key={taux}>
                     <td style={{ padding: '6px 8px' }}>{fmt3(base)}</td>
                     <td style={{ textAlign: 'center' }}>{taux}%</td>

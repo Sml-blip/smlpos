@@ -2,6 +2,7 @@
 // Provides realistic dummy data so all tabs render correctly.
 import PRODUITS_SEED from './productsSeed.json'
 import type { DemandeClient } from './lib/types'
+import { seedMock } from './lib/seedMock'
 
 const OPERATEURS = [
   { id: 'op1', nom: 'Amira', identifiant: 'amira', role: 'superadmin' as const, actif: 1 },
@@ -171,6 +172,8 @@ let nextFacClientSeq = 2
 let nextFacFourn = FACTURES_FOURNISSEURS.length
 
 const mockApi = {
+  ...seedMock,
+  sync2ReserveNumber: async (_table: string, proposed: string) => proposed,
   dbQuery: async () => [],
   dbRun: async () => ({ changes: 1, lastInsertRowid: 1 }),
   dbGet: async () => null,
@@ -196,6 +199,8 @@ const mockApi = {
 
   shiftsOpen: async (shift: unknown) => ({ ...SHIFT_ACTIVE, ...(shift as object) }),
   shiftsClose: async () => ({ success: true }),
+  rapportsCaisseList: async () => [],
+  rapportsCaisseGet: async () => null,
   appVersion: async () => '1.9.5',
   invoiceScanChooseImage: async () => ({ success: false, error: 'Import disponible dans l’application Windows.' }),
   invoiceScanAcquireWia: async () => ({ success: false, error: 'Scanner WIA disponible dans l’application Windows.' }),
@@ -208,11 +213,14 @@ const mockApi = {
   appHealth: async () => ({ ok: true, schemaVersion: '1.9.2', expectedSchemaVersion: '1.9.2', pendingSync: 0 }),
   shiftsGetActive: async () => SHIFT_ACTIVE,
   shiftsGetToday: async () => [SHIFT_ACTIVE],
+  shiftsGetTodayStatus: async () => ({ shifts: [SHIFT_ACTIVE], openedCount: 1, closedCount: 0, active: SHIFT_ACTIVE, morningDone: false, eveningDone: false, nextSession: 'SOIR', canOpen: false }),
   shiftsGetSummary: async () => ({
     ventes: { total: 338, count: 2 },
     reparations: { total: 75, count: 1 },
+    services: { total: 0, count: 0 },
     sorties: { total: 50, count: 1 },
     creditsPercus: { total: 85, count: 1 },
+    avancesClients: { total: 0, count: 0 },
     parMode: [
       { mode_paiement: 'ESPECES', total: 284 },
       { mode_paiement: 'CARTE', total: 143 },
@@ -336,6 +344,7 @@ const mockApi = {
   reparationsList: async () => REPARATIONS,
   reparationsUpdateStatut: async (id: string, statut: string) => { const r = REPARATIONS.find(x => x.id === id); if (r) r.statut = statut as typeof r.statut; return r; },
   reparationsFinalize: async (_id: string, totalFinal: number) => ({ success: true, benefice: totalFinal }),
+  reparationsMarkPayment: async (_id: string, data: { paid: boolean; totalFinal?: number; technicianSpent?: number }) => ({ success: true, benefice: (data.totalFinal ?? 0) - (data.technicianSpent ?? 0) }),
   reparationsGetPieces: async () => [],
   reparationsGetLastNumber: async () => nextRepSeq,
   reparationsGetBeneficeStats: async () => ({
@@ -449,6 +458,10 @@ const mockApi = {
     CAISSE_INTERNE.solde_actuel = +(CAISSE_INTERNE.solde_actuel + montant).toFixed(3)
     return { success: true, shift_id, montant }
   },
+  caisseInternePendingCount: async () => 0,
+  caisseInternePendingList: async () => [],
+  caisseInterneAcceptPending: async () => ({ success: true }),
+  caisseInterneAcceptAllPending: async () => ({ success: true, accepted: 0 }),
 
   // Logs
   logsAdd: async () => ({ success: true }),
@@ -484,21 +497,25 @@ const mockApi = {
     return CLIENTS
   },
   clientsCreate: async (c: unknown) => ({ ...(c as object), id: `cl${Date.now()}`, solde_credit: 0, actif: 1, created_at: new Date().toISOString() }),
-  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
 
   // Crédits clients
   creditsList: async () => [],
   creditsCreate: async (credit: unknown) => ({ ...(credit as object), success: true }),
+  creditsUpdate: async (_id: string, patch: unknown) => ({ ...(patch as object), success: true }),
+  ventesListFreeReasons: async () => [],
+  avancesClientsCreate: async (advance: unknown) => ({ ...(advance as object), success: true }),
+  avancesClientsList: async () => [],
 
   // Ventes: annulation
-  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...data }),
+  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...(data as Record<string, unknown>) }),
 
   // Organisations
   organisationsList: async () => [
     { id: 'org1', nom: 'B2B Tech', telephone: '71 000 001', matricule_fiscal: '1234567B', credit_total: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   organisationsCreate: async (org: unknown) => ({ ...(org as object), id: `org${Date.now()}`, credit_total: 0, actif: 1, created_at: new Date().toISOString() }),
-  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   organisationsDelete: async () => ({ success: true }),
 
   // Personnels
@@ -506,7 +523,7 @@ const mockApi = {
     { id: 'pers1', nom: 'Salah', prenom: 'Ben Amor', poste: 'Technicien', telephone: '22 111 222', cin: '12345678', salaire_base: 900, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   personnelsCreate: async (p: unknown) => ({ ...(p as object), id: `pers${Date.now()}`, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() }),
-  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   personnelsDelete: async () => ({ success: true }),
   mouvementsPersonnelsList: async () => [],
   mouvementsPersonnelsCreate: async (m: unknown) => ({ ...(m as object), id: `mp${Date.now()}`, created_at: new Date().toISOString() }),
@@ -517,7 +534,7 @@ const mockApi = {
   documentsGet: async (id: string) => ({ id, numero: 'FAC-MOCK-001', type_document: 'FACTURE_VENTE', statut: 'ACTIF', total_ht: 0, total_tva: 0, total_ttc: 0, created_at: new Date().toISOString() }),
   documentsCreateDailyFactureF: async () => ({ success: true, documentId: 'daily-f-mock', numero: '26/#00001', lineCount: 1, totalTTC: 10 }),
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
-  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   documentsRevoquer: async () => ({ success: true }),
   documentsAnnulerAvecAvoir: async (_id: string, _motif?: string) => ({ success: true, avoir: { id: `av${Date.now()}`, numero: 'AVO-MOCK-001' } }),
   documentsReplaceLignes: async (_documentId: string, _lignes: unknown[], _totals: unknown) => ({ success: true }),
@@ -526,7 +543,7 @@ const mockApi = {
 
   authVerifyCaissePin: async (pin: string) => ({ valid: pin === 'sml2023' }),
 
-  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...data }),
+  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
   facturesFournisseursReplaceLignes: async () => ({ success: true }),
 
   // Factures fournisseurs marquer reçu
@@ -551,7 +568,8 @@ const mockApi = {
     facture_layout: 'professionnel', invoice_prefix_facture: 'FAC', invoice_prefix_vente: 'VTE',
     invoice_footer: 'Merci pour votre confiance !', invoice_show_tva: 'true', invoice_timbre_fiscal: 'true', tva_defaut_pct: '19',
     fond_de_caisse_defaut: '100', frais_retour_colis: '4', credit_max_client: '500',
-    shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
+    shift_close_reminder_enabled: 'true', shift_close_alarm_enabled: 'true',
+    shift_morning_close_time: '14:00', shift_close_reminder_time: '21:00', shift_close_snooze_minutes: '10',
     marge_defaut_pct: '30', pos_show_calculator: 'true', pos_confirm_sortie: 'true',
     impression_largeur: '80', impression_copies: '1', impression_auto_print: 'false',
     caisse_interne_pin: 'sml2023', securite_require_shift: 'true', currency: 'DT', currency_decimals: '3',
@@ -561,7 +579,8 @@ const mockApi = {
   settingsGet: async (key: string) => {
     const defaults: Record<string, string> = {
       caisse_interne_pin: 'sml2023', frais_retour_colis: '4', fond_de_caisse_defaut: '100',
-      shift_close_reminder_enabled: 'true', shift_close_reminder_time: '21:00',
+      shift_close_reminder_enabled: 'true', shift_close_alarm_enabled: 'true',
+      shift_morning_close_time: '14:00', shift_close_reminder_time: '21:00', shift_close_snooze_minutes: '10',
     }
     return defaults[key] ?? null
   },

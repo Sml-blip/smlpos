@@ -26,7 +26,9 @@ export function useAppUpdater(currentVersion: string) {
 
   useEffect(() => {
     if (!api.onUpdateStatus) return
-    const unsubscribe = api.onUpdateStatus((payload: UpdateStatusPayload) => {
+    const unsubscribe = api.onUpdateStatus((value: unknown) => {
+      if (!value || typeof value !== 'object' || !('state' in value)) return
+      const payload = value as UpdateStatusPayload
       if (payload.state === 'not-available') {
         if (manualCheckRef.current) {
           showToast('success', `Vous avez la dernière version (v${currentVersion})`)

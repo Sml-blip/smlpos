@@ -36,7 +36,7 @@ export async function apiCall<T>(
  */
 export async function runAction(
   label: string,
-  fn: () => Promise<void>,
+  fn: () => Promise<unknown>,
   options?: {
     successMessage?: string
     silent?: boolean
