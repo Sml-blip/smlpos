@@ -1,0 +1,28 @@
+{
+  "name": "smlpos-sync-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "admin": "node src/admin.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.5",
+    "@node-rs/argon2": "2.2.2",
+    "hono": "4.13.13",
+    "jose": "6.2.13",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}
+

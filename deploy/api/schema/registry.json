@@ -1,0 +1,2179 @@
+{
+  "activity_logs": {
+    "columns": {
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "action": {
+        "type": "text",
+        "required": true
+      },
+      "details": {
+        "type": "text",
+        "required": false
+      },
+      "montant": {
+        "type": "money",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "ajustements_fournisseurs": {
+    "columns": {
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "motif": {
+        "type": "text",
+        "required": true
+      },
+      "caisse_source": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "app_settings": {
+    "columns": {
+      "key": {
+        "type": "text",
+        "required": false
+      },
+      "value": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": true,
+    "manager": true
+  },
+  "avances_clients": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "client_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "client_nom": {
+        "type": "text",
+        "required": true
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "client_adresse": {
+        "type": "text",
+        "required": false
+      },
+      "produit_description": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "mode_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "reference": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "type_avance": {
+        "type": "text",
+        "required": false
+      },
+      "dossier_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "numero_serie": {
+        "type": "text",
+        "required": false
+      },
+      "prix_produit": {
+        "type": "money",
+        "required": false
+      },
+      "inclure_facture": {
+        "type": "integer",
+        "required": false
+      },
+      "produits_json": {
+        "type": "text",
+        "required": false
+      },
+      "facture_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "caisse_interne": {
+    "columns": {
+      "date_journal": {
+        "type": "text",
+        "required": false
+      },
+      "solde_ouverture": {
+        "type": "money",
+        "required": false
+      },
+      "total_entrees": {
+        "type": "money",
+        "required": false
+      },
+      "total_sorties": {
+        "type": "money",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "categories": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "icone": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": true,
+    "manager": true
+  },
+  "clients": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "telephone": {
+        "type": "text",
+        "required": false
+      },
+      "email": {
+        "type": "text",
+        "required": false
+      },
+      "adresse": {
+        "type": "text",
+        "required": false
+      },
+      "matricule_fiscal": {
+        "type": "text",
+        "required": false
+      },
+      "credit_limite": {
+        "type": "money",
+        "required": false
+      },
+      "organisation_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "agent": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "fidelite_code": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": true,
+    "manager": false
+  },
+  "credits_clients": {
+    "columns": {
+      "client_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "reference": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "demandes_clients": {
+    "columns": {
+      "type_demande": {
+        "type": "text",
+        "required": true
+      },
+      "titre": {
+        "type": "text",
+        "required": true
+      },
+      "details": {
+        "type": "text",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "avance": {
+        "type": "money",
+        "required": false
+      },
+      "responsable_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "responsable_nom": {
+        "type": "text",
+        "required": true
+      },
+      "echeance": {
+        "type": "text",
+        "required": false
+      },
+      "priorite": {
+        "type": "text",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "created_by": {
+        "type": "text",
+        "required": false
+      },
+      "completed_at": {
+        "type": "timestamp",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "documents": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "type_document": {
+        "type": "text",
+        "required": true
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "client_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "client_adresse": {
+        "type": "text",
+        "required": false
+      },
+      "client_matricule": {
+        "type": "text",
+        "required": false
+      },
+      "total_ht": {
+        "type": "money",
+        "required": false
+      },
+      "total_tva": {
+        "type": "money",
+        "required": false
+      },
+      "total_ttc": {
+        "type": "money",
+        "required": false
+      },
+      "statut_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "montant_paye": {
+        "type": "money",
+        "required": false
+      },
+      "date_echeance": {
+        "type": "text",
+        "required": false
+      },
+      "imprimee": {
+        "type": "integer",
+        "required": false
+      },
+      "layout_snapshot": {
+        "type": "text",
+        "required": false
+      },
+      "contenu_json": {
+        "type": "text",
+        "required": false
+      },
+      "exo": {
+        "type": "text",
+        "required": false
+      },
+      "timbre": {
+        "type": "money",
+        "required": false
+      },
+      "ht_7": {
+        "type": "money",
+        "required": false
+      },
+      "tva_7": {
+        "type": "money",
+        "required": false
+      },
+      "ht_19": {
+        "type": "money",
+        "required": false
+      },
+      "tva_19": {
+        "type": "money",
+        "required": false
+      },
+      "total_remise": {
+        "type": "money",
+        "required": false
+      },
+      "tva_taux_principal": {
+        "type": "numeric",
+        "required": false
+      },
+      "revoque_par": {
+        "type": "text",
+        "required": false
+      },
+      "revoque_at": {
+        "type": "timestamp",
+        "required": false
+      },
+      "revoque_motif": {
+        "type": "text",
+        "required": false
+      },
+      "reference_source_id": {
+        "type": "text",
+        "required": false
+      },
+      "avoir_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "document_origine_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "facture_origine_numero": {
+        "type": "text",
+        "required": false
+      },
+      "annule_motif": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "factures_clients": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "type_facture": {
+        "type": "text",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "client_adresse": {
+        "type": "text",
+        "required": false
+      },
+      "client_matricule": {
+        "type": "text",
+        "required": false
+      },
+      "total_ht": {
+        "type": "money",
+        "required": true
+      },
+      "total_tva": {
+        "type": "money",
+        "required": false
+      },
+      "total_ttc": {
+        "type": "money",
+        "required": true
+      },
+      "imprimee": {
+        "type": "integer",
+        "required": false
+      },
+      "tva_taux_principal": {
+        "type": "numeric",
+        "required": false
+      },
+      "exo": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "factures_fournisseurs": {
+    "columns": {
+      "numero_facture": {
+        "type": "text",
+        "required": true
+      },
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "date_facture": {
+        "type": "text",
+        "required": true
+      },
+      "date_echeance": {
+        "type": "text",
+        "required": false
+      },
+      "statut_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "montant_ht": {
+        "type": "money",
+        "required": true
+      },
+      "montant_tva": {
+        "type": "money",
+        "required": false
+      },
+      "montant_ttc": {
+        "type": "money",
+        "required": true
+      },
+      "montant_paye": {
+        "type": "money",
+        "required": false
+      },
+      "retenue_source_pct": {
+        "type": "numeric",
+        "required": false
+      },
+      "retenue_source_montant": {
+        "type": "money",
+        "required": false
+      },
+      "net_a_payer": {
+        "type": "money",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": false
+      },
+      "statut_reception": {
+        "type": "text",
+        "required": false
+      },
+      "exo": {
+        "type": "text",
+        "required": false
+      },
+      "timbre": {
+        "type": "money",
+        "required": false
+      },
+      "ht_7": {
+        "type": "money",
+        "required": false
+      },
+      "tva_7": {
+        "type": "money",
+        "required": false
+      },
+      "ht_19": {
+        "type": "money",
+        "required": false
+      },
+      "tva_19": {
+        "type": "money",
+        "required": false
+      },
+      "total_remise": {
+        "type": "money",
+        "required": false
+      },
+      "stock_applied": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "fournisseur_commerciaux": {
+    "columns": {
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "telephone": {
+        "type": "text",
+        "required": false
+      },
+      "email": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "fournisseurs": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "contact_nom": {
+        "type": "text",
+        "required": false
+      },
+      "telephone": {
+        "type": "text",
+        "required": false
+      },
+      "email": {
+        "type": "text",
+        "required": false
+      },
+      "adresse": {
+        "type": "text",
+        "required": false
+      },
+      "matricule_fiscal": {
+        "type": "text",
+        "required": false
+      },
+      "rib": {
+        "type": "text",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "lignes_document": {
+    "columns": {
+      "document_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "designation": {
+        "type": "text",
+        "required": true
+      },
+      "quantite": {
+        "type": "integer",
+        "required": true
+      },
+      "prix_unitaire": {
+        "type": "money",
+        "required": true
+      },
+      "remise_pct": {
+        "type": "numeric",
+        "required": false
+      },
+      "tva_taux": {
+        "type": "numeric",
+        "required": false
+      },
+      "total_ht": {
+        "type": "money",
+        "required": true
+      },
+      "total_tva": {
+        "type": "money",
+        "required": false
+      },
+      "total_ttc": {
+        "type": "money",
+        "required": true
+      },
+      "type_produit": {
+        "type": "text",
+        "required": false
+      },
+      "numero_serie": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "lignes_facture_fournisseur": {
+    "columns": {
+      "facture_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "designation": {
+        "type": "text",
+        "required": true
+      },
+      "quantite": {
+        "type": "integer",
+        "required": true
+      },
+      "ancien_prix_achat": {
+        "type": "money",
+        "required": false
+      },
+      "nouveau_prix_achat": {
+        "type": "money",
+        "required": true
+      },
+      "prix_vente_suggere": {
+        "type": "money",
+        "required": false
+      },
+      "prix_vente_applique": {
+        "type": "money",
+        "required": false
+      },
+      "tva_taux": {
+        "type": "numeric",
+        "required": false
+      },
+      "pending_product_json": {
+        "type": "text",
+        "required": false
+      },
+      "numeros_serie_json": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "lignes_vente": {
+    "columns": {
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "designation": {
+        "type": "text",
+        "required": true
+      },
+      "quantite": {
+        "type": "integer",
+        "required": true
+      },
+      "prix_unitaire": {
+        "type": "money",
+        "required": true
+      },
+      "remise_pct": {
+        "type": "numeric",
+        "required": false
+      },
+      "total_ligne": {
+        "type": "money",
+        "required": true
+      },
+      "type_produit": {
+        "type": "text",
+        "required": false
+      },
+      "numero_serie": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "mouvements_caisse_interne": {
+    "columns": {
+      "date_journal": {
+        "type": "text",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "categorie": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "reference_id": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "mouvements_echange": {
+    "columns": {
+      "vente_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "ancien_total": {
+        "type": "money",
+        "required": true
+      },
+      "nouveau_total": {
+        "type": "money",
+        "required": true
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "details_json": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "mouvements_fidelite": {
+    "columns": {
+      "client_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "solde_avant": {
+        "type": "money",
+        "required": true
+      },
+      "solde_apres": {
+        "type": "money",
+        "required": true
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "mouvements_personnels": {
+    "columns": {
+      "personnel_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "mois": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "mouvements_tresorerie_attente": {
+    "columns": {
+      "direction": {
+        "type": "text",
+        "required": true
+      },
+      "categorie": {
+        "type": "text",
+        "required": true
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "reference_id": {
+        "type": "text",
+        "required": true
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "impact_applique": {
+        "type": "integer",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "accepted_at": {
+        "type": "timestamp",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "operateurs": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "identifiant": {
+        "type": "text",
+        "required": true
+      },
+      "role": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "organisations": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "telephone": {
+        "type": "text",
+        "required": false
+      },
+      "email": {
+        "type": "text",
+        "required": false
+      },
+      "adresse": {
+        "type": "text",
+        "required": false
+      },
+      "matricule_fiscal": {
+        "type": "text",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "paiements_fournisseurs": {
+    "columns": {
+      "facture_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "mode_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "reference_cheque": {
+        "type": "text",
+        "required": false
+      },
+      "date_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "personnels": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "prenom": {
+        "type": "text",
+        "required": false
+      },
+      "poste": {
+        "type": "text",
+        "required": false
+      },
+      "telephone": {
+        "type": "text",
+        "required": false
+      },
+      "cin": {
+        "type": "text",
+        "required": false
+      },
+      "date_embauche": {
+        "type": "text",
+        "required": false
+      },
+      "salaire_base": {
+        "type": "money",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": true
+  },
+  "pieces_reparation": {
+    "columns": {
+      "reparation_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "designation": {
+        "type": "text",
+        "required": true
+      },
+      "quantite": {
+        "type": "integer",
+        "required": false
+      },
+      "prix_unitaire": {
+        "type": "money",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": false
+      },
+      "prix_achat": {
+        "type": "money",
+        "required": false
+      },
+      "destock_stock": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "produits": {
+    "columns": {
+      "code_barre": {
+        "type": "text",
+        "required": false
+      },
+      "reference": {
+        "type": "text",
+        "required": true
+      },
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "description": {
+        "type": "text",
+        "required": false
+      },
+      "categorie": {
+        "type": "text",
+        "required": false
+      },
+      "categorie_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": false
+      },
+      "prix_achat": {
+        "type": "money",
+        "required": false
+      },
+      "prix_vente": {
+        "type": "money",
+        "required": false
+      },
+      "tva_taux": {
+        "type": "numeric",
+        "required": false
+      },
+      "stock_minimum": {
+        "type": "integer",
+        "required": false
+      },
+      "fournisseur": {
+        "type": "text",
+        "required": false
+      },
+      "fournisseur_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "has_serial_number": {
+        "type": "integer",
+        "required": false
+      },
+      "numero_serie": {
+        "type": "text",
+        "required": false
+      },
+      "tva_achat_pct": {
+        "type": "numeric",
+        "required": false
+      },
+      "marge_pct": {
+        "type": "numeric",
+        "required": false
+      },
+      "coef_av": {
+        "type": "numeric",
+        "required": false
+      },
+      "cout_supplementaire": {
+        "type": "money",
+        "required": false
+      },
+      "cout_de_revient": {
+        "type": "money",
+        "required": false
+      },
+      "prix_vente_ht": {
+        "type": "money",
+        "required": false
+      },
+      "pvp": {
+        "type": "money",
+        "required": false
+      },
+      "prix_achat_ttc": {
+        "type": "money",
+        "required": false
+      },
+      "source_tag": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": true,
+    "manager": true
+  },
+  "rapports_caisse": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "date_journal": {
+        "type": "text",
+        "required": true
+      },
+      "session_type": {
+        "type": "text",
+        "required": true
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "started_at": {
+        "type": "timestamp",
+        "required": true
+      },
+      "ended_at": {
+        "type": "timestamp",
+        "required": true
+      },
+      "fond_de_caisse": {
+        "type": "money",
+        "required": false
+      },
+      "total_entrees": {
+        "type": "money",
+        "required": false
+      },
+      "total_sorties": {
+        "type": "money",
+        "required": false
+      },
+      "solde_theorique": {
+        "type": "money",
+        "required": false
+      },
+      "solde_reel": {
+        "type": "money",
+        "required": false
+      },
+      "ecart": {
+        "type": "money",
+        "required": false
+      },
+      "notes": {
+        "type": "text",
+        "required": false
+      },
+      "summary_json": {
+        "type": "text",
+        "required": false
+      },
+      "operations_json": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "remboursements_ventes": {
+    "columns": {
+      "vente_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "montant": {
+        "type": "money",
+        "required": false
+      },
+      "mode_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "motif": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "reparation_status_history": {
+    "columns": {
+      "reparation_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "statut": {
+        "type": "text",
+        "required": true
+      },
+      "source_status": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "changed_by": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "reparations": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "operateur_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "type_appareil": {
+        "type": "text",
+        "required": false
+      },
+      "marque": {
+        "type": "text",
+        "required": false
+      },
+      "modele": {
+        "type": "text",
+        "required": false
+      },
+      "description_panne": {
+        "type": "text",
+        "required": false
+      },
+      "main_oeuvre": {
+        "type": "money",
+        "required": false
+      },
+      "acompte": {
+        "type": "money",
+        "required": false
+      },
+      "total_estime": {
+        "type": "money",
+        "required": false
+      },
+      "total_final": {
+        "type": "money",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "technicien": {
+        "type": "text",
+        "required": false
+      },
+      "notes_technicien": {
+        "type": "text",
+        "required": false
+      },
+      "benefice": {
+        "type": "money",
+        "required": false
+      },
+      "repair_token": {
+        "type": "text",
+        "required": false
+      },
+      "estimated_completion": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "retours": {
+    "columns": {
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "vente_numero": {
+        "type": "text",
+        "required": false
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "produit_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "designation": {
+        "type": "text",
+        "required": true
+      },
+      "quantite": {
+        "type": "integer",
+        "required": true
+      },
+      "prix_unitaire": {
+        "type": "money",
+        "required": true
+      },
+      "motif": {
+        "type": "text",
+        "required": false
+      },
+      "type_retour": {
+        "type": "text",
+        "required": true
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "resolution": {
+        "type": "text",
+        "required": false
+      },
+      "montant_rembourse": {
+        "type": "money",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "serial_numbers": {
+    "columns": {
+      "produit_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "numero_serie": {
+        "type": "text",
+        "required": true
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "vente_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "services_pos": {
+    "columns": {
+      "nom": {
+        "type": "text",
+        "required": true
+      },
+      "code_barre": {
+        "type": "text",
+        "required": true
+      },
+      "logo_url": {
+        "type": "text",
+        "required": false
+      },
+      "actif": {
+        "type": "integer",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "shifts": {
+    "columns": {
+      "operateur_id": {
+        "type": "text",
+        "required": false
+      },
+      "operateur_nom": {
+        "type": "text",
+        "required": true
+      },
+      "fond_de_caisse": {
+        "type": "money",
+        "required": true
+      },
+      "started_at": {
+        "type": "timestamp",
+        "required": true
+      },
+      "ended_at": {
+        "type": "timestamp",
+        "required": false
+      },
+      "total_ventes_especes": {
+        "type": "money",
+        "required": false
+      },
+      "total_services": {
+        "type": "money",
+        "required": false
+      },
+      "total_reparations": {
+        "type": "money",
+        "required": false
+      },
+      "total_credits_recus": {
+        "type": "money",
+        "required": false
+      },
+      "total_sorties": {
+        "type": "money",
+        "required": false
+      },
+      "solde_theorique": {
+        "type": "money",
+        "required": false
+      },
+      "solde_declare": {
+        "type": "money",
+        "required": false
+      },
+      "ecart": {
+        "type": "money",
+        "required": false
+      },
+      "transfere_caisse_interne": {
+        "type": "integer",
+        "required": false
+      },
+      "notes_cloture": {
+        "type": "text",
+        "required": false
+      },
+      "session_type": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "sorties_caisse": {
+    "columns": {
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "montant": {
+        "type": "money",
+        "required": true
+      },
+      "note": {
+        "type": "text",
+        "required": true
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "mouvement_interne_id": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "transactions_services": {
+    "columns": {
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "service_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "service_nom": {
+        "type": "text",
+        "required": true
+      },
+      "montant_frais": {
+        "type": "money",
+        "required": true
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "operateur": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "ventes": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "operateur_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "client_adresse": {
+        "type": "text",
+        "required": false
+      },
+      "client_matricule": {
+        "type": "text",
+        "required": false
+      },
+      "sous_total": {
+        "type": "money",
+        "required": false
+      },
+      "total_remises": {
+        "type": "money",
+        "required": false
+      },
+      "total_ttc": {
+        "type": "money",
+        "required": true
+      },
+      "mode_paiement": {
+        "type": "text",
+        "required": false
+      },
+      "montant_recu": {
+        "type": "money",
+        "required": false
+      },
+      "monnaie_rendue": {
+        "type": "money",
+        "required": false
+      },
+      "type": {
+        "type": "text",
+        "required": false
+      },
+      "note_vente": {
+        "type": "text",
+        "required": false
+      },
+      "a_facture": {
+        "type": "integer",
+        "required": false
+      },
+      "montant_encaisse_initial": {
+        "type": "money",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "annule_par": {
+        "type": "text",
+        "required": false
+      },
+      "annule_at": {
+        "type": "timestamp",
+        "required": false
+      },
+      "annule_motif": {
+        "type": "text",
+        "required": false
+      },
+      "fidelite_utilisee": {
+        "type": "money",
+        "required": false
+      },
+      "fidelite_gagnee": {
+        "type": "money",
+        "required": false
+      },
+      "type_vente": {
+        "type": "text",
+        "required": false
+      },
+      "client_id": {
+        "type": "uuid",
+        "required": false
+      },
+      "avance_dossier_id": {
+        "type": "text",
+        "required": false
+      },
+      "avance_utilisee": {
+        "type": "money",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "ventes_en_ligne": {
+    "columns": {
+      "numero": {
+        "type": "text",
+        "required": true
+      },
+      "shift_id": {
+        "type": "text",
+        "required": false
+      },
+      "operateur_nom": {
+        "type": "text",
+        "required": false
+      },
+      "client_nom": {
+        "type": "text",
+        "required": true
+      },
+      "client_tel": {
+        "type": "text",
+        "required": false
+      },
+      "client_adresse": {
+        "type": "text",
+        "required": false
+      },
+      "produits_json": {
+        "type": "text",
+        "required": false
+      },
+      "montant_ttc": {
+        "type": "money",
+        "required": true
+      },
+      "montant_net": {
+        "type": "money",
+        "required": false
+      },
+      "frais_livraison": {
+        "type": "money",
+        "required": false
+      },
+      "frais_retour": {
+        "type": "money",
+        "required": false
+      },
+      "statut": {
+        "type": "text",
+        "required": false
+      },
+      "livraison_nom": {
+        "type": "text",
+        "required": false
+      },
+      "montant_recu": {
+        "type": "money",
+        "required": false
+      },
+      "reference_livraison": {
+        "type": "text",
+        "required": false
+      },
+      "note": {
+        "type": "text",
+        "required": false
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "stock_movements": {
+    "columns": {
+      "product_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "qty_delta": {
+        "type": "integer",
+        "required": true
+      },
+      "reason": {
+        "type": "text",
+        "required": true
+      },
+      "ref_type": {
+        "type": "text",
+        "required": true
+      },
+      "ref_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  },
+  "account_movements": {
+    "columns": {
+      "account_kind": {
+        "type": "text",
+        "required": true
+      },
+      "owner_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "amount_millimes": {
+        "type": "money",
+        "required": true
+      },
+      "reason": {
+        "type": "text",
+        "required": true
+      },
+      "ref_type": {
+        "type": "text",
+        "required": true
+      },
+      "ref_id": {
+        "type": "uuid",
+        "required": true
+      },
+      "legacy_id": {
+        "type": "text",
+        "required": false
+      }
+    },
+    "lww": false,
+    "manager": false
+  }
+}
+

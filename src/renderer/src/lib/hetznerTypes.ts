@@ -1,0 +1,4 @@
+export type HetznerDevice={id:string;name:string;platform:string;client_version:string;importer:boolean;last_seen_at:string;revoked_at:string|null;online:boolean}
+export type HetznerOverview={deviceId:string;deviceName:string;endpoint:string;localQueue:number;importEnabled:boolean;devices:HetznerDevice[];rejections:Array<{id:string;code:string;message:string;created_at:string}>;authenticated:boolean;serverReachable:boolean;stage:string;message:string;role?:string}
+export type SeedPreflight={createdAt:string;tableCount:number;rowCounts:Record<string,number>;moneyTotalsMillimes:Record<string,string>;foreignKeyErrorCount:number;integrityOk:boolean;warnings:string[];importEnabled:false;stage:'preflight_only';backupPath:string;sourcePath:string;sha256:string;countsMatch:boolean;conversion?:{canStage:boolean;planPath:string;convertedRows:number;openingStockRows:number;openingAccountRows:number;blockingIssues:number;reviewIssues:number;issueCodes:string[]}}
+

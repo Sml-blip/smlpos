@@ -1,0 +1,233 @@
+[
+  {
+    "table": "ajustements_fournisseurs",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "avances_clients",
+    "column": "client_id",
+    "target": "clients"
+  },
+  {
+    "table": "avances_clients",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "avances_clients",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "clients",
+    "column": "organisation_id",
+    "target": "organisations"
+  },
+  {
+    "table": "credits_clients",
+    "column": "client_id",
+    "target": "clients"
+  },
+  {
+    "table": "credits_clients",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "demandes_clients",
+    "column": "responsable_id",
+    "target": "operateurs"
+  },
+  {
+    "table": "documents",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "documents",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "documents",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "documents",
+    "column": "client_id",
+    "target": "clients"
+  },
+  {
+    "table": "documents",
+    "column": "avoir_id",
+    "target": "documents"
+  },
+  {
+    "table": "documents",
+    "column": "document_origine_id",
+    "target": "documents"
+  },
+  {
+    "table": "factures_clients",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "factures_fournisseurs",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "fournisseur_commerciaux",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "lignes_document",
+    "column": "document_id",
+    "target": "documents"
+  },
+  {
+    "table": "lignes_document",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "lignes_facture_fournisseur",
+    "column": "facture_id",
+    "target": "factures_fournisseurs"
+  },
+  {
+    "table": "lignes_facture_fournisseur",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "lignes_vente",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "lignes_vente",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "mouvements_echange",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "mouvements_echange",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "mouvements_fidelite",
+    "column": "client_id",
+    "target": "clients"
+  },
+  {
+    "table": "mouvements_fidelite",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "mouvements_personnels",
+    "column": "personnel_id",
+    "target": "personnels"
+  },
+  {
+    "table": "paiements_fournisseurs",
+    "column": "facture_id",
+    "target": "factures_fournisseurs"
+  },
+  {
+    "table": "paiements_fournisseurs",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "pieces_reparation",
+    "column": "reparation_id",
+    "target": "reparations"
+  },
+  {
+    "table": "pieces_reparation",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "produits",
+    "column": "categorie_id",
+    "target": "categories"
+  },
+  {
+    "table": "produits",
+    "column": "fournisseur_id",
+    "target": "fournisseurs"
+  },
+  {
+    "table": "rapports_caisse",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "remboursements_ventes",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "reparation_status_history",
+    "column": "reparation_id",
+    "target": "reparations"
+  },
+  {
+    "table": "retours",
+    "column": "vente_id",
+    "target": "ventes"
+  },
+  {
+    "table": "retours",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "retours",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "serial_numbers",
+    "column": "produit_id",
+    "target": "produits"
+  },
+  {
+    "table": "transactions_services",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "transactions_services",
+    "column": "service_id",
+    "target": "services_pos"
+  },
+  {
+    "table": "ventes",
+    "column": "shift_id",
+    "target": "shifts"
+  },
+  {
+    "table": "ventes",
+    "column": "client_id",
+    "target": "clients"
+  },
+  {
+    "table": "stock_movements",
+    "column": "product_id",
+    "target": "produits"
+  }
+]
+

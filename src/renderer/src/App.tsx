@@ -5,6 +5,7 @@ import SplashScreen from './components/SplashScreen'
 import LockScreen from './components/LockScreen'
 import TitleBar from './components/TitleBar'
 import StatusBar from './components/StatusBar'
+import MultiDevicePanel from './components/MultiDevicePanel'
 import POSTab from './modules/pos/POSTab'
 import HistoriqueTab from './modules/historique/HistoriqueTab'
 import InventaireTab from './modules/inventaire/InventaireTab'
@@ -25,7 +26,6 @@ import {
   Eye, LockKeyhole, Play
 } from 'lucide-react'
 import { cn } from './lib/utils'
-import { invalidateProduitsCache } from './lib/produitsCache'
 import { bootstrapSync, startSyncPolling } from './lib/sync'
 import ToastProvider from './components/ToastProvider'
 import { PrintManagerProvider } from './components/PrintManagerProvider'
@@ -56,10 +56,6 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode; short: string }[]
 ]
 
 export default function App() {
-  useEffect(() => window.api.onSync2Changed?.((applied) => {
-    invalidateProduitsCache()
-    window.dispatchEvent(new CustomEvent('smlpos:sync-pull-complete', { detail: { applied } }))
-  }), [])
   const { showShiftModal, activeTab, setActiveTab, setOperateurs, setIsOnline, currentOperateur, currentShift,
     setCurrentShift, setCurrentOperateur, setShowShiftModal, previewMode, setPreviewMode } = useAppStore()
   const [showSplash, setShowSplash] = useState(true)
@@ -246,6 +242,7 @@ export default function App() {
       )}
 
       <TitleBar />
+      <MultiDevicePanel />
 
       {/* Tab Navigation — scrollable to fit all 12 tabs */}
       <div className="flex items-center gap-0 bg-[var(--bg-primary)] border-b border-border px-2 pt-1 flex-shrink-0 overflow-x-auto">
@@ -386,3 +383,4 @@ export default function App() {
     </PrintManagerProvider>
   )
 }
+

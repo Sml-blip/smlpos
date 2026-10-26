@@ -1,0 +1,48 @@
+# Legacy Sync Rules retained for compatibility with the supplied kit.
+# Only the private, authenticated single-business service can issue tokens.
+bucket_definitions:
+  business_data:
+    data:
+      - SELECT * FROM activity_logs
+      - SELECT * FROM ajustements_fournisseurs
+      - SELECT * FROM app_settings
+      - SELECT * FROM avances_clients
+      - SELECT * FROM caisse_interne
+      - SELECT * FROM categories
+      - SELECT * FROM clients
+      - SELECT * FROM credits_clients
+      - SELECT * FROM demandes_clients
+      - SELECT * FROM documents
+      - SELECT * FROM factures_clients
+      - SELECT * FROM factures_fournisseurs
+      - SELECT * FROM fournisseur_commerciaux
+      - SELECT * FROM fournisseurs
+      - SELECT * FROM lignes_document
+      - SELECT * FROM lignes_facture_fournisseur
+      - SELECT * FROM lignes_vente
+      - SELECT * FROM mouvements_caisse_interne
+      - SELECT * FROM mouvements_echange
+      - SELECT * FROM mouvements_fidelite
+      - SELECT * FROM mouvements_personnels
+      - SELECT * FROM mouvements_tresorerie_attente
+      - SELECT * FROM operateurs
+      - SELECT * FROM organisations
+      - SELECT * FROM paiements_fournisseurs
+      - SELECT * FROM personnels
+      - SELECT * FROM pieces_reparation
+      - SELECT * FROM produits
+      - SELECT * FROM rapports_caisse
+      - SELECT * FROM remboursements_ventes
+      - SELECT * FROM reparation_status_history
+      - SELECT * FROM reparations
+      - SELECT * FROM retours
+      - SELECT * FROM serial_numbers
+      - SELECT * FROM services_pos
+      - SELECT * FROM shifts
+      - SELECT * FROM sorties_caisse
+      - SELECT * FROM transactions_services
+      - SELECT * FROM ventes
+      - SELECT * FROM ventes_en_ligne
+      - SELECT * FROM stock_movements
+      - SELECT * FROM account_movements
+

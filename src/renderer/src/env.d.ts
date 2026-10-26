@@ -1,7 +1,10 @@
 /// <reference types="vite/client" />
 
-import type { DesktopApi } from '../../preload'
-interface RendererApi {
+interface Window {
+  api: {
+    hetznerOverview: () => Promise<import('./lib/hetznerTypes').HetznerOverview>
+    hetznerLogin: (credentials:{username:string;password:string}) => Promise<{ok:boolean;role:string}>
+    hetznerPreflight: () => Promise<import('./lib/hetznerTypes').SeedPreflight>
     // DB generic
     dbQuery: (sql: string, params?: unknown[]) => Promise<{ data: unknown[]; error: string | null }>
     dbRun: (sql: string, params?: unknown[]) => Promise<{ data: unknown; error: string | null }>
@@ -52,7 +55,7 @@ interface RendererApi {
     shiftsClose: (id: string, data: unknown) => Promise<unknown>
     shiftsGetActive: () => Promise<unknown>
     shiftsGetToday: () => Promise<unknown[]>
-    shiftsGetTodayStatus: () => Promise<{ shifts: unknown[]; openedCount: number; closedCount: number; active: unknown | null; staleOpen?: import('./lib/types').Shift | null; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean }>
+    shiftsGetTodayStatus: () => Promise<{ shifts: unknown[]; openedCount: number; closedCount: number; active: unknown | null; staleOpen?: unknown | null; morningDone: boolean; eveningDone: boolean; nextSession: 'MATIN' | 'SOIR' | null; canOpen: boolean }>
     shiftsGetSummary: (shiftId: string) => Promise<unknown>
     shiftsCountClosedToday?: () => Promise<number>
     rapportsCaisseList: (filters?: unknown) => Promise<unknown[]>
@@ -320,6 +323,7 @@ interface RendererApi {
     // Window
     windowMinimize: () => Promise<void>
     windowMaximize: () => Promise<void>
-    windowClose: () => Promise<void>}
+    windowClose: () => Promise<void>
+  }
+}
 
-declare global { interface Window { api: { [K in keyof DesktopApi]: K extends keyof RendererApi ? NonNullable<RendererApi[K]> : DesktopApi[K] } } }
