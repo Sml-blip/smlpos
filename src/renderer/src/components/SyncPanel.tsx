@@ -28,7 +28,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState<string | null>(null)
   const [phrase, setPhrase] = useState('')
   const [joinPhrase, setJoinPhrase] = useState('')
-  const [form, setForm] = useState({ url: '', token: '', name: '' })
+  const [form, setForm] = useState({ url: '', username: '', password: '', name: '' })
   const [rejected, setRejected] = useState<SeedRejectedOp[] | null>(null)
   const alive = useRef(true)
 
@@ -66,7 +66,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
   const running = seed?.state === 'running' || seed?.state === 'finalizing'
   const pct = seed && seed.progress.total > 0 ? Math.min(100, Math.round((seed.progress.sent / seed.progress.total) * 100)) : 0
   const online = st?.connection === 'online'
-  const replica = st?.server?.devices.find(device => device.device_id === st.deviceId)?.role === 'replica'
+  const replica = online && st?.server?.seed.state === 'seeded' && !st.live.enabled
   const needsRegistration = st?.connection === 'unconfigured' || st?.connection === 'unregistered' || st?.connection === 'auth_failed'
 
   return (
@@ -98,11 +98,12 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
                   <div className="grid gap-2 max-w-md">
                     {st.connection === 'auth_failed' && <p className="text-danger">Ce poste n'est plus autorisé. Enregistrez-le à nouveau.</p>}
                     <input className="border border-border rounded-lg px-3 py-2" placeholder="https://sync.exemple.com" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} />
-                    <input className="border border-border rounded-lg px-3 py-2" placeholder="Jeton d'enregistrement" type="password" autoComplete="off" value={form.token} onChange={e => setForm({ ...form, token: e.target.value })} />
+                    <input className="border border-border rounded-lg px-3 py-2" placeholder="Nom d'utilisateur" autoComplete="username" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
+                    <input className="border border-border rounded-lg px-3 py-2" placeholder="Mot de passe" type="password" autoComplete="current-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
                     <input className="border border-border rounded-lg px-3 py-2" placeholder="Nom de ce poste (ex. PC Caisse 1)" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
                     <button
-                      disabled={!!busy || !form.url || !form.token || !form.name}
-                      onClick={() => act('register', async () => { const r = await api.seedRegister(form.url, form.token, form.name); if (r.ok) setForm({ url: '', token: '', name: '' }); return r })}
+                      disabled={!!busy || !form.url || !form.username || !form.password || !form.name}
+                      onClick={() => act('register', async () => { const r = await api.seedRegister(form.url, form.username, form.password, form.name); if (r.ok) setForm({ url: '', username: '', password: '', name: '' }); return r })}
                       className="px-3 py-2 rounded-lg bg-teal-600 text-white font-semibold disabled:opacity-50"
                     >
                       {busy === 'register' ? 'Enregistrement…' : 'Enregistrer ce poste'}

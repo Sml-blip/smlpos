@@ -78,7 +78,7 @@ export interface SeedApi {
   sync2Retry: () => Promise<SeedResult<void>>
   sync2Export: () => Promise<SeedResult<string | null>>
   seedStatus: (force?: boolean) => Promise<SeedResult<SeedPanelStatus>>
-  seedRegister: (baseUrl: string, token: string, name: string) => Promise<SeedResult<void>>
+  seedRegister: (baseUrl: string, username: string, password: string, name: string) => Promise<SeedResult<void>>
   seedBackupAndCheck: () => Promise<SeedResult<SeedReportView>>
   seedRecheck: () => Promise<SeedResult<SeedReportView>>
   seedApprove: (phrase: string) => Promise<SeedResult<void>>

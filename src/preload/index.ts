@@ -44,7 +44,7 @@ const api = {
   sync2Retry: () => ipcRenderer.invoke('sync2:retry'),
   sync2Export: () => ipcRenderer.invoke('sync2:export'),
   seedStatus: (force = false) => ipcRenderer.invoke('seed:status', force),
-  seedRegister: (baseUrl: string, token: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, token, name),
+  seedRegister: (baseUrl: string, username: string, password: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, username, password, name),
   seedBackupAndCheck: () => ipcRenderer.invoke('seed:backupAndCheck'),
   seedRecheck: () => ipcRenderer.invoke('seed:recheck'),
   seedApprove: (phrase: string) => ipcRenderer.invoke('seed:approve', phrase),

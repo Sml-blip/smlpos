@@ -3,6 +3,11 @@ import { createHash } from 'crypto'
 import { moneyColumnsOf, COUNTER_COLUMNS } from '../tables'
 import type { PushResult,LiveChange } from '../client'
 
+const canonical=(value:unknown):string=>Array.isArray(value)?`[${value.map(canonical).join(',')}]`:value&&typeof value==='object'?`{${Object.entries(value as Record<string,unknown>).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`:JSON.stringify(value)
+const hash=(value:string)=>createHash('sha256').update(value).digest('hex')
+const MOD=1n<<256n
+function addHash(a:string,b:string){return ((BigInt(`0x${a}`)+BigInt(`0x${b}`))%MOD).toString(16).padStart(64,'0')}
+
 interface Opts {
   installId?: string | null
   serverState?: 'empty' | 'seeding' | 'seeded'
@@ -29,6 +34,11 @@ export class MockBackend {
   state: 'empty' | 'seeding' | 'seeded'
   tableSpec: Record<string, { columns: string[]; pk: string }>
   expectedTotals: Record<string, { rows: number; money_sums_millimes: Record<string, number> }> = {}
+  manifest: { snapshotHash: string; expected: Record<string, { count: number; checksum: string; contentChecksum: string; moneyTotals: Record<string, string> }> } | null = null
+  manifestHash = ''
+  batchReceipts = new Set<string>()
+  deviceId = ''
+  deviceName = 'Fixture'
 
   constructor(o: Opts = {}) {
     this.seedInstallId = o.installId ?? null
@@ -46,6 +56,82 @@ export class MockBackend {
     const json = (status: number, data: unknown) =>
       new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
     const auth = (init?.headers as Record<string, string> | undefined)?.authorization
+
+    if ((init?.headers as Record<string,string>|undefined)?.['X-Client-Version'] === undefined) return json(426,{code:'CLIENT_UPDATE_REQUIRED',message:'Missing client version'})
+    if (url.pathname === '/auth/login') {
+      if (body.username !== 'good-user' || body.password !== 'good-pass') return json(401,{code:'INVALID_LOGIN',message:'Invalid username or password'})
+      this.deviceId=body.deviceId;this.deviceName=body.deviceName
+      return json(200,{accessToken:'access-a1',refreshToken:'refresh-a1',expiresIn:Math.max(1,this.accessTokenTtlMs/1000),role:'admin',syncUrl:'https://mock.invalid'})
+    }
+    if (url.pathname === '/auth/refresh') {
+      this.refreshCount++
+      return json(200,{accessToken:`access-a${this.refreshCount+1}`,refreshToken:`refresh-a${this.refreshCount+1}`,expiresIn:Math.max(1,this.accessTokenTtlMs/1000),role:'admin'})
+    }
+    if (!auth?.startsWith('Bearer ')) return json(401, { code: 'AUTH_REQUIRED', message: 'no token' })
+    if (url.pathname === '/devices') return json(200,{currentDeviceId:this.deviceId,devices:[{id:this.deviceId,name:this.deviceName,platform:'windows',client_version:'1.9.1001',last_seen_at:new Date().toISOString(),online:true}]})
+    if (url.pathname === '/sync/status') return json(200,{stage:'staging',liveWritesEnabled:false,seedingEnabled:false,rejections:[],importState:'awaiting_verified_dry_run'})
+    if (url.pathname === '/sync2/contract') {
+      const tables=Object.fromEntries(Object.entries(this.tableSpec).map(([name,table])=>[name,{pk:table.pk,columns:Object.fromEntries(table.columns.map(column=>[column,moneyColumnsOf(name).includes(column)?'money':'text']))}]))
+      return json(200,{schemaVersion:2,tables})
+    }
+    if (url.pathname === '/sync2/pull') {
+      if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})
+      if(!this.liveChanges.length&&this.rows.size){for(const [table,rows]of this.rows)for(const[pk,row]of rows){this.liveSequence++;this.liveChanges.push({server_seq:this.liveSequence,origin_device:'seed',table,pk,op:'UPSERT',row})}}
+      await this.onBootstrapPage?.()
+      const since=Number(url.searchParams.get('since')??0),limit=Number(url.searchParams.get('limit')??500)
+      const remaining=this.liveChanges.filter(change=>change.server_seq>since).slice(0,limit)
+      return json(200,{rows:remaining.map(change=>({seq:String(change.server_seq),table_name:change.table,row_id:change.pk,payload:change.row??{[change.table==='app_settings'?'key':'id']:change.pk},deleted:change.op==='DELETE'})),nextSeq:String(remaining.at(-1)?.server_seq??since),hasMore:this.liveChanges.filter(change=>change.server_seq>since).length>limit})
+    }
+    if (url.pathname === '/sync2/seed/validate') {
+      const pk=this.tableSpec[body.table]?.pk??'id'
+      return json(200,{blocking:(body.rows as Record<string,unknown>[]).filter(row=>this.rejectPks.has(String(row[pk]))).map(row=>({id:String(row[pk]),reason:'rejected by synthetic validation'})),count:body.rows.length,writes:0})
+    }
+    if (url.pathname === '/sync2/seed/start') {
+      this.state='seeding';this.manifest=body;this.manifestHash=hash(canonical(body));this.rows.clear();this.liveChanges=[];this.liveSequence=0
+      return json(200,{seedId:'00000000-0000-7000-8000-000000000001',status:'uploading'})
+    }
+    if (url.pathname === '/sync2/seed/batch') {
+      this.batchesReceived++
+      if(this.failBatchesAfter!==null&&this.batchesReceived>this.failBatchesAfter)return json(503,{code:'SERVER_ERROR',message:'temporarily down'})
+      const key=`${body.seedId}:${body.batchId}`
+      if(this.batchReceipts.has(key))return json(200,{accepted:0,duplicate:body.rows.length})
+      const table=this.rows.get(body.table)??new Map<string,Record<string,unknown>>();this.rows.set(body.table,table)
+      for(const row of body.rows as Record<string,unknown>[]){const pk=String(row[this.tableSpec[body.table]?.pk??'id']);if(this.rejectPks.has(pk))continue;table.set(pk,row)}
+      this.batchReceipts.add(key);await this.onBatch?.(body.table)
+      return json(200,{accepted:body.rows.filter((row:Record<string,unknown>)=>!this.rejectPks.has(String(row[this.tableSpec[body.table]?.pk??'id']))).length,duplicate:0})
+    }
+    if (url.pathname === '/sync2/seed/verify') {
+      const actual:Record<string,{count:number;checksum:string;contentChecksum:string;moneyTotals:Record<string,string>}>=Object.fromEntries(Object.entries(this.manifest?.expected??{}).map(([name,stat])=>[name,{count:0,checksum:'0'.repeat(64),contentChecksum:'0'.repeat(64),moneyTotals:Object.fromEntries(Object.keys(stat.moneyTotals).map(key=>[key,'0']))}]))
+      for(const [table,rows] of this.rows)for(const [id,row] of rows){const stat=actual[table];if(!stat)continue;stat.count++;stat.checksum=addHash(stat.checksum,hash(id));stat.contentChecksum=addHash(stat.contentChecksum,hash(canonical(row)));for(const column of Object.keys(stat.moneyTotals))stat.moneyTotals[column]=String(BigInt(stat.moneyTotals[column])+BigInt(String(row[column]??0)))}
+      const mismatches=Object.keys(actual).filter(table=>canonical(actual[table])!==canonical(this.manifest?.expected[table]))
+      return json(200,{ok:mismatches.length===0,actual,mismatches,status:mismatches.length?'NEEDS_REVIEW':'verified'})
+    }
+    if (url.pathname === '/sync2/seed/activate') {
+      if(body.reviewedManifestHash!==this.manifestHash)return json(409,{code:'REVIEW_CHANGED'})
+      if(this.state==='seeded')return json(200,{ok:true,replayed:true})
+      this.liveChanges=[]
+      for(const [table,rows] of this.rows)for(const [pk,row] of rows){this.liveSequence++;this.liveChanges.push({server_seq:this.liveSequence,origin_device:'seed',table,pk,op:'UPSERT',row})}
+      this.state='seeded';return json(200,{ok:true,replayed:false})
+    }
+    if (url.pathname === '/sync2/push') {
+      if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})
+      const results=[] as Array<{opId:string;status:string;version?:string;code?:string;reason?:string}>
+      for(const op of body.ops as Array<{opId:string;table:string;rowId:string;op:string;payload:Record<string,unknown>}>) {
+        const previous=this.liveSeen.get(op.opId)
+        if(previous){results.push({opId:op.opId,status:previous.result.status==='rejected'?'rejected':'duplicate',version:String(previous.result.seq)});continue}
+        const pk=this.tableSpec[op.table]?.pk??'id',rows=this.rows.get(op.table)??new Map<string,Record<string,unknown>>()
+        if(this.rejectPks.has(op.rowId)){results.push({opId:op.opId,status:'rejected',code:'INVALID_ROW',reason:'rejected by synthetic validation'});continue}
+        if(String(op.payload[pk])!==op.rowId){results.push({opId:op.opId,status:'rejected',code:'ROW_ID_CHANGED',reason:'row id mismatch'});continue}
+        if(op.op==='DELETE')rows.delete(op.rowId);else rows.set(op.rowId,op.payload)
+        this.rows.set(op.table,rows);this.liveSequence++
+        const result={opId:op.opId,status:'applied',version:String(this.liveSequence)}
+        this.liveSeen.set(op.opId,{hash:hash(canonical(op)),result:{seq:this.liveSequence,status:'applied'}})
+        this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:op.table,pk:op.rowId,op:op.op==='DELETE'?'DELETE':'UPSERT',...(op.op==='DELETE'?{}:{row:op.payload})})
+        results.push(result)
+      }
+      if(this.dropPushResponses>0){this.dropPushResponses--;throw new TypeError('Connection lost after server commit')}
+      return json(200,{results})
+    }
 
     if (url.pathname === '/v1/devices/register') {
       if (body.enrollment_token !== 'good-token') return json(403, { code: 'bad_token', message: 'Invalid enrollment token' })

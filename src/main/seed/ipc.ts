@@ -76,8 +76,8 @@ export function registerSeedIpc(legacyQueue: () => { pending: number; failed: nu
   }))
 
   ipcMain.handle('seed:status', (_e, force?: boolean) => wrap(() => svc().status(!!force)))
-  ipcMain.handle('seed:register', (_e, baseUrl: string, token: string, name: string) =>
-    wrap(() => svc().registerDevice(String(baseUrl), String(token), String(name))))
+  ipcMain.handle('seed:register', (_e, baseUrl: string, username: string, password: string, name: string) =>
+    wrap(() => svc().registerDevice(String(baseUrl), String(username), String(password), String(name))))
   ipcMain.handle('seed:backupAndCheck', () => wrap(() => svc().backupAndCheck()))
   ipcMain.handle('seed:recheck', () => wrap(() => svc().recheck()))
   ipcMain.handle('seed:approve', (_e, phrase: string) => wrap(() => svc().approve(String(phrase))))

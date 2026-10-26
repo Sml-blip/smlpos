@@ -76,7 +76,7 @@ export class PullClient {
       return 'rejected'
     }
   }
-  applyPage(page:PullPage){
+  applyPage(page:PullPage,bootstrap=false){
     if(!page||!Array.isArray(page.changes)||page.changes.length>500||typeof page.has_more!=='boolean'||!Number.isSafeInteger(page.next_seq)||page.next_seq<0)throw new Error('Invalid pull page')
     let last=0
     for(const change of page.changes){if(!Number.isSafeInteger(change.server_seq)||change.server_seq<=last||typeof change.origin_device!=='string')throw new Error('Invalid server sequence');last=change.server_seq}
@@ -87,7 +87,7 @@ export class PullClient {
       if(!page.changes.length&&page.next_seq!==cursor)throw new Error('Empty page advanced the cursor')
       if(page.next_seq<=cursor){result.skipped=page.changes.length;return result}
       const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')
-      for(const change of page.changes){if(change.server_seq<=cursor){result.skipped++;continue}result[this.isolated(change)]++}
+      for(const change of page.changes){if(change.server_seq<=cursor){result.skipped++;continue}result[this.isolated(change,bootstrap)]++}
       setCaptureState(this.db,'pull_cursor',String(page.next_seq));setCaptureState(this.db,'last_pull_at',new Date().toISOString());setCaptureState(this.db,'apply_mute',mute)
       return result
     })()
@@ -123,23 +123,19 @@ export class PullClient {
         for(const table of names)if(!['app_settings','operateurs','categories','services_pos'].includes(table)&&(this.db.prepare(`SELECT 1 FROM ${q(table)} LIMIT 1`).get()))throw new Error('This PC contains business data; review it before joining')
         setCaptureState(this.db,'bootstrap_tables',encoded)
       }
-      for(const table of names){
-        if(captureState(this.db,`bootstrap_done:${table}`)==='1')continue
-        while(true){
-          if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap; review before continuing')
-          const after=captureState(this.db,`bootstrap_after:${table}`)??'',saved=captureState(this.db,'bootstrap_as_of'),asOf=saved===null?null:Number(saved)
-          const page=await this.client.bootstrapPage(table,after,asOf)
-          if(!page||!Array.isArray(page.rows)||page.rows.length>500||typeof page.has_more!=='boolean'||!Number.isSafeInteger(page.as_of_seq)||page.as_of_seq<0||asOf!==null&&page.as_of_seq!==asOf||page.has_more&&!page.rows.length)throw new Error('Bootstrap snapshot changed or page is invalid')
-          let last=after;for(const row of page.rows){const pk=row[primaryKeyOf(table)];if(typeof pk!=='string'||Buffer.compare(Buffer.from(pk),Buffer.from(last))<=0)throw new Error('Bootstrap cursor did not advance');last=pk}
-          this.db.transaction(()=>{
-            if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap')
-            const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1');setCaptureState(this.db,'bootstrap_as_of',String(page.as_of_seq))
-            let rejectSequence=(this.db.prepare('SELECT COALESCE(min(CASE WHEN server_seq<0 THEN server_seq END),0)-1 n FROM pull_rejects').get() as {n:number}).n
-            for(const row of page.rows)this.isolated({server_seq:rejectSequence--,origin_device:'bootstrap',table,pk:String(row[primaryKeyOf(table)]),op:'UPSERT',row},true)
-            setCaptureState(this.db,`bootstrap_after:${table}`,last);if(!page.has_more)setCaptureState(this.db,`bootstrap_done:${table}`,'1');setCaptureState(this.db,'apply_mute',mute)
-          })()
-          if(!page.has_more)break
-        }
+      // sync2 has no table/bootstrap endpoint. Seed activation publishes the
+      // full snapshot to the change log, so a fresh device starts at since=0.
+      // Cursor commits make an interrupted join resumable without replaying rows.
+      while(true){
+        if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap; review before continuing')
+        const cursor=Number(captureState(this.db,'pull_cursor')??0)
+        const page=await this.client.pullLive(cursor)
+        if(!page||!Array.isArray(page.changes)||page.changes.length>500||typeof page.has_more!=='boolean'||!Number.isSafeInteger(page.next_seq)||page.next_seq<cursor||page.has_more&&!page.changes.length)throw new Error('Bootstrap pull page is invalid')
+        if(page.changes.some(change=>!Number.isSafeInteger(change.server_seq)||change.server_seq<=cursor))throw new Error('Bootstrap pull cursor did not advance')
+        if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap')
+        this.applyPage(page,true)
+        setCaptureState(this.db,'bootstrap_as_of',String(page.next_seq))
+        if(!page.has_more)break
       }
       this.db.transaction(()=>{
         const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')

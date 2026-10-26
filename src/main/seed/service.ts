@@ -5,7 +5,7 @@ import { SeedLedger, type RejectedOp, type SeedState } from './ledger'
 import { createVerifiedBackup, hashFile, verifyBackupFile, type BackupVerification } from './snapshot'
 import { CONTRACT_VERSION, moneyColumnsOf } from './tables'
 import { installOutbox } from './outbox'
-import { canDrainOutbox, captureState, closeSeedGate, openVerifiedGate, setCaptureState } from './gate'
+import { canDrainOutbox, captureState, closeSeedGate, ensureDeviceId, openVerifiedGate, setCaptureState } from './gate'
 import { OutboxDrainer } from './drainer'
 import { PullClient } from './pull'
 import { liveStatus } from './monitor'
@@ -112,67 +112,46 @@ export class SeedService {
     if (!baseUrl) return null
     if (!this.client) {
       this.client = new BackendClient({
-        baseUrl, loadSession: this.loadSession, saveSession: this.saveSession,
+        baseUrl, appVersion: this.d.appVersion, loadSession: this.loadSession, saveSession: this.saveSession,
         fetchImpl: this.d.fetchImpl, sleep: this.d.sleep,
       })
     }
     return this.client
   }
 
-  async registerDevice(baseUrlRaw: string, enrollmentToken: string, deviceName: string): Promise<void> {
+  async registerDevice(baseUrlRaw: string, username: string, password: string, deviceName: string): Promise<void> {
     this.assertIdle()
     const existingInstall = captureState(this.d.liveDb(), 'install_id')
     if (existingInstall) this.d.ledger.set('install_id', existingInstall)
     const baseUrl = validateBaseUrl(baseUrlRaw)
-    if (!enrollmentToken.trim()) throw new Error('Enrollment token is required')
+    if (!username.trim()) throw new Error('Username is required')
+    if (!password) throw new Error('Password is required')
     if (!deviceName.trim()) throw new Error('Device name is required')
-    // Registration has no bearer token and must not reuse a session from the
-    // previously configured server. Keep current settings intact until the new
-    // server has accepted this device and its identity has been validated.
+    const deviceId = ensureDeviceId(this.d.liveDb(), this.d.ledger.get('device_id'))
+    // Login creates or refreshes this UUIDv7 device identity on the server.
     const registrationClient = new BackendClient({
-      baseUrl, loadSession: () => null, saveSession: () => {},
+      baseUrl, appVersion: this.d.appVersion, loadSession: () => null, saveSession: () => {},
       fetchImpl: this.d.fetchImpl, sleep: this.d.sleep,
     })
-    const res = await registrationClient.register(enrollmentToken.trim(), {
-      install_id: this.d.ledger.installId(),
-      name: deviceName.trim().slice(0, 60),
+    const res = await registrationClient.register(username.trim(), password, deviceId, {
+      name: deviceName.trim().slice(0, 80),
       platform: this.d.platform,
-      app_version: this.d.appVersion,
-      schema_version: this.schemaVersionLive(),
     })
     if (!res.device_id?.trim() || !res.session?.access_token || !res.session?.refresh_token || !Number.isFinite(Date.parse(res.session.expires_at))) {
-      throw new Error('Invalid device registration response')
+      throw new Error('Invalid login response')
     }
-    const captureDevice = captureState(this.d.liveDb(), 'device_id')
-    if (captureDevice && captureDevice !== res.device_id) throw new Error('Device identity changed; refusing to relabel recorded operations')
-    let numberCode: string | undefined
-    if(res.number_code){
-      if(!/^PC[1-9][0-9]{0,8}$/.test(res.number_code))throw new Error('Invalid server device prefix')
-      const previous=captureState(this.d.liveDb(),'number_code')||this.d.ledger.get('number_code')
-      if(previous&&previous!==res.number_code)throw new Error('Device numbering prefix changed')
-      numberCode=res.number_code
-    }
+    if (res.device_id !== deviceId) throw new Error('Server returned a different device ID; refusing to relabel recorded operations')
     this.d.ledger.set('base_url', baseUrl)
     this.client = null
     this.drainer = null
     this.puller?.stopPolling()
     this.puller = null
     this.saveSession(res.session)
-    this.d.ledger.set('device_id', res.device_id)
+    this.d.ledger.set('device_id', deviceId)
     this.d.ledger.set('device_name', deviceName.trim().slice(0, 60))
-    if(numberCode){
-      this.d.ledger.set('number_code',numberCode)
-      if(captureState(this.d.liveDb(),'apply_mute')!==null)setCaptureState(this.d.liveDb(),'number_code',numberCode)
-    }
-    this.d.ledger.event('device_registered', res.device_id)
+    setCaptureState(this.d.liveDb(), 'device_id', deviceId)
+    this.d.ledger.event('device_registered', deviceId)
     this.serverCache = null
-  }
-
-  private schemaVersionLive(): string | null {
-    try {
-      const r = this.d.liveDb().prepare(`SELECT value FROM app_settings WHERE key='schema_version'`).get() as { value?: string } | undefined
-      return r?.value ?? null
-    } catch { return null }
   }
 
   // ───────────────────────── step 1+2: backup + checks ─────────────────────────
@@ -193,12 +172,13 @@ export class SeedService {
     if (!protection.ok) throw new Error(`Pre-migration backup failed: ${protection.problems.join(', ')}`)
     await this.d.quiesceLegacy?.()
     installOutbox(live)
+    const deviceId = ensureDeviceId(live, L.get('device_id'))
     setCaptureState(live, 'sync_backend', 'vps')
     closeSeedGate(live)
     const installId = captureState(live, 'install_id') || L.installId()
     L.set('install_id', installId)
     setCaptureState(live, 'install_id', installId)
-    if (L.get('device_id')) setCaptureState(live, 'device_id', L.get('device_id')!)
+    if (L.get('device_id') && L.get('device_id') !== deviceId) throw new Error('Stored device identity differs from sync_state; refusing to relabel captured operations')
     if (L.get('number_code')) setCaptureState(live, 'number_code', L.get('number_code')!)
     const backup = await createVerifiedBackup(live, this.d.archiveDir)
     L.setJson('backup', backup)
@@ -335,7 +315,8 @@ export class SeedService {
       const expected = Object.fromEntries(report.tables.map(t => [t.name, { rows: t.seedable, money_sums_millimes: t.moneySumsMillimes, digest: t.digest }]))
       let seedId = L.get('seed_id')
       if (!seedId || L.get('seed_digest') !== report.digest) {
-        const b = await client.seedBegin({ install_id: installId, report_digest: report.digest, expected })
+        const snapshot = { path: report.backupPath, installId, tables: report.tables.map(table => table.name), snapshotHash: report.digest }
+        const b = await client.seedBegin({ install_id: installId, report_digest: report.digest, expected }, snapshot)
         seedId = b.seed_id
         L.set('seed_id', seedId)
         L.set('seed_digest', report.digest)
@@ -391,7 +372,10 @@ export class SeedService {
 
       L.setState('finalizing')
       if (await hashFile(report.backupPath) !== approval.backupSha256) throw new Error('Backup file changed during upload')
-      const fin = await client.seedFinalize({ seed_id: seedId, expected })
+      const fin = await client.seedFinalize(
+        { seed_id: seedId, expected },
+        { path: report.backupPath, installId, tables: report.tables.map(table => table.name), snapshotHash: report.digest },
+      )
       const rejected = L.rejectedCount()
       if (fin.ok === true && Array.isArray(fin.diffs) && fin.diffs.length === 0 && rejected === 0) {
         openVerifiedGate(this.d.liveDb(), report.digest, report.backupSha256)
@@ -440,7 +424,7 @@ export class SeedService {
     this.checking=true
     try {
       const status=await this.status(true),device=status.server?.devices.find(device=>device.device_id===status.deviceId)
-      if(device?.role!=='replica'||status.server?.seed.state!=='seeded')throw new Error('A registered secondary PC and finalized main-PC seed are required')
+      if(!device||status.server?.seed.state!=='seeded')throw new Error('A registered device and finalized main-PC seed are required')
       if(captureState(this.d.liveDb(),'replica_join_pending')==='1')return
       const live=this.d.liveDb(),backup=await createVerifiedBackup(live,this.d.archiveDir)
       if(!backup.ok)throw new Error('Protection backup verification failed')
