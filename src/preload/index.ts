@@ -3,7 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 const api = {
   hetznerOverview: () => ipcRenderer.invoke('hetzner:overview'),
-  hetznerLogin: (credentials: {username:string;password:string}) => ipcRenderer.invoke('hetzner:login',credentials),
+  hetznerLogin: (credentials: { username: string; password: string }) => ipcRenderer.invoke('hetzner:login', credentials),
   hetznerPreflight: () => ipcRenderer.invoke('hetzner:preflight'),
   // DB generic
   dbQuery: (sql: string, params?: unknown[]) => ipcRenderer.invoke('db:query', sql, params),
@@ -28,6 +28,31 @@ const api = {
     ipcRenderer.on('update:status', handler)
     return () => ipcRenderer.removeListener('update:status', handler)
   },
+
+  // Seed / device sync panel (new backend)
+  sync2Issues: () => ipcRenderer.invoke('sync2:issues'),
+  onSync2Changed: (callback: (count: number) => void) => {
+    const handler=(_event: Electron.IpcRendererEvent,count:number)=>callback(count)
+    ipcRenderer.on('sync2:changed',handler)
+    return ()=>{ ipcRenderer.removeListener('sync2:changed',handler) }
+  },
+  sync2PrepareReplica: (phrase: string) => ipcRenderer.invoke('sync2:prepareReplica', phrase),
+  sync2JoinReplica: () => ipcRenderer.invoke('sync2:joinReplica'),
+  sync2ReserveNumber: (table: string, proposed: string) => ipcRenderer.invoke('sync2:reserveNumber', table, proposed),
+  sync2LegacyBegin: () => ipcRenderer.invoke('sync2:legacyBegin'),
+  sync2LegacyEnd: (token: string) => ipcRenderer.invoke('sync2:legacyEnd', token),
+  sync2Retry: () => ipcRenderer.invoke('sync2:retry'),
+  sync2Export: () => ipcRenderer.invoke('sync2:export'),
+  seedStatus: (force = false) => ipcRenderer.invoke('seed:status', force),
+  seedRegister: (baseUrl: string, token: string, name: string) => ipcRenderer.invoke('seed:register', baseUrl, token, name),
+  seedBackupAndCheck: () => ipcRenderer.invoke('seed:backupAndCheck'),
+  seedRecheck: () => ipcRenderer.invoke('seed:recheck'),
+  seedApprove: (phrase: string) => ipcRenderer.invoke('seed:approve', phrase),
+  seedRun: () => ipcRenderer.invoke('seed:run'),
+  seedPause: () => ipcRenderer.invoke('seed:pause'),
+  seedNewPass: () => ipcRenderer.invoke('seed:newPass'),
+  seedRejected: () => ipcRenderer.invoke('seed:rejected'),
+  seedExportReport: () => ipcRenderer.invoke('seed:exportReport'),
 
   // Operateurs
   operateursList: () => ipcRenderer.invoke('operateurs:list'),
@@ -294,6 +319,8 @@ const api = {
   r2Restore: (key: string) => ipcRenderer.invoke('r2:restore', key),
 }
 
+export type DesktopApi = typeof api
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -307,4 +334,3 @@ if (process.contextIsolated) {
   // @ts-ignore
   window.api = api
 }
-

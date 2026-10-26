@@ -11,6 +11,7 @@
     "prepackage": "node scripts/check-env.mjs && node scripts/generate-icon.mjs",
     "preview": "electron-vite preview",
     "test:seed": "node scripts/seed-test/run.mjs",
+    "check:ipc-handlers": "node scripts/check-ipc-handlers.mjs",
     "package": "npm run prepackage && npm run build && electron-builder",
     "package:msi": "npm run prepackage && npm run build && electron-builder --win msi",
     "package:nsis": "npm run prepackage && npm run build && electron-builder --win nsis",
