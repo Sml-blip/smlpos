@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "SMLBOSS",
+    "slug": "smlboss",
+    "scheme": "smlboss",
+    "version": "1.1.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FDFBF5"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.smlpos.boss"
+    },
+    "android": {
+      "package": "com.smlpos.boss",
+      "versionCode": 2,
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFD600"
+      },
+      "permissions": ["CAMERA"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Autoriser SMLBOSS à scanner les codes-barres de l’inventaire."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
+
