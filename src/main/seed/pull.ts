@@ -123,6 +123,17 @@ export class PullClient {
         for(const table of names)if(!['app_settings','operateurs','categories','services_pos'].includes(table)&&(this.db.prepare(`SELECT 1 FROM ${q(table)} LIMIT 1`).get()))throw new Error('This PC contains business data; review it before joining')
         setCaptureState(this.db,'bootstrap_tables',encoded)
       }
+      setCaptureState(this.db,'bootstrap_state','downloading')
+      let downloaded=Number(captureState(this.db,'bootstrap_rows')??0)
+      let pages=Number(captureState(this.db,'bootstrap_pages')??0)
+      const expectedIds=new Map<string,Set<string>>()
+      for(const table of names){
+        const key=primaryKeyOf(table)
+        const rows=this.db.prepare(`SELECT ${q(key)} AS id FROM ${q(table)}`).all() as {id:string}[]
+        const ids=new Set(rows.map(row=>String(row.id)))
+        if(table==='app_settings')for(const id of [...ids])if(!isSeedableSetting(id))ids.delete(id)
+        expectedIds.set(table,ids)
+      }
       // sync2 has no table/bootstrap endpoint. Seed activation publishes the
       // full snapshot to the change log, so a fresh device starts at since=0.
       // Cursor commits make an interrupted join resumable without replaying rows.
@@ -133,16 +144,34 @@ export class PullClient {
         if(!page||!Array.isArray(page.changes)||page.changes.length>500||typeof page.has_more!=='boolean'||!Number.isSafeInteger(page.next_seq)||page.next_seq<cursor||page.has_more&&!page.changes.length)throw new Error('Bootstrap pull page is invalid')
         if(page.changes.some(change=>!Number.isSafeInteger(change.server_seq)||change.server_seq<=cursor))throw new Error('Bootstrap pull cursor did not advance')
         if(this.db.prepare('SELECT 1 FROM outbox WHERE sent_at IS NULL LIMIT 1').get())throw new Error('Local writes occurred during bootstrap')
+        for(const change of page.changes){
+          const ids=expectedIds.get(change.table)
+          if(!ids||change.table==='app_settings'&&!isSeedableSetting(change.pk))continue
+          if(change.op==='DELETE')ids.delete(change.pk)
+          else if(change.op==='UPSERT')ids.add(change.pk)
+        }
         this.applyPage(page,true)
+        downloaded+=page.changes.length;pages++
+        setCaptureState(this.db,'bootstrap_rows',String(downloaded));setCaptureState(this.db,'bootstrap_pages',String(pages))
         setCaptureState(this.db,'bootstrap_as_of',String(page.next_seq))
         if(!page.has_more)break
       }
+      const countMismatches:string[]=[]
+      for(const table of names){
+        const actual=table==='app_settings'
+          ? (this.db.prepare('SELECT "key" FROM app_settings').all() as {key:string}[]).filter(row=>isSeedableSetting(row.key)).length
+          : (this.db.prepare(`SELECT count(*) n FROM ${q(table)}`).get() as {n:number}).n
+        const expected=expectedIds.get(table)!.size
+        if(actual!==expected)countMismatches.push(`${table}: attendu ${expected}, reçu ${actual}`)
+      }
+      if(countMismatches.length)throw new Error(`Vérification du téléchargement échouée — ${countMismatches.slice(0,8).join('; ')}`)
       this.db.transaction(()=>{
         const mute=captureState(this.db,'apply_mute')??'0';setCaptureState(this.db,'apply_mute','1')
         const retries=this.db.prepare('SELECT server_seq,payload FROM pull_rejects WHERE server_seq<0').all() as {server_seq:number;payload:string}[]
         retries.sort((a,b)=>names.indexOf((JSON.parse(a.payload) as LiveChange).table)-names.indexOf((JSON.parse(b.payload) as LiveChange).table))
         for(const retry of retries)if(this.isolated(JSON.parse(retry.payload) as LiveChange,true)!=='rejected')this.db.prepare('DELETE FROM pull_rejects WHERE server_seq=?').run(retry.server_seq)
         const rejected=!!this.db.prepare('SELECT 1 FROM pull_rejects LIMIT 1').get()
+        setCaptureState(this.db,'bootstrap_state',rejected?'review':'complete')
         setCaptureState(this.db,'pull_cursor',captureState(this.db,'bootstrap_as_of')!);setCaptureState(this.db,'bootstrap_complete',rejected?'0':'1')
         setCaptureState(this.db,'seed_finalized_at',new Date().toISOString());setCaptureState(this.db,'outbox_drain_enabled',rejected?'0':'1')
         setCaptureState(this.db,'replica_join_pending',rejected?'1':'0')

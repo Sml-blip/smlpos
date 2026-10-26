@@ -43,7 +43,8 @@ export type SeedStateName =
 
 export interface SeedPanelStatus {
   live: {
-    prepared: boolean; enabled: boolean; joining: boolean; backend: 'legacy' | 'vps'; pending: number; rejected: number; pullRejected: number
+    prepared: boolean; enabled: boolean; joining: boolean; bootstrapState: 'idle' | 'downloading' | 'complete' | 'review' | 'error'; bootstrapRows: number; bootstrapPages: number
+    backend: 'legacy' | 'vps'; pending: number; rejected: number; pullRejected: number
     cursor: number; serverSeq: number | null; lag: number | null; lastPush: string | null; lastPull: string | null
     pushError: string | null; pullError: string | null; retryAt: number
   }

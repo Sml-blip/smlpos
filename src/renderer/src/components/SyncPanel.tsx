@@ -90,10 +90,10 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
 
           {st && (
             <>
-              <LiveSyncStatus live={st.live} busy={!!busy} act={act} />
+              <LiveSyncStatus live={st.live} connection={st.connection} busy={!!busy} act={act} />
               {/* ── Connexion ── */}
               <section>
-                <h4 className="font-bold mb-2">1. Connexion au serveur</h4>
+                <h4 className="font-bold mb-2">1. Rejoindre une entreprise</h4>
                 {needsRegistration ? (
                   <div className="grid gap-2 max-w-md">
                     {st.connection === 'auth_failed' && <p className="text-danger">Ce poste n'est plus autorisé. Enregistrez-le à nouveau.</p>}
@@ -125,7 +125,7 @@ export default function SyncPanel({ onClose }: { onClose: () => void }) {
 
               {/* ── Postes ── */}
               <section>
-                <h4 className="font-bold mb-2">Postes connectés</h4>
+                <h4 className="font-bold mb-2">Appareils connectés à l’entreprise</h4>
                 {st.server?.devices?.length ? (
                   <div className="border border-border rounded-lg divide-y divide-border">
                     {st.server.devices.map(d => (

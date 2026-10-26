@@ -460,6 +460,7 @@ export class SeedService {
     if(!this.puller)this.puller=new PullClient(this.d.liveDb(),client)
     return await this.puller.bootstrap()
     }catch(error){
+      setCaptureState(this.d.liveDb(),'bootstrap_state','error')
       if(captureState(this.d.liveDb(),'apply_mute')!==null)setCaptureState(this.d.liveDb(),'pull_last_error',(error instanceof Error?error.message:String(error)).slice(0,300))
       throw error
     }finally{this.checking=false}
