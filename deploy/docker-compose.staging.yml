@@ -1,0 +1,98 @@
+# Standalone staging only. Never combine with docker-compose.yml.
+name: smlpos-staging
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?staging password required}
+      POSTGRES_DB: pos
+      API_DB_PASSWORD: ${API_DB_PASSWORD:?staging password required}
+      PS_PASSWORD: ${PS_PASSWORD:?staging password required}
+      PS_STORAGE_PASSWORD: ${PS_STORAGE_PASSWORD:?staging password required}
+    command: [postgres, -c, wal_level=logical, -c, max_replication_slots=4, -c, max_wal_senders=4, -c, max_slot_wal_keep_size=256MB, -c, shared_buffers=128MB, -c, effective_cache_size=256MB, -c, work_mem=4MB]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d pos]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+  api:
+    build: ./api
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgresql://pos_api:${API_DB_PASSWORD:?staging password required}@postgres:5432/pos
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private.pem
+      JWT_KEY_ID: smlpos-staging-key-1
+      JWT_AUDIENCE: powersync
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-1.9.1038}
+      LIVE_WRITES_ENABLED: ${LIVE_WRITES_ENABLED:?explicit staging flag required}
+      SEED_STAGING_ENABLED: ${SEED_STAGING_ENABLED:?explicit staging flag required}
+      SYNC2_ENABLED: ${SYNC2_ENABLED:?explicit staging flag required}
+      STAGING_ONLY: ${STAGING_ONLY:?explicit staging flag required}
+      JWT_ISSUER: http://127.0.0.1:23001
+      SYNC_URL: http://127.0.0.1:23002
+    volumes:
+      - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
+    ports: ["127.0.0.1:23001:3000"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+  powersync:
+    image: journeyapps/powersync-service:${POWERSYNC_VERSION:-1.27.2}
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 512m
+    cpus: 0.5
+    command: [start, -r, unified]
+    depends_on:
+      postgres: {condition: service_healthy}
+      api: {condition: service_healthy}
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/powersync.yaml
+      PS_DATA_SOURCE_URI: postgresql://powersync_role:${PS_PASSWORD:?staging password required}@postgres:5432/pos
+      PS_STORAGE_URI: postgresql://powersync_storage_user:${PS_STORAGE_PASSWORD:?staging password required}@postgres:5432/powersync_storage
+    volumes:
+      - ./powersync:/config:ro
+    ports: ["127.0.0.1:23002:8080"]
+    networks: [internal]
+  tests:
+    build: ./api
+    profiles: [test]
+    logging: *logging
+    mem_limit: 256m
+    cpus: 0.5
+    command: [node, --test, "test/*.test.ts"]
+    environment:
+      TEST_DATABASE_URL: postgresql://pos_api:${API_DB_PASSWORD:?staging password required}@postgres:5432/pos
+    volumes:
+      - ./api/test:/app/test:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [internal]
+networks:
+  internal:
+    name: smlpos-staging_internal
+volumes:
+  pgdata:
+    name: smlpos-staging_pgdata

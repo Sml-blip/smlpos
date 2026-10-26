@@ -1,43 +1,106 @@
-"""Upload source and test the isolated backend; never copies secrets or removes volumes."""
+"""Local preview by default; deploy only after approval and a clean Step B."""
+import argparse
+import base64
+import hashlib
+import os
 from pathlib import Path
-import subprocess,tarfile,sys
-ROOT=Path(__file__).resolve().parents[2]
-generated=Path(__file__).parent/'.generated'
-archive=generated/'sync-backend.tar.gz'
-generated.mkdir(exist_ok=True)
-with tarfile.open(archive,'w:gz') as tar:
- for path in (ROOT/'deploy').rglob('*'):
-  rel=path.relative_to(ROOT/'deploy')
-  if not path.is_file() or any(p in {'node_modules','secrets','.generated','.git'} for p in rel.parts) or path.name=='.env' or path.suffix in {'.pem','.db','.log'}:continue
-  tar.add(path,arcname=rel.as_posix())
-common=['-i',str(Path.home()/'.ssh/pos_codex'),'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',f'UserKnownHostsFile={generated/"known_hosts"}']
-subprocess.run(['scp',*common,str(archive),'deploy@2.28.64.69:/opt/pos/sync-backend.tar.gz'],check=True)
-remote=r'''
-from pathlib import Path
-import os,secrets,subprocess,tarfile
-base=Path('/opt/pos/staging');base.mkdir(exist_ok=True)
-with tarfile.open('/opt/pos/sync-backend.tar.gz') as tar:
- for item in tar.getmembers():
-  target=(base/item.name).resolve()
-  if not target.is_relative_to(base) or item.issym() or item.islnk():raise SystemExit('Unsafe archive')
- tar.extractall(base,filter='data')
-secret_dir=base/'secrets';secret_dir.mkdir(mode=0o700,exist_ok=True)
-env=base/'.env'
-if not env.exists():
- values={'DOMAIN':'pos.sml.boutique','POWERSYNC_VERSION':'1.27.2','MIN_CLIENT_VERSION':'1.9.1038','LIVE_WRITES_ENABLED':'false'}
- for name in ['PG_PASSWORD','API_DB_PASSWORD','PS_PASSWORD','PS_STORAGE_PASSWORD']:values[name]=secrets.token_hex(24)
- fd=os.open(env,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
- with os.fdopen(fd,'w') as f:f.write(''.join(k+'='+v+chr(10) for k,v in values.items()))
-key=secret_dir/'jwt_private.pem'
-if not key.exists():
- subprocess.run(['openssl','genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:2048','-out',str(key)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
- key.chmod(0o600)
-os.chdir(base)
-subprocess.run(['docker','compose','config','--quiet'],check=True)
-subprocess.run(['docker','compose','up','-d','--build','postgres','api','powersync'],check=True)
-subprocess.run(['docker','compose','--profile','test','run','--build','--rm','tests'],check=True)
-subprocess.run(['docker','compose','ps'],check=True)
-'''
-result=subprocess.run(['ssh',*common,'deploy@2.28.64.69','python3','-'],input=remote,text=True)
-sys.exit(result.returncode)
+import re
+import shlex
+import subprocess
+import sys
+import tarfile
 
+ROOT = Path(__file__).resolve().parents[2]
+GENERATED = Path(__file__).parent / '.generated'
+ARCHIVE = GENERATED / 'sync-backend.tar.gz'
+HOST = '2.28.64.69'
+PROJECT = 'smlpos-staging'
+DIRECTORY = '/opt/smlpos-staging'
+COMPOSE_FILE = 'docker-compose.staging.yml'
+REMOTE = Path(__file__).with_name('stage_backend_remote.py').read_text()
+
+
+def validate_pin(known_hosts: Path, fingerprint: str) -> None:
+    if not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', fingerprint):
+        raise SystemExit('Real trusted ED25519 SHA256 fingerprint required; placeholders refused.')
+    lines = [line.split() for line in known_hosts.read_text().splitlines()
+             if line.strip() and not line.startswith('#')]
+    if len(lines) != 1 or len(lines[0]) != 3 or lines[0][:2] != [HOST, 'ssh-ed25519']:
+        raise SystemExit('Known-hosts must contain exactly one literal-host ED25519 pin.')
+    try:
+        blob = base64.b64decode(lines[0][2], validate=True)
+    except ValueError as exc:
+        raise SystemExit('Invalid host public key') from exc
+    if len(blob) != 51 or blob[:19] != b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20':
+        raise SystemExit('Invalid ED25519 host public key encoding')
+    actual = 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
+    if actual != fingerprint:
+        raise SystemExit(f'Host-key fingerprint mismatch: {actual}; refusing connection.')
+
+
+def build_archive() -> None:
+    GENERATED.mkdir(exist_ok=True)
+    with tarfile.open(ARCHIVE, 'w:gz') as tar:
+        # Never ship the production Compose file, Caddy, secrets or local .env.
+        for entry in [COMPOSE_FILE, 'api', 'postgres', 'powersync']:
+            source = ROOT / 'deploy' / entry
+            for path in sorted(source.rglob('*')) if source.is_dir() else [source]:
+                rel = path.relative_to(ROOT / 'deploy')
+                if (path.is_symlink() or not path.is_file()
+                    or any(p in {'node_modules','secrets','.generated','.git'} for p in rel.parts)
+                    or path.name.startswith('.env') or path.suffix in {'.pem','.key','.db','.log'}):
+                    continue
+                tar.add(path, arcname=rel.as_posix(), recursive=False)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--shared-host-staging', action='store_true', required=True)
+    parser.add_argument('--execute', action='store_true', help='Default is local preview only')
+    parser.add_argument('--step-b-clean', action='store_true', help='Attest reviewed Step B passed')
+    args = parser.parse_args()
+    if os.environ.get('SMLPOS_STAGING_HOST', HOST) != HOST:
+        raise SystemExit('This reviewed plan allows only 2.28.64.69.')
+    # Exact allowlists: no directory/project/volume overrides, including through env.
+    for name, expected in {'SMLPOS_STAGING_DIR':DIRECTORY,
+                           'COMPOSE_PROJECT_NAME':PROJECT}.items():
+        if os.environ.get(name, expected) != expected:
+            raise SystemExit(f'Refusing {name}: only {expected} is permitted.')
+    user = os.environ.get('SMLPOS_STAGING_SSH_USER', 'deploy')
+    if not re.fullmatch(r'[a-z_][a-z0-9_-]*', user):
+        raise SystemExit('Invalid SSH account')
+    key = Path(os.environ.get('SMLPOS_STAGING_SSH_KEY', str(Path.home()/'.ssh'/'pos_codex')))
+    known_hosts = Path(os.environ.get('SMLPOS_STAGING_KNOWN_HOSTS', str(GENERATED/'known_hosts')))
+    common = ['-i',str(key),'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
+              '-o','StrictHostKeyChecking=yes','-o','GlobalKnownHostsFile=none',
+              '-o',f'UserKnownHostsFile={known_hosts}','-o','HostKeyAlgorithms=ssh-ed25519',
+              '-o','UpdateHostKeys=no','-o','ConnectTimeout=10','-o','ConnectionAttempts=1']
+    target = f'{user}@{HOST}'
+    prepare = (f'test ! -e {DIRECTORY} && test ! -L {DIRECTORY} && '
+               f'sudo -n install -d -m 0700 -o {user} -g $(id -gn) {DIRECTORY}')
+    commands = [
+        ['ssh',*common,target,prepare],
+        ['scp',*common,str(ARCHIVE),f'{target}:{DIRECTORY}/sync-backend.tar.gz'],
+        ['ssh',*common,target,'sudo -n python3 -'],
+    ]
+    print('LOCAL PREVIEW: no connection without --execute and --step-b-clean.')
+    print(f'SSH user: {user}; identity file: {key}; host: {HOST}')
+    for command in commands:
+        print(shlex.join(command))
+    print('--- Exact Python stdin for the final SSH command ---')
+    print(REMOTE)
+    if not args.execute:
+        return 0
+    if not args.step_b_clean:
+        raise SystemExit('Refusing execution: complete and review Step B first.')
+    validate_pin(known_hosts, os.environ.get('SMLPOS_STAGING_HOST_FINGERPRINT',''))
+    if not key.is_file():
+        raise SystemExit('SSH identity absent; no connection attempted.')
+    build_archive()
+    subprocess.run(commands[0], check=True)
+    subprocess.run(commands[1], check=True)
+    return subprocess.run(commands[2], input=REMOTE, text=True).returncode
+
+
+if __name__ == '__main__':
+    sys.exit(main())
