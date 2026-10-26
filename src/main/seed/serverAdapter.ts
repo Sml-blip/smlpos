@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { convertRow, describeColumns, iterateSeedRows } from './dryRun'
-import { primaryKeyOf } from './tables'
+import { COUNTER_COLUMNS, primaryKeyOf } from './tables'
 import type {
   BackendError, BatchResult, BootstrapPage, ClientOptions, FinalizeResult, LiveChange,
   LiveOp, PullPage, PushResult, Preflight, ServerStatus, Session,
@@ -245,34 +245,26 @@ export class ServerAdapter {
 
   async pushLive(deviceId: string, ops: LiveOp[]): Promise<PushResult> {
     if (!ops.length) return { results: [], server_seq: 0 }
-    const unsupported = ops.filter(op => op.op === 'DELTA')
-    const unsafeProductWrites = ops.filter(op => op.op === 'UPSERT' && op.table === 'produits')
-    const supported = ops.filter(op => op.op !== 'DELTA' && !(op.op === 'UPSERT' && op.table === 'produits'))
+    const locallyRejected = ops.filter((op): op is Extract<LiveOp, { op: 'DELTA' }> => op.op === 'DELTA' && (
+      !(COUNTER_COLUMNS[op.table] ?? []).includes(op.field) || !Number.isSafeInteger(op.value)
+    ))
+    const supported = ops.filter(op => op.op !== 'DELTA' || !locallyRejected.includes(op))
     const resultMap = new Map<number, PushResult['results'][number]>()
-    // Later server work must allowlist each table/field, atomically add its delta
-    // to the aggregate (and append its server-owned audit movement where needed),
-    // create stock_movements for stock, then publish the DELTA to the pull log.
-    // Never replace a counter with an absolute snapshot from an offline device.
-    for (const op of unsupported) resultMap.set(op.seq, {
-      seq: op.seq, status: 'rejected', code: 'UNSUPPORTED_DELTA',
-      message: `Counter delta ${op.table}.${op.op === 'DELTA' ? op.field : ''} is not supported by the current sync2 server`,
-    })
-    // sync2 recalculates stock_actuel from stock_movements on every product
-    // write. The active capture path does not maintain that ledger, so sending
-    // even a non-stock product edit could replace server stock with an incomplete sum.
-    for (const op of unsafeProductWrites) resultMap.set(op.seq, {
-      seq: op.seq, status: 'rejected', code: 'UNSUPPORTED_COUNTER_LEDGER',
-      message: 'Product writes are paused until the server stock_movements ledger is maintained',
+    for (const op of locallyRejected) resultMap.set(op.seq, {
+      seq: op.seq, status: 'rejected',
+      code: (COUNTER_COLUMNS[op.table] ?? []).includes(op.field) ? 'INVALID_DELTA' : 'UNSUPPORTED_DELTA',
+      message: (COUNTER_COLUMNS[op.table] ?? []).includes(op.field)
+        ? 'Counter delta must be a safe integer in units or millimes'
+        : `Counter delta ${op.table}.${op.field} is not allowlisted`,
     })
     let serverSeq = 0
     if (supported.length) {
       const payloadOps = supported.map(op => {
+        const base = { opId: sha(`${deviceId}:${op.seq}`), table: op.table, rowId: op.pk }
+      if (op.op === 'DELTA') return { ...base, op: 'DELTA' as const, field: op.field, value: op.value }
         const primaryKey = primaryKeyOf(op.table)
-        const row = op.op === 'UPSERT' ? op.row : { [primaryKey]: op.pk }
-        return {
-          opId: sha(`${deviceId}:${op.seq}`), table: op.table, rowId: op.pk,
-          op: op.op === 'DELETE' ? 'DELETE' : 'INSERT', payload: row,
-        }
+        const payload = op.op === 'UPSERT' ? op.row : { [primaryKey]: op.pk }
+        return { ...base, op: op.op === 'DELETE' ? 'DELETE' as const : 'INSERT' as const, payload }
       })
       const originalById = new Map(payloadOps.map((payload, index) => [payload.opId, supported[index]]))
       const response = await this.authorized<{ results: Sync2OpResult[] }>('POST', '/sync2/push', { ops: payloadOps })
@@ -290,14 +282,16 @@ export class ServerAdapter {
   }
 
   async pullLive(since: number): Promise<PullPage> {
-    const page = await this.authorized<{ rows: Array<{ seq: string; table_name: string; row_id: string; payload: Record<string, unknown>; deleted: boolean }>; nextSeq: string; hasMore: boolean }>(
+    const page = await this.authorized<{ rows: Array<{ seq: string; table_name: string; row_id: string; payload: Record<string, unknown>; deleted: boolean; op?: 'UPSERT' | 'DELETE' | 'DELTA'; field?: string; value?: number }>; nextSeq: string; hasMore: boolean }>(
       'GET', `/sync2/pull?since=${since}&limit=500`,
     )
-    const changes: LiveChange[] = page.rows.map(row => ({
-      server_seq: Number(row.seq), origin_device: String(row.payload?.device_id ?? 'server'),
-      table: row.table_name, pk: row.row_id, op: row.deleted ? 'DELETE' : 'UPSERT',
-      ...(!row.deleted ? { row: row.payload } : {}),
-    }))
+    const changes: LiveChange[] = page.rows.map(row => {
+      const op = row.deleted ? 'DELETE' : row.op ?? 'UPSERT'
+      const base = { server_seq: Number(row.seq), origin_device: String(row.payload?.device_id ?? 'server'), table: row.table_name, pk: row.row_id }
+      if (op === 'DELETE') return { ...base, op }
+      if (op === 'DELTA') return { ...base, op, field: String(row.field ?? ''), value: Number(row.value) }
+      return { ...base, op, row: row.payload }
+    })
     return { changes, next_seq: Number(page.nextSeq), has_more: page.hasMore }
   }
 

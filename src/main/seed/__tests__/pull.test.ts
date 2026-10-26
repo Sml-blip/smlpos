@@ -16,10 +16,10 @@ import { reserveNumber } from '../numbering'
 import { prepareEmptyReplica } from '../replica'
 function fixture(empty=false,shared?:MockBackend,device='dev-2') {
  const directory=mkdtempSync(join(tmpdir(),'sml-pull-')),path=join(directory,'fixture.db');let db=new Database(path)
- db.exec("CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL); INSERT INTO categories VALUES('c','Category')")
- if(!empty)db.exec("INSERT INTO produits VALUES('p','Product','P',10,100)")
+ db.exec("CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0,device_id TEXT); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL); CREATE TABLE stock_movements(id TEXT PRIMARY KEY,produit_id TEXT,delta INTEGER,reason TEXT,ref_id TEXT,device_id TEXT); CREATE TABLE clients(id TEXT PRIMARY KEY,nom TEXT,solde_credit REAL,solde_fidelite REAL,device_id TEXT); INSERT INTO categories VALUES('c','Category')")
+ if(!empty)db.exec("INSERT INTO produits VALUES('p','Product','P',10,100,NULL)")
  installOutbox(db);setCaptureState(db,'device_id',device);setCaptureState(db,'snapshot_hash','a'.repeat(64));setCaptureState(db,'snapshot_fence','0')
- const tables=Object.fromEntries(['categories','produits','ventes','lignes_vente'].map(table=>[table,{pk:'id',columns:(db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name)}]))
+ const tables=Object.fromEntries(['categories','produits','ventes','lignes_vente','stock_movements','clients'].map(table=>[table,{pk:'id',columns:(db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name)}]))
  const backend=shared??new MockBackend({serverState:'seeded',tables})
  if(!shared)backend.rows.set('categories',new Map([['c',{id:'c',nom:'Category'}]]))
  if(!shared)backend.rows.set('produits',new Map([['p',{id:'p',nom:'Product',reference:'P',prix_vente:10000,stock_actuel:100}]]))
@@ -29,6 +29,16 @@ function fixture(empty=false,shared?:MockBackend,device='dev-2') {
 const stock=(db:Database.Database)=>(db.prepare("SELECT stock_actuel n FROM produits WHERE id='p'").get() as {n:number}).n
 const queued=(db:Database.Database)=>(db.prepare('SELECT count(*) n FROM outbox').get() as {n:number}).n
 const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1})
+
+test('sync2 pull metadata applies money DELTA in millimes rather than as an UPSERT',async()=>{
+ const f=fixture();try{
+  setCaptureState(f.db,'apply_mute','1');f.db.prepare("INSERT INTO clients VALUES('client','Client',10,2,'dev-2')").run();setCaptureState(f.db,'apply_mute','0')
+  f.backend.liveSequence=1;f.backend.liveChanges=[{server_seq:1,origin_device:'dev-1',table:'clients',pk:'client',op:'DELTA',field:'solde_credit',value:-1250,row:{id:'client',nom:'Client',device_id:'dev-1'}}]
+  const result=await new PullClient(f.db,f.client()).once()
+  assert.equal(result.applied,1);assert.equal((f.db.prepare("SELECT solde_credit FROM clients WHERE id='client'").get() as {solde_credit:number}).solde_credit,8.75)
+  assert.equal((f.db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,0)
+ }finally{f.close()}
+})
 
 test('explicit secondary-PC preparation refuses business history, locks writes until a restart-safe bootstrap completes', async () => {
  const f=fixture();try{
@@ -95,14 +105,15 @@ test('one UNIQUE collision and one FK failure are quarantined while later rows a
   assert.equal((f.db.prepare("SELECT prix_vente n FROM produits WHERE id='new-1'").get() as {n:number}).n,12.345)
  }finally{f.close()}
 })
-test('offline stock deltas remain rejected pending server-side counter support',async()=>{
+test('two offline stock changes send ledger-backed DELTAs and converge on pull',async()=>{
  const a=fixture(false,undefined,'dev-1'),b=fixture(false,a.backend,'dev-2');try{
   a.enable();b.enable();a.db.exec("UPDATE produits SET stock_actuel=98 WHERE id='p'");b.db.exec("UPDATE produits SET stock_actuel=97 WHERE id='p'")
-  await new OutboxDrainer(a.db,a.client()).once();await new OutboxDrainer(b.db,b.client()).once()
-  const da=await new OutboxDrainer(a.db,a.client()).once(),db=await new OutboxDrainer(b.db,b.client()).once()
-  assert.equal(da.rejected,2);assert.equal(db.rejected,2)
+  a.backend.deviceId='dev-1';const da=await new OutboxDrainer(a.db,a.client()).once()
+  a.backend.deviceId='dev-2';const db=await new OutboxDrainer(b.db,b.client()).once()
+  assert.equal(da.applied,2);assert.equal(da.rejected,0);assert.equal(db.applied,2);assert.equal(db.rejected,0)
+  assert.equal(a.backend.rows.get('produits')!.get('p')!.stock_actuel,95)
   await new PullClient(a.db,a.client()).once();await new PullClient(b.db,b.client()).once()
-  assert.equal(stock(a.db),98);assert.equal(stock(b.db),97);assert.equal(a.backend.rows.get('produits')!.get('p')!.stock_actuel,100);assert.equal(queued(a.db),2);assert.equal(queued(b.db),2)
+  assert.equal(stock(a.db),95);assert.equal(stock(b.db),95);assert.equal(queued(a.db),0);assert.equal(queued(b.db),0)
  }finally{a.close();b.close()}
 })
 test('remote state overrides an unsent edit; its later own echo restores the winning server state',async()=>{

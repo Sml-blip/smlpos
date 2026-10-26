@@ -18,13 +18,14 @@ export class MockBackend {
   rows = new Map<string, Map<string, Record<string, unknown>>>() // table → pk → row
   seenOps = new Set<string>()
   calls: { method: string; path: string }[] = []
+  pushBatches: Array<{ ops: Array<Record<string, unknown>> }> = []
   failBatchesAfter: number | null = null
   rejectPks = new Set<string>()
   batchesReceived = 0
   refreshCount = 0
   accessTokenTtlMs = 3_600_000
   onBatch: ((table: string) => void | Promise<void>) | null = null
-  liveSeen = new Map<string,{hash:string;result:PushResult['results'][number]}>()
+  liveSeen = new Map<string,{hash:string;result:PushResult['results'][number]&{version?:string;reason?:string}}>()
   liveSequence = 0
   dropPushResponses = 0
   liveChanges:LiveChange[]=[]
@@ -37,7 +38,7 @@ export class MockBackend {
   manifest: { snapshotHash: string; expected: Record<string, { count: number; checksum: string; contentChecksum: string; moneyTotals: Record<string, string> }> } | null = null
   manifestHash = ''
   batchReceipts = new Set<string>()
-  deviceId = ''
+  deviceId = 'dev-1'
   deviceName = 'Fixture'
 
   constructor(o: Opts = {}) {
@@ -80,7 +81,7 @@ export class MockBackend {
       await this.onBootstrapPage?.()
       const since=Number(url.searchParams.get('since')??0),limit=Number(url.searchParams.get('limit')??500)
       const remaining=this.liveChanges.filter(change=>change.server_seq>since).slice(0,limit)
-      return json(200,{rows:remaining.map(change=>({seq:String(change.server_seq),table_name:change.table,row_id:change.pk,payload:change.row??{[change.table==='app_settings'?'key':'id']:change.pk},deleted:change.op==='DELETE'})),nextSeq:String(remaining.at(-1)?.server_seq??since),hasMore:this.liveChanges.filter(change=>change.server_seq>since).length>limit})
+      return json(200,{rows:remaining.map(change=>({seq:String(change.server_seq),table_name:change.table,row_id:change.pk,payload:change.row??{[change.table==='app_settings'?'key':'id']:change.pk},deleted:change.op==='DELETE',op:change.op,...(change.op==='DELTA'?{field:change.field,value:change.value}:{})})),nextSeq:String(remaining.at(-1)?.server_seq??since),hasMore:this.liveChanges.filter(change=>change.server_seq>since).length>limit})
     }
     if (url.pathname === '/sync2/seed/validate') {
       const pk=this.tableSpec[body.table]?.pk??'id'
@@ -116,18 +117,54 @@ export class MockBackend {
     if (url.pathname === '/sync2/push') {
       if(this.state!=='seeded')return json(409,{code:'SEED_REQUIRED'})
       const results=[] as Array<{opId:string;status:string;version?:string;code?:string;reason?:string}>
-      for(const op of body.ops as Array<{opId:string;table:string;rowId:string;op:string;payload:Record<string,unknown>}>) {
+      this.pushBatches.push(body)
+      for(const op of body.ops as Array<{opId:string;table:string;rowId:string;op:string;payload?:Record<string,unknown>;field?:string;value?:number}>) {
+        const opHash=hash(canonical(op))
         const previous=this.liveSeen.get(op.opId)
-        if(previous){results.push({opId:op.opId,status:previous.result.status==='rejected'?'rejected':'duplicate',version:String(previous.result.seq)});continue}
+        if(previous){if(previous.hash!==opHash)return json(409,{code:'OP_CHANGED'});results.push({opId:op.opId,status:previous.result.status==='rejected'?'rejected':'duplicate',...(previous.result.version?{version:previous.result.version}:{}),...(previous.result.code?{code:previous.result.code}:{}),...(previous.result.reason?{reason:previous.result.reason}:{})});continue}
         const pk=this.tableSpec[op.table]?.pk??'id',rows=this.rows.get(op.table)??new Map<string,Record<string,unknown>>()
-        if(this.rejectPks.has(op.rowId)){results.push({opId:op.opId,status:'rejected',code:'INVALID_ROW',reason:'rejected by synthetic validation'});continue}
-        if(String(op.payload[pk])!==op.rowId){results.push({opId:op.opId,status:'rejected',code:'ROW_ID_CHANGED',reason:'row id mismatch'});continue}
-        if(op.op==='DELETE')rows.delete(op.rowId);else rows.set(op.rowId,op.payload)
-        this.rows.set(op.table,rows);this.liveSequence++
+        const reject=(code:string,reason:string)=>{
+          const result={opId:op.opId,status:'rejected',code,reason}
+          this.liveSeen.set(op.opId,{hash:opHash,result:{seq:0,status:'rejected',code,message:reason,reason}});results.push(result)
+        }
+        if(this.rejectPks.has(op.rowId)){reject('INVALID_ROW','rejected by synthetic validation');continue}
+        if(op.op==='DELTA'){
+          if(!(COUNTER_COLUMNS[op.table]??[]).includes(op.field??'')){reject('DELTA_NOT_ALLOWED','counter field is not allowlisted');continue}
+          if(!Number.isSafeInteger(op.value)||!op.value){reject('INVALID_DELTA','delta must be a non-zero safe integer');continue}
+          const target=this.rows.get(op.table)?.get(op.rowId)
+          if(!target){reject('DELTA_TARGET_MISSING','target row is missing');continue}
+          if(op.table==='produits'){
+            const movements=this.rows.get('stock_movements')??new Map<string,Record<string,unknown>>()
+            const movementId=`mock-${op.opId}`
+            const movement={id:movementId,produit_id:op.rowId,delta:op.value,reason:'SYNC2_DELTA',ref_id:op.opId,device_id:this.deviceId}
+            movements.set(movementId,movement);this.rows.set('stock_movements',movements);this.liveSequence++
+            this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:'stock_movements',pk:movementId,op:'UPSERT',row:movement})
+          }
+          const updated={...target,[op.field!]:Number(target[op.field!]??0)+op.value!,device_id:this.deviceId}
+          rows.set(op.rowId,updated);this.rows.set(op.table,rows);this.liveSequence++
+          const eventRow:Record<string,unknown>={...updated};delete eventRow[op.field!]
+          if(!this.tableSpec[op.table]?.columns.includes('device_id'))delete eventRow.device_id
+          this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:op.table,pk:op.rowId,op:'DELTA',field:op.field,value:op.value,row:eventRow})
+          const result={opId:op.opId,status:'applied',version:String(this.liveSequence)}
+          this.liveSeen.set(op.opId,{hash:opHash,result:{seq:0,status:'applied',version:String(this.liveSequence)}});results.push(result);continue
+        }
+        if(!op.payload||String(op.payload[pk])!==op.rowId){reject('ROW_ID_CHANGED','row id mismatch');continue}
+        if(op.op==='DELETE'){
+          rows.delete(op.rowId);this.rows.set(op.table,rows);this.liveSequence++
+          this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:op.table,pk:op.rowId,op:'DELETE'})
+        }else{
+          const previous=this.rows.get(op.table)?.get(op.rowId),payload:Record<string,unknown>={...op.payload,device_id:this.deviceId}
+          for(const field of COUNTER_COLUMNS[op.table]??[])if(op.table!=='produits'){
+            if(previous?.[field]!==undefined)payload[field]=previous[field];else delete payload[field]
+          }
+          if(op.table==='produits'&&previous?.stock_actuel!==undefined)payload.stock_actuel=previous.stock_actuel
+          rows.set(op.rowId,payload);this.rows.set(op.table,rows);this.liveSequence++
+          const eventRow:Record<string,unknown>={...payload};for(const field of COUNTER_COLUMNS[op.table]??[])delete eventRow[field]
+          if(!this.tableSpec[op.table]?.columns.includes('device_id'))delete eventRow.device_id
+          this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:op.table,pk:op.rowId,op:'UPSERT',row:eventRow})
+        }
         const result={opId:op.opId,status:'applied',version:String(this.liveSequence)}
-        this.liveSeen.set(op.opId,{hash:hash(canonical(op)),result:{seq:this.liveSequence,status:'applied'}})
-        this.liveChanges.push({server_seq:this.liveSequence,origin_device:this.deviceId,table:op.table,pk:op.rowId,op:op.op==='DELETE'?'DELETE':'UPSERT',...(op.op==='DELETE'?{}:{row:op.payload})})
-        results.push(result)
+        this.liveSeen.set(op.opId,{hash:opHash,result:{seq:0,status:'applied',version:String(this.liveSequence)}});results.push(result)
       }
       if(this.dropPushResponses>0){this.dropPushResponses--;throw new TypeError('Connection lost after server commit')}
       return json(200,{results})
