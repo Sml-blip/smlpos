@@ -3,6 +3,16 @@ import { z } from 'zod'
 import contractJson from '../schema/sync2-contract.json' with {type:'json'}
 import { ApiError,canonical } from './domain.ts'
 export const contract=contractJson as Record<string,{pk:string;columns:Record<string,string>}>
+/** Counter values are changed only by an atomic DELTA, never by live UPSERT. */
+export const deltaAllowlist:Record<string,Readonly<Record<string,'stock'|'money'>>>={
+ produits:{stock_actuel:'stock'},
+ clients:{solde_credit:'money',solde_fidelite:'money'},
+ fournisseurs:{solde_du:'money'},
+ organisations:{credit_total:'money'},
+ personnels:{avance_solde:'money',credit_solde:'money'},
+ caisse_interne:{total_entrees:'money',total_sorties:'money'},
+}
+export const counterFields=(table:string)=>Object.keys(deltaAllowlist[table]??{})
 export const rowId=z.string().min(1).max(512)
 export const snapshotHash=z.string().regex(/^[0-9a-f]{64}$/)
 export const secretSetting=(key:string)=>/^(r2_|pin_|device_|seed_|sync2_|backup_|supabase_)/i.test(key)||/(secret|token|password|passwd|pin|api[_-]?key|access[_-]?key|private)/i.test(key)||['sync_backend','backend_url','schema_version','bootstrap_completed_at','bootstrap_last_errors','pull_last_at'].includes(key)

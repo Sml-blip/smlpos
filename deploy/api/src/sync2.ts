@@ -2,11 +2,14 @@ import type { Hono } from 'hono'
 import type { Pool,PoolClient } from 'pg'
 import { z } from 'zod'
 import { ApiError,canonical,digest,newId,uuid7 } from './domain.ts'
-import { addStats,contract,emptyStats,manifestSchema,rowId,snapshotHash,validateManifest,validateRow } from './sync2Contract.ts'
+import { addStats,contract,counterFields,deltaAllowlist,emptyStats,manifestSchema,rowId,snapshotHash,validateManifest,validateRow } from './sync2Contract.ts'
 import type { Manifest } from './sync2Contract.ts'
 type Identity={deviceId:string;userId:string;role:string}
 type App=Hono<{Variables:{identity:Identity}}>
 const jsonRow=z.record(z.string(),z.unknown())
+const rowPushOp=z.object({opId:rowId,table:z.string(),rowId,op:z.enum(['INSERT','UPDATE','DELETE']),payload:jsonRow,baseVersion:z.string().regex(/^\d+$/).optional()}).strict()
+const deltaPushOp=z.object({opId:rowId,table:z.string(),rowId,op:z.literal('DELTA'),field:z.string().min(1).max(100),value:z.number()}).strict()
+const pushOp=z.union([rowPushOp,deltaPushOp])
 const immutable=new Set(['ventes','factures_clients','paiements_fournisseurs','credits_clients','mouvements_fidelite','mouvements_personnels','stock_movements','remboursements_ventes'])
 async function tx<T>(pool:Pool,work:(client:PoolClient)=>Promise<T>){const client=await pool.connect();try{await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(7311050)');const value=await work(client);await client.query('COMMIT');return value}catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}}
 async function seed(client:PoolClient,id:string,identity:Identity){
@@ -24,10 +27,10 @@ async function stats(client:PoolClient,seedId:string,table:string){
  }
  return result
 }
-async function publish(client:PoolClient,table:string,id:string,payload:Record<string,unknown>,deleted=false){
+async function publish(client:PoolClient,table:string,id:string,payload:Record<string,unknown>,deleted=false,event:{operation?:'UPSERT'|'DELTA';field?:string;value?:number;payload?:Record<string,unknown>}={}){
  const version=String((await client.query("SELECT nextval('sync2_seq') n")).rows[0].n)
  await client.query('INSERT INTO sync2_records(table_name,row_id,payload,version,deleted) VALUES($1,$2,$3,$4,$5) ON CONFLICT(table_name,row_id) DO UPDATE SET payload=excluded.payload,version=excluded.version,deleted=excluded.deleted',[table,id,payload,version,deleted])
- await client.query('INSERT INTO sync2_changes(seq,table_name,row_id,payload,deleted) VALUES($1,$2,$3,$4,$5)',[version,table,id,payload,deleted])
+ await client.query('INSERT INTO sync2_changes(seq,table_name,row_id,payload,deleted,operation,delta_field,delta_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[version,table,id,event.payload??payload,deleted,event.operation??'UPSERT',event.field??null,event.value??null])
  return version
 }
 const business=(payload:Record<string,unknown>)=>Object.fromEntries(Object.entries(payload).filter(([key])=>!['updated_at','device_id','deleted_at'].includes(key)))
@@ -92,33 +95,87 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
   }))
  })
  app.post('/sync2/push',async c=>{
-  const input=z.object({ops:z.array(z.object({opId:rowId,table:z.string(),rowId,op:z.enum(['INSERT','UPDATE','DELETE']),payload:jsonRow,baseVersion:z.string().regex(/^\d+$/).optional()}).strict()).min(1).max(500)}).strict().parse(await c.req.json());const identity=c.get('identity');const results=[]
+  const input=z.object({ops:z.array(pushOp).min(1).max(500)}).strict().parse(await c.req.json());const identity=c.get('identity');const results=[]
   for(const op of input.ops){
    results.push(await tx(pool,async client=>{
     const hash=digest(canonical(op));const oldOp=(await client.query('SELECT device_id,payload_hash,result FROM sync2_operations WHERE op_id=$1',[op.opId])).rows[0]
     if(oldOp){if(oldOp.device_id!==identity.deviceId||oldOp.payload_hash!==hash)throw new ApiError(409,'OP_CHANGED','Identifiant opération déjà utilisé');return {...oldOp.result,status:oldOp.result.status==='applied'?'duplicate':oldOp.result.status}}
     const reject=async(code:string,reason:string)=>{const result={opId:op.opId,status:'rejected',code,reason};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result}
     if(!(await client.query("SELECT 1 FROM sync2_seeds WHERE status='active' LIMIT 1")).rowCount)return reject('SEED_REQUIRED','Import initial non activé')
+    if(op.op==='DELTA'){
+     const kind=deltaAllowlist[op.table]?.[op.field]
+     if(!kind)return reject('DELTA_NOT_ALLOWED',`Variation interdite : ${op.table}.${op.field}`)
+     if(!Number.isSafeInteger(op.value))return reject('INVALID_DELTA','La variation doit être un entier sûr (unités ou millimes)')
+     if(op.value===0)return reject('ZERO_DELTA','Une variation nulle est interdite')
+     const target=(await client.query('SELECT payload,deleted FROM sync2_records WHERE table_name=$1 AND row_id=$2 FOR UPDATE',[op.table,op.rowId])).rows[0] as {payload:Record<string,unknown>;deleted:boolean}|undefined
+     if(!target||target.deleted)return reject('DELTA_TARGET_MISSING','La ligne à modifier est absente ou supprimée')
+     const current=Number(target.payload[op.field]??0)
+     if(!Number.isSafeInteger(current))return reject('INVALID_COUNTER_STATE','Le compteur serveur est invalide')
+     if(kind==='stock'){
+      const product=(await client.query("SELECT payload FROM sync2_records WHERE table_name='produits' AND row_id=$1 AND deleted=false FOR UPDATE",[op.rowId])).rows[0]
+      if(!product)return reject('DELTA_TARGET_MISSING','Produit introuvable pour ce mouvement de stock')
+      const total=(await client.query("SELECT COALESCE(sum((payload->>'delta')::numeric),0)::text n FROM sync2_records WHERE table_name='stock_movements' AND deleted=false AND payload->>'produit_id'=$1",[op.rowId])).rows[0].n
+      const stock=Number(total)+op.value
+      if(!Number.isSafeInteger(stock))return reject('STOCK_RANGE','Le stock recalculé dépasse la plage entière sûre')
+      const movementId=newId()
+      const movement={id:movementId,produit_id:op.rowId,delta:op.value,reason:'SYNC2_DELTA',ref_id:op.opId,device_id:identity.deviceId,created_at:new Date().toISOString()}
+      try{validateRow('stock_movements',movement)}catch(error){return reject(error instanceof ApiError?error.code:'INVALID_STOCK',error instanceof Error?error.message:'Mouvement de stock invalide')}
+      await publish(client,'stock_movements',movementId,movement)
+      const nextProduct={...product.payload,stock_actuel:stock}
+      const eventPayload=Object.fromEntries(Object.entries(nextProduct).filter(([field])=>!counterFields('produits').includes(field)))
+      const version=await publish(client,'produits',op.rowId,nextProduct,false,{operation:'DELTA',field:op.field,value:op.value,payload:eventPayload})
+      const result={opId:op.opId,status:'applied',version};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result
+     }
+     const nextValue=current+op.value
+     if(!Number.isSafeInteger(nextValue))return reject('COUNTER_RANGE','Le compteur dépasse la plage entière sûre')
+     const nextPayload={...target.payload,[op.field]:nextValue}
+     const eventPayload={...nextPayload};delete eventPayload[op.field]
+     const version=await publish(client,op.table,op.rowId,nextPayload,false,{operation:'DELTA',field:op.field,value:op.value,payload:eventPayload})
+     const result={opId:op.opId,status:'applied',version};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result
+    }
     try{const id=validateRow(op.table,op.payload);if(id!==op.rowId)return reject('ROW_ID_CHANGED','Identifiant de ligne différent')}
     catch(error){return reject(error instanceof ApiError?error.code:'INVALID_ROW',error instanceof Error?error.message:'Ligne invalide')}
-    const previous=(await client.query('SELECT * FROM sync2_records WHERE table_name=$1 AND row_id=$2',[op.table,op.rowId])).rows[0]
+    const previous=(await client.query('SELECT * FROM sync2_records WHERE table_name=$1 AND row_id=$2 FOR UPDATE',[op.table,op.rowId])).rows[0]
     if(previous?.deleted && op.op!=='DELETE')return reject('ROW_DELETED','Une ligne supprimée ne peut pas être ressuscitée')
     if(op.baseVersion && previous && BigInt(op.baseVersion)>BigInt(previous.version))return reject('INVALID_VERSION','Version serveur inconnue')
     const frozen=immutable.has(op.table)||(op.table==='documents'&&['FACTURE','AVOIR'].includes(String(previous?.payload.type_document)))
     if(frozen && previous && (op.op==='DELETE'||canonical(business(previous.payload))!==canonical(business(op.payload))))return reject('IMMUTABLE_ROW','Historique immuable : créez une correction')
     if(op.table==='stock_movements' && op.op==='DELETE')return reject('IMMUTABLE_ROW','Un mouvement de stock ne peut pas être supprimé')
     let payload:Record<string,unknown>={...op.payload,device_id:identity.deviceId}
+    const fields=counterFields(op.table)
+    for(const field of fields){
+     if(op.table==='produits')continue
+     const stored=previous?.payload[field]
+     const requested=op.payload[field]
+     if(requested!==undefined&&stored!==undefined&&requested!==stored)return reject('COUNTER_DELTA_REQUIRED',`Utilisez DELTA pour modifier ${op.table}.${field}`)
+     if(requested!==undefined&&stored===undefined&&requested!==0)return reject('COUNTER_DELTA_REQUIRED',`Utilisez DELTA pour initialiser ${op.table}.${field}`)
+     if(stored===undefined)delete payload[field]
+     else payload[field]=stored
+    }
+    let eventPayload={...payload}
+    for(const field of fields)delete eventPayload[field]
+    let stockDelta:number|undefined
+    let stockProduct:Record<string,unknown>|undefined
     if(op.table==='produits'){
      const qty=(await client.query("SELECT COALESCE(sum((payload->>'delta')::numeric),0)::text n FROM sync2_records WHERE table_name='stock_movements' AND deleted=false AND payload->>'produit_id'=$1",[op.rowId])).rows[0].n
      payload={...payload,stock_actuel:Number(qty)}
+     eventPayload={...payload};for(const field of fields)delete eventPayload[field]
     }
-    const version=await publish(client,op.table,op.rowId,payload,op.op==='DELETE')
+    if(op.table==='stock_movements'&&op.op!=='DELETE'){
+     if(Number(payload.delta)===0)return reject('ZERO_MOVEMENT','Un mouvement de stock nul est interdit')
+     const productId=String(payload.produit_id)
+     stockProduct=(await client.query("SELECT payload FROM sync2_records WHERE table_name='produits' AND row_id=$1 AND deleted=false FOR UPDATE",[productId])).rows[0]?.payload
+     if(!stockProduct)return reject('PRODUCT_MISSING','Produit du mouvement absent')
+     const total=(await client.query("SELECT COALESCE(sum((payload->>'delta')::numeric),0)::text n FROM sync2_records WHERE table_name='stock_movements' AND deleted=false AND payload->>'produit_id'=$1",[productId])).rows[0].n
+     stockDelta=Number(payload.delta)
+     if(!Number.isSafeInteger(Number(total)+stockDelta))return reject('STOCK_RANGE','Le stock recalculé dépasse la plage entière sûre')
+    }
+    let version=await publish(client,op.table,op.rowId,payload,op.op==='DELETE',{payload:eventPayload})
     if(op.table==='stock_movements'){
-     const product=(await client.query("SELECT payload FROM sync2_records WHERE table_name='produits' AND row_id=$1 AND deleted=false",[String(payload.produit_id)])).rows[0]
-     if(!product)throw new ApiError(422,'PRODUCT_MISSING','Produit du mouvement absent')
      const qty=(await client.query("SELECT COALESCE(sum((payload->>'delta')::numeric),0)::text n FROM sync2_records WHERE table_name='stock_movements' AND deleted=false AND payload->>'produit_id'=$1",[String(payload.produit_id)])).rows[0].n
-     if(!Number.isSafeInteger(Number(qty)))throw new ApiError(422,'STOCK_RANGE','Stock hors limites')
-     await publish(client,'produits',String(payload.produit_id),{...product.payload,stock_actuel:Number(qty)})
+     const nextProduct={...stockProduct,stock_actuel:Number(qty)}
+     const productEvent=Object.fromEntries(Object.entries(nextProduct).filter(([field])=>!counterFields('produits').includes(field)))
+     version=await publish(client,'produits',String(payload.produit_id),nextProduct,false,{operation:'DELTA',field:'stock_actuel',value:stockDelta!,payload:productEvent})
     }
     const result={opId:op.opId,status:'applied',version};await client.query('INSERT INTO sync2_operations(op_id,device_id,payload_hash,result) VALUES($1,$2,$3,$4)',[op.opId,identity.deviceId,hash,result]);return result
    }))
@@ -128,8 +185,9 @@ export function registerSync2Routes(app:App,pool:Pool,enabled:boolean){
  app.get('/sync2/pull',async c=>{
   const since=z.string().regex(/^\d+$/).max(20).parse(c.req.query('since')??'0');const limit=z.coerce.number().int().min(1).max(500).parse(c.req.query('limit')??500)
   if(!(await pool.query("SELECT 1 FROM sync2_seeds WHERE status='active' LIMIT 1")).rowCount)throw new ApiError(409,'SEED_REQUIRED','Import initial non activé')
-  const rows=(await pool.query('SELECT seq::text,table_name,row_id,payload,deleted FROM sync2_changes WHERE seq>$1 ORDER BY seq LIMIT $2',[since,limit])).rows
-  return c.json({rows,nextSeq:rows.at(-1)?.seq??since,hasMore:rows.length===limit})
+  const rows=(await pool.query('SELECT seq::text,table_name,row_id,payload,deleted,operation,delta_field,delta_value::text FROM sync2_changes WHERE seq>$1 ORDER BY seq LIMIT $2',[since,limit])).rows
+  const changes=rows.map(row=>({seq:row.seq,table_name:row.table_name,row_id:row.row_id,payload:row.payload,deleted:row.deleted,op:row.deleted?'DELETE':row.operation,...(row.operation==='DELTA'?{field:row.delta_field,value:Number(row.delta_value)}:{})}))
+  return c.json({rows:changes,nextSeq:rows.at(-1)?.seq??since,hasMore:rows.length===limit})
  })
 }
 

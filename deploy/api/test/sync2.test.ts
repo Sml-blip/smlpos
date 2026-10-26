@@ -21,7 +21,7 @@ test('TEXT-ID seed, 20 post-snapshot sales, replay and two-device offline stock'
   const request=(path:string,body?:unknown,token?:string)=>app.request(path,{method:body===undefined?'GET':'POST',headers:{'X-Client-Version':'1.10.0','Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:body===undefined?undefined:JSON.stringify(body)})
   const login=async()=>{const response=await request('/auth/login',{username:'sync2-fixture',password,deviceId:newId(),deviceName:'Synthetic PC',platform:'development'});return (await response.json()).accessToken as string}
   const first=await login(),second=await login()
-  const rows:Record<string,Array<Record<string,unknown>>>={operateurs:[{id:'op-hamdi',nom:'Fixture',identifiant:'fixture'}],produits:[{id:'legacy-product',nom:'Product',reference:'LEGACY',prix_vente:12345,stock_actuel:100}],ventes:[{id:'legacy-sale',numero:'VTE-OLD-001',total_ttc:12345}],stock_movements:[{id:'opening:legacy-product',produit_id:'legacy-product',delta:100,reason:'OPENING_BALANCE',ref_id:'legacy-product'}]}
+  const rows:Record<string,Array<Record<string,unknown>>>={operateurs:[{id:'op-hamdi',nom:'Fixture',identifiant:'fixture'}],produits:[{id:'legacy-product',nom:'Product',reference:'LEGACY',prix_vente:12345,stock_actuel:100}],clients:[{id:'client-1',nom:'Customer',solde_credit:100000,solde_fidelite:500}],ventes:[{id:'legacy-sale',numero:'VTE-OLD-001',total_ttc:12345}],stock_movements:[{id:'opening:legacy-product',produit_id:'legacy-product',delta:100,reason:'OPENING_BALANCE',ref_id:'legacy-product'}]}
   const expected=Object.fromEntries(Object.keys(contract).map(table=>[table,emptyStats(table)]))
   for(const [table,batch] of Object.entries(rows))for(const row of batch)addStats(expected[table],String(row.id),row)
   const manifest={snapshotHash:digest('verified legacy copy'),expected}
@@ -66,6 +66,49 @@ test('TEXT-ID seed, 20 post-snapshot sales, replay and two-device offline stock'
    assert.equal((await (await request(`/sync2/pull?since=${since}`,undefined,second)).json()).rows.length,0)
    const frozen=await request('/sync2/push',{ops:[{opId:'change-final-sale',table:'ventes',rowId:'legacy-sale',op:'UPDATE',payload:{...rows.ventes[0],total_ttc:1}}]},first)
    assert.equal((await frozen.json()).results[0].code,'IMMUTABLE_ROW')
+  })
+  await t.test('stock DELTA creates one server movement, recomputes stock and replays explicitly once',async()=>{
+   const op={opId:'stock-delta-operation',table:'produits',rowId:'legacy-product',op:'DELTA',field:'stock_actuel',value:-2}
+   const before=Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n)
+   const applied=(await (await request('/sync2/push',{ops:[op]},first)).json()).results[0]
+   assert.equal(applied.status,'applied')
+   assert.equal(Number((await pool.query("SELECT payload->>'stock_actuel' n FROM sync2_records WHERE table_name='produits' AND row_id='legacy-product'")).rows[0].n),96)
+   const generated=(await pool.query("SELECT payload FROM sync2_records WHERE table_name='stock_movements' AND payload->>'ref_id'=$1",[op.opId])).rows[0].payload
+   assert.equal(generated.produit_id,'legacy-product');assert.equal(generated.delta,-2);assert.equal(generated.reason,'SYNC2_DELTA')
+   assert.equal(Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n),before+1)
+   assert.equal((await (await request('/sync2/push',{ops:[op]},first)).json()).results[0].status,'duplicate')
+   assert.equal(Number((await pool.query("SELECT count(*) n FROM sync2_records WHERE table_name='stock_movements'")).rows[0].n),before+1)
+   const pulled=(await (await request('/sync2/pull?since=0&limit=500',undefined,second)).json()).rows.filter((row:Record<string,unknown>)=>row.op==='DELTA'&&row.table_name==='produits'&&row.row_id==='legacy-product')
+   assert.equal(pulled.at(-1).field,'stock_actuel');assert.equal(pulled.at(-1).value,-2)
+  })
+  await t.test('money counter DELTA updates the stored value and pull event by integer millimes',async()=>{
+   const op={opId:'client-credit-delta',table:'clients',rowId:'client-1',op:'DELTA',field:'solde_credit',value:-1235}
+   const applied=(await (await request('/sync2/push',{ops:[op]},first)).json()).results[0]
+   assert.equal(applied.status,'applied')
+   assert.equal(Number((await pool.query("SELECT payload->>'solde_credit' n FROM sync2_records WHERE table_name='clients' AND row_id='client-1'")).rows[0].n),98765)
+   assert.equal((await (await request('/sync2/push',{ops:[op]},first)).json()).results[0].status,'duplicate')
+   const pulled=(await (await request('/sync2/pull?since=0&limit=500',undefined,second)).json()).rows.filter((row:Record<string,unknown>)=>row.op==='DELTA'&&row.table_name==='clients'&&row.row_id==='client-1')
+   assert.equal(pulled.at(-1).field,'solde_credit');assert.equal(pulled.at(-1).value,-1235);assert.equal(pulled.at(-1).payload.solde_credit,undefined)
+   const stale={opId:'stale-absolute-client-balance',table:'clients',rowId:'client-1',op:'UPDATE',payload:{id:'client-1',nom:'Customer',solde_credit:100000,solde_fidelite:500}}
+   const staleResult=(await (await request('/sync2/push',{ops:[stale]},first)).json()).results[0]
+   assert.equal(staleResult.code,'COUNTER_DELTA_REQUIRED')
+   assert.equal(Number((await pool.query("SELECT payload->>'solde_credit' n FROM sync2_records WHERE table_name='clients' AND row_id='client-1'")).rows[0].n),98765)
+  })
+  await t.test('invalid DELTAs are individually rejected without blocking a valid later op',async()=>{
+   const ops=[
+    {opId:'delta-unknown-field',table:'clients',rowId:'client-1',op:'DELTA',field:'nom',value:1},
+    {opId:'delta-unknown-table',table:'ventes',rowId:'legacy-sale',op:'DELTA',field:'total_ttc',value:1},
+    {opId:'delta-fractional',table:'clients',rowId:'client-1',op:'DELTA',field:'solde_credit',value:0.5},
+    {opId:'delta-missing-target',table:'clients',rowId:'missing-client',op:'DELTA',field:'solde_credit',value:1},
+    {opId:'delta-missing-product',table:'produits',rowId:'missing-product',op:'DELTA',field:'stock_actuel',value:1},
+    {opId:'delta-valid-after-rejects',table:'clients',rowId:'client-1',op:'DELTA',field:'solde_fidelite',value:25},
+   ]
+   const results=(await (await request('/sync2/push',{ops},first)).json()).results
+   assert.deepEqual(results.map((result:Record<string,unknown>)=>result.status),['rejected','rejected','rejected','rejected','rejected','applied'])
+   assert.deepEqual(results.slice(0,5).map((result:Record<string,unknown>)=>result.code),['DELTA_NOT_ALLOWED','DELTA_NOT_ALLOWED','INVALID_DELTA','DELTA_TARGET_MISSING','DELTA_TARGET_MISSING'])
+   assert.equal((await (await request('/sync2/push',{ops:[ops[0]]},first)).json()).results[0].status,'rejected')
+   assert.equal((await request('/sync2/push',{ops:[{...ops[0],value:2}]},first)).status,409)
+   assert.equal(Number((await pool.query("SELECT payload->>'solde_fidelite' n FROM sync2_records WHERE table_name='clients' AND row_id='client-1'")).rows[0].n),525)
   })
  }finally{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end()}
 })
