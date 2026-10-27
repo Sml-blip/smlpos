@@ -13,3 +13,20 @@ export async function migrate(pool: Pool) {
   } catch(error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
 }
 
+/**
+ * Staging-only additive migration. Keep this path deliberately separate from
+ * migrate(): it must never read schema.sql or execute publication, grant,
+ * PowerSync, table-creation, or other statements.
+ */
+export async function migrateAdditiveSync2(pool: Pool) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query("ALTER TABLE sync2_changes ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT 'UPSERT'")
+    await client.query('ALTER TABLE sync2_changes ADD COLUMN IF NOT EXISTS delta_field text')
+    await client.query('ALTER TABLE sync2_changes ADD COLUMN IF NOT EXISTS delta_value bigint')
+    await client.query('ALTER TABLE sync2_seeds ADD COLUMN IF NOT EXISTS snapshot_seq bigint')
+    await client.query('COMMIT')
+  } catch(error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+

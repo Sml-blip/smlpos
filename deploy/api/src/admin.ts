@@ -1,5 +1,5 @@
 import { hash } from '@node-rs/argon2'
-import { createPool,migrate } from './db.ts'
+import { createPool,migrate,migrateAdditiveSync2 } from './db.ts'
 import { newId } from './domain.ts'
 // Provision through stdin or a protected file. Never put passwords in CLI args/logs.
 if(process.argv[2]!=='create-user')throw new Error('Usage: admin.ts create-user < protected-user.json')
@@ -8,7 +8,8 @@ const data=JSON.parse(input)
 if(typeof data.username!=='string'||!/^[a-zA-Z0-9_.-]{3,80}$/.test(data.username)||typeof data.password!=='string'||data.password.length<12||!['admin','manager','cashier'].includes(data.role))throw new Error('Invalid user input')
 const pool=createPool(process.env.DATABASE_URL??'')
 try{
- await migrate(pool)
+ if(process.env.STAGING_ADDITIVE_MIGRATION==='true') await migrateAdditiveSync2(pool)
+ else await migrate(pool)
  const client=await pool.connect()
  try{
   await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(7311044)')

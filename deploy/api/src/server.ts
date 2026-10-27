@@ -1,11 +1,13 @@
 import { readFile } from 'node:fs/promises'
 import { serve } from '@hono/node-server'
 import { createApp } from './app.ts'
-import { createPool,migrate } from './db.ts'
+import { createPool,migrate,migrateAdditiveSync2 } from './db.ts'
 const database=process.env.DATABASE_URL
 if(!database)throw new Error('DATABASE_URL is required')
 const pool=createPool(database)
-await migrate(pool)
+const additiveOnly = process.env.STAGING_ADDITIVE_MIGRATION==='true'
+if(additiveOnly) await migrateAdditiveSync2(pool)
+else await migrate(pool)
 const app=createApp(pool,{
  privateKey:await readFile(process.env.JWT_PRIVATE_KEY_PATH??'/run/secrets/jwt_private.pem','utf8'),
  keyId:process.env.JWT_KEY_ID??'pos-key-1',issuer:process.env.JWT_ISSUER??'https://api.pos.sml.boutique',
