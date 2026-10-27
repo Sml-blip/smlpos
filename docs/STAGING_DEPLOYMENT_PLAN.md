@@ -2,6 +2,40 @@
 
 **DO NOT RUN YET.** This is a copy-paste plan for review. It must not be executed until explicitly approved. It never targets the production project, database, volume, network, Caddy, or ports 80/443.
 
+## Candidate image (built, not started)
+
+The API build context was copied from branch commit `1b69ba9` and built on the server under the isolated tag `smlpos-staging-api:1b69ba9`. Docker reported:
+
+```text
+IMAGE_ID=sha256:4ea2190778a6361767a2d7ca20bd944a8945d68703e789c415636051eca106d8
+CREATED=2026-10-27T18:46:39.583613129Z
+{"org.opencontainers.image.revision":"1b69ba9"}
+```
+
+The staging environment must set `STAGING_ADDITIVE_MIGRATION=true`; Compose refuses to render without it. The API then selects `migrateAdditiveSync2`, not the normal startup migrator.
+
+Exact future commands (all marked **DO NOT RUN YET**):
+
+```bash
+# DO NOT RUN YET: render only after final approval
+export STAGING_ADDITIVE_MIGRATION=true
+docker compose --project-name smlpos-staging --project-directory /opt/smlpos-staging \
+  -f /opt/smlpos-staging/docker-compose.staging.yml config --quiet
+
+# DO NOT RUN YET: pin the already-built image in the staging override
+cat >/opt/smlpos-staging/image-override.yml <<'YAML'
+services:
+  api:
+    image: smlpos-staging-api:1b69ba9
+    build: null
+YAML
+
+# DO NOT RUN YET: start only after final approval
+docker compose --project-name smlpos-staging --project-directory /opt/smlpos-staging \
+  -f /opt/smlpos-staging/docker-compose.staging.yml \
+  -f /opt/smlpos-staging/image-override.yml up -d postgres api
+```
+
 ## Invariants
 
 - Project/directory: `smlpos-staging` / `/opt/smlpos-staging`.
