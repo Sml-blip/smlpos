@@ -12,13 +12,13 @@ CREATED=2026-10-27T18:46:39.583613129Z
 {"org.opencontainers.image.revision":"1b69ba9"}
 ```
 
-The staging environment must set `STAGING_ADDITIVE_MIGRATION=true`; Compose refuses to render without it. The API then selects `migrateAdditiveSync2`, not the normal startup migrator.
+The staging environment must set `SKIP_STARTUP_MIGRATION=true`; Compose refuses to render without it. The API then performs no startup migration. The additive SQL is run separately, once, as the owning `pos_api` role.
 
 Exact future commands (all marked **DO NOT RUN YET**):
 
 ```bash
 # DO NOT RUN YET: render only after final approval
-export STAGING_ADDITIVE_MIGRATION=true
+export SKIP_STARTUP_MIGRATION=true
 docker compose --project-name smlpos-staging --project-directory /opt/smlpos-staging \
   -f /opt/smlpos-staging/docker-compose.staging.yml config --quiet
 
@@ -34,6 +34,11 @@ YAML
 docker compose --project-name smlpos-staging --project-directory /opt/smlpos-staging \
   -f /opt/smlpos-staging/docker-compose.staging.yml \
   -f /opt/smlpos-staging/image-override.yml up -d postgres api
+
+# DO NOT RUN YET: execute only after restore, as the owning role.
+docker exec -i smlpos-staging-postgres-1 sh -lc \
+  'PGPASSWORD="$API_DB_PASSWORD" psql -h 127.0.0.1 -U pos_api -d smlpos_staging -v ON_ERROR_STOP=1' \
+  < /opt/smlpos-staging/api/migrations/20261027_sync2_additive.sql
 ```
 
 ## Invariants
