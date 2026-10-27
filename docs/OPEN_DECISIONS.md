@@ -7,6 +7,7 @@
 - Approve two physical Windows test machines and the 3-active-device limit.
 - Approve temporary port-forward-only SSH access for those machines.
 - Approve rollback owner, abort thresholds, and WAL-growth threshold.
+- Decide whether to retire PowerSync after sync2 is proven. Pros: fewer replication/WAL/slot failure modes and simpler operations. Cons: migration effort, client cutover risk, and loss of the existing realtime path. Retirement requires a separate reviewed runbook for dual-read/dual-write transition, backfill, client rollout, slot retirement, and rollback.
 
 ## Safest physical staging access proposal
 
