@@ -25,21 +25,24 @@ node scripts/e2e-two-pc/run.mjs
 
 The runner defaults to `--seeds 20`; `--seeds N` selects a reproducible
 sequence of seeds 1 through N, with 200 high-level operations per seed. It
-prints the seed and a failure immediately if a run fails. A GitHub Actions
-workflow supplies a scratch PostgreSQL 16 service and invokes `--seeds 50`.
+prints the seed and a failure immediately if a run fails. Run `--seeds 50`
+locally against a disposable PostgreSQL instance for the requested stress run.
 The generator produces sales, returns, price changes, stock adjustments and
 category deletions; writes accumulate in offline windows and device drain
 order varies. The runner checks replica counts, sale totals in millimes,
-product stock and price, duplicate sale numbers, pending outbox entries and
-pull rejects. Some pushes are repeated and the replica SQLite connection is
-closed and reopened during the workload.
+stock for every product on both devices and the server, price, duplicate sale
+numbers, pending outbox entries and pull rejects. Some pushes are replayed
+after newer pushes. The replica SQLite connection is closed and reopened, and
+HTTP requests are aborted after a seed batch and push are applied and in the
+middle of a pull page. These are network aborts, not operating-system kills.
 
-**Proof remains incomplete:** `--base-url` currently refuses to connect,
-because external fixture provisioning, isolation and cleanup are not yet
-implemented. The SQLite reopen is not an operating-system process kill, and
-the generated workload does not yet prove random process kills, arbitrary
-request reordering, or all-product stock reconciliation. A pass must not be represented as complete staged or
-physical two-PC verification.
+**External mode** accepts only `--base-url http://127.0.0.1:23001`, requires
+the disposable API's staging-only flags, and reads a synthetic `desktop-proof`
+admin credential as JSON from stdin. It runs one seed per disposable staging
+project; whole-project teardown is its server cleanup. Its server stock check
+reconstructs product stock from the server's immutable movement events; the
+local mode additionally queries the PostgreSQL records directly. A pass does
+not by itself represent physical two-PC validation.
 
 The endpoint is intentionally opt-in: missing or mismatched scratch database
 settings fail before any connection is made. Do not put production credentials

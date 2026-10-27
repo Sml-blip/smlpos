@@ -18,16 +18,15 @@ validation.
   public endpoint. Staging access must remain through its loopback-only port.
 - The API tests with a database URL were not run against staging.
 - The scratch PostgreSQL used in the preceding local proof was removed.
-- The staging host key is not present in this checkout (`infra/hetzner/.generated/known_hosts`
-  and the Windows user's `known_hosts` were both absent). The documented
-  deployment helper uses strict host-key checking; that safety check was not
-  disabled.
+- At the historical local assessment the host-key pin was absent. Step B later
+  verified the independently supplied fingerprint and saved a pin in the ignored
+  `infra/hetzner/.generated/known_hosts` file. Strict checking remains required.
 
 ## Code and staging configuration prepared
 
 - The standalone `deploy/docker-compose.staging.yml` uses project
-  `smlpos-staging`, volume `smlpos-staging_pgdata`, and loopback API/PowerSync
-  ports `23001`/`23002`. Every service has CPU and memory limits. Staging
+  `smlpos-staging`, volume `smlpos-staging_pgdata`, and loopback API port
+  `23001`. Only PostgreSQL and API services run, each with CPU and memory limits. Staging
   flags for seed, sync2, live writes, and staging-only mode are enabled only
   in its own generated environment.
 - Added an API `SYNC2_ENABLED` toggle and made `/health` report the sync2,
@@ -52,7 +51,7 @@ validation.
 | API unit/config tests | **PASS** | API run below — staging flag/Host tests and database-independent tests pass. |
 | API database integrations | **BLOCKED** | Same API run reports `pass 12`, `fail 0`, `skipped 3`. The skipped tests are auth/Postgres, seed staging/Postgres, and sync2/Postgres because no `TEST_DATABASE_URL` for isolated staging was available. These are not counted as passing. |
 | Compose YAML syntax | **PASS (YAML only)** | `js-yaml` parsed `deploy/docker-compose.yml` and `deploy/docker-compose.staging.yml`. Docker Compose runtime validation was not possible because Docker Compose is unavailable here. |
-| Staging API deployment/migration | **BLOCKED — NOT RUN** | No verified host-key pin; DNS shows the documented host IP is also the production API IP. the helper was not executed against the server. |
+| Staging API deployment/migration | **BLOCKED — NOT RUN** | The host-key pin was verified during Step B; the shared host is also the production API IP. The new isolated helper has not deployed staging. |
 | `snapshot_seq` staging audit | **NOT RUN** | No staging database connection. Read-only audit query is below. |
 | Physical/manual PC validation | **NOT RUN** | No two staging Windows test PCs were available. |
 | `npm test` / `npm run test:ipc` invocations | **NOT RUN** | npm is unavailable in the environment. Their underlying commands passed directly as listed above. |

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { connectDatabase, initDatabase, closeDatabase } from '../../src/main/db'
 import { SeedService } from '../../src/main/seed/service'
@@ -19,21 +20,36 @@ async function main(){
   const ledger=new SeedLedger(join(root,name+'.ledger.db'));ledgers.push(ledger)
   return new SeedService({liveDb:db,ledger,archiveDir:join(root,name+'-backups'),secrets:{seal:()=>null,open:()=>null},appVersion:'1.9.1039',platform:'win32',legacyQueue:()=>({pending:0,failed:0}),fetchImpl,sleep:async()=>{}})
  }
- let lostAck=false,interruptReplica=false,duplicateNext=false
+ let lostAck=false,interruptReplica=false,duplicateNext=false,seedAbort=true,pullAborts=0,reordered=0
+ let delayedReplay: {input: Parameters<typeof fetch>[0]; init?: Parameters<typeof fetch>[1]} | null=null
  const sourceFetch:typeof fetch=async(input,init)=>{
-  const response=await fetch(input,init)
+  const controller=new AbortController()
+  if(init?.signal){if(init.signal.aborted)controller.abort();else init.signal.addEventListener('abort',()=>controller.abort(),{once:true})}
+  const response=await fetch(input,{...init,signal:controller.signal})
+  if(seedAbort && new URL(String(input)).pathname==='/sync2/seed/batch' && response.ok){
+   seedAbort=false;controller.abort();return response
+  }
+  if(delayedReplay&&new URL(String(input)).pathname==='/sync2/push'){
+   const previous=delayedReplay;delayedReplay=null
+   const replay=await fetch(previous.input,previous.init);assert.equal(replay.status,200,'delayed push replay failed');reordered++
+  }
   if(duplicateNext&&new URL(String(input)).pathname==='/sync2/push'){
    duplicateNext=false
-   const replay=await fetch(input,init)
-   assert.equal(replay.status,200,'identical push replay failed')
+   delayedReplay={input,init}
   }
-  if(lostAck&&new URL(String(input)).pathname==='/sync2/push'){lostAck=false;await response.arrayBuffer();throw new TypeError('Synthetic lost acknowledgement')}
+  if(lostAck&&new URL(String(input)).pathname==='/sync2/push'){lostAck=false;controller.abort();return response}
   return response
  }
  const replicaFetch:typeof fetch=async(input,init)=>{
   const url=new URL(String(input))
-  if(interruptReplica&&url.pathname==='/sync2/pull'&&Number(url.searchParams.get('since'))>0)throw new TypeError('Synthetic network interruption')
-  return fetch(input,init)
+  const controller=new AbortController()
+  if(init?.signal){if(init.signal.aborted)controller.abort();else init.signal.addEventListener('abort',()=>controller.abort(),{once:true})}
+  const response=await fetch(input,{...init,signal:controller.signal})
+  if(interruptReplica&&url.pathname==='/sync2/pull'&&Number(url.searchParams.get('since'))>0){
+   const chunk=await response.body!.getReader().read();const bytes=chunk.value??new Uint8Array();let first=true;pullAborts++
+   return new Response(new ReadableStream({pull(stream){if(first){first=false;stream.enqueue(bytes.slice(0,Math.max(1,Math.floor(bytes.length/2))))}else{controller.abort();stream.error(new TypeError('Synthetic mid-page connection abort'))}}}),{status:response.status,headers:response.headers})
+  }
+  return response
  }
  const a=service(()=>source,'source',sourceFetch);let b=service(()=>replica,'replica',replicaFetch)
  const count=(db:Database.Database,table:string)=>(db.prepare(`SELECT count(*) n FROM "${table}"`).get() as {n:number}).n
@@ -54,6 +70,7 @@ async function main(){
   const report=await a.backupAndCheck();assert.equal(report.status,'passed',JSON.stringify(report.blockers))
   source.exec("UPDATE produits SET stock_actuel=stock_actuel+4 WHERE id='proof-product'; UPDATE clients SET solde_credit=solde_credit+1.25 WHERE id='proof-client'")
   await a.approve('SEED');await a.run();assert.equal((await a.status()).seed.state,'done')
+  assert.equal(seedAbort,false);console.log('PASS: connection aborted after server seed batch; retry completed')
   await pull(a,source);assert.equal(stock(source),104);assert.equal(balance(source),21.25)
   lostAck=true;await drain(a,source);await pull(a,source);assert.equal(lostAck,false)
   assert.equal(stock(source),104);assert.equal(balance(source),21.25)
@@ -62,7 +79,8 @@ async function main(){
   await b.registerDevice(baseUrl,'desktop-proof',password,'Synthetic replica')
   const identity=captureState(replica,'device_id')
   await b.prepareReplica('JOIN');interruptReplica=true
-  await assert.rejects(b.bootstrapReplica(),/Synthetic network interruption/)
+  await assert.rejects(b.bootstrapReplica(),/Synthetic mid-page connection abort/)
+  assert.ok(pullAborts>=1);console.log('PASS: connection aborted mid-pull page; join resumes')
   assert.notEqual(captureState(replica,'bootstrap_complete'),'1')
   assert.equal((replica.prepare("SELECT value FROM app_settings WHERE key='first_touch_pending'").get() as {value:string}).value,'1')
   // Model closing the app mid-download: discard both database and service
@@ -143,6 +161,8 @@ async function main(){
     }
    }
    await flush(false)
+   if(delayedReplay){const previous=delayedReplay;delayedReplay=null;assert.equal((await fetch(previous.input,previous.init)).status,200);reordered++}
+   assert.ok(reordered>0,'workload did not replay any requests out of order')
    const snapshot=(db:Database.Database)=>({
     sales:count(db,'ventes'), lines:count(db,'lignes_vente'), returns:count(db,'retours'),
     categories:count(db,'categories'), stock:stock(db),
@@ -154,7 +174,10 @@ async function main(){
    })
    const first=snapshot(source),second=snapshot(replica)
    assert.deepEqual(second,first);assert.equal(first.duplicateNumbers,0);assert.equal(first.pending,0);assert.equal(first.pullRejects,0)
-   console.log(`PASS random seed=${seed} operations=${workload.length} sqlite_reopens=${restarts} result=${JSON.stringify(first)}`)
+   const allStock=(db:Database.Database)=>db.prepare('SELECT id,stock_actuel FROM produits ORDER BY id').all()
+   const stockA=allStock(source),stockB=allStock(replica);assert.deepEqual(stockB,stockA)
+   writeFileSync(join(root,'stock-check.json'),JSON.stringify(stockA))
+   console.log(`PASS random seed=${seed} operations=${workload.length} sqlite_reopens=${restarts} reordered_replays=${reordered} products=${stockA.length} result=${JSON.stringify(first)}`)
   }
  }finally{for(const ledger of ledgers)ledger.close();replica.close();closeDatabase()}
 }

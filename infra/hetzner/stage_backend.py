@@ -17,7 +17,8 @@ HOST = '2.28.64.69'
 PROJECT = 'smlpos-staging'
 DIRECTORY = '/opt/smlpos-staging'
 COMPOSE_FILE = 'docker-compose.staging.yml'
-REMOTE = Path(__file__).with_name('stage_backend_remote.py').read_text()
+TEARDOWN = Path(__file__).with_name('staging_teardown_remote.py').read_text(encoding='utf-8')
+REMOTE = Path(__file__).with_name('stage_backend_remote.py').read_text(encoding='utf-8').replace("'__DEADMAN_SOURCE__'", repr(TEARDOWN))
 
 
 def validate_pin(known_hosts: Path, fingerprint: str) -> None:
@@ -92,14 +93,16 @@ def main() -> int:
     prepare = (f'test ! -e {DIRECTORY} && test ! -L {DIRECTORY} && '
                f'sudo -n install -d -m 0700 -o {user} -g $(id -gn) {DIRECTORY}')
     commands = [
-        ['ssh',*common,target,prepare],
-        ['scp',*common,str(ARCHIVE),f'{target}:{DIRECTORY}/sync-backend.tar.gz'],
-        ['ssh',*common,target,'sudo -n python3 -'],
+        [os.environ.get('SMLPOS_SSH_BINARY','ssh'),*common,target,prepare],
+        [os.environ.get('SMLPOS_SSH_BINARY','ssh'),*common,target,
+         f'set -C; umask 077; cat > {DIRECTORY}/sync-backend.tar.gz'],
+        [os.environ.get('SMLPOS_SSH_BINARY','ssh'),*common,target,'sudo -n python3 -'],
     ]
     print('LOCAL PLAN ONLY' if args.show_plan else 'PINNED LOCAL PREVIEW; no connection without --execute and --step-b-clean.')
     print(f'SSH user: {user}; identity file: {key}; host: {HOST}')
     for command in commands:
         print(shlex.join(command))
+    print(f'The second SSH command receives the binary archive on stdin: {ARCHIVE}')
     print('--- Exact Python stdin for the final SSH command ---')
     print(REMOTE)
     if args.show_plan or not args.execute:
@@ -110,7 +113,8 @@ def main() -> int:
         raise SystemExit('SSH identity absent; no connection attempted.')
     build_archive()
     subprocess.run(commands[0], check=True)
-    subprocess.run(commands[1], check=True)
+    with ARCHIVE.open('rb') as archive_stream:
+        subprocess.run(commands[1], stdin=archive_stream, check=True)
     return subprocess.run(commands[2], input=REMOTE, text=True).returncode
 
 

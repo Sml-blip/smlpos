@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, rmSync, realpathSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,13 @@ export async function desktopProof(databaseUrl, { seed } = {}) {
       child.once('exit',code=>{clearTimeout(timer);resolve(code)})
     })
     if(code!==0)throw new Error(`Desktop HTTP proof failed (exit ${code})`)
+    if(seed){
+      const deviceStocks=JSON.parse(readFileSync(join(temporary,'stock-check.json'),'utf8'))
+      const serverStocks=(await pool.query("SELECT row_id AS id, (payload->>'stock_actuel')::numeric AS stock_actuel FROM sync2_records WHERE table_name='produits' AND NOT deleted ORDER BY row_id")).rows
+      const normalize=rows=>rows.map(row=>({id:row.id,stock_actuel:row.stock_actuel===null?null:Number(row.stock_actuel)}))
+      if(JSON.stringify(normalize(deviceStocks))!==JSON.stringify(normalize(serverStocks)))throw new Error(`Server and client product stock differ for seed ${seed}`)
+      console.log(`PASS server/client stock reconciliation seed=${seed} products=${serverStocks.length}`)
+    }
     console.log('PASS: two independent desktop databases converge through HTTP + PostgreSQL.')
   } finally {
     if(server){server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve))}

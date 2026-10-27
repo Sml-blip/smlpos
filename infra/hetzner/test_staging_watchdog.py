@@ -9,7 +9,7 @@ import staging_watchdog as watchdog
 
 class WatchdogTests(unittest.TestCase):
     def setUp(self):
-        self.base={'available_mb':1000,'production':{'pos-v1-api':
+        self.base={'available_mb':1000,'health':{'status':200,'ok':True,'liveWritesEnabled':False,'seedStagingEnabled':False,'latency_ms':10},'production':{'pos-v1-api':
             {'id':'abc','restarts':1,'started':'2026-01-01','running':True}}}
 
     def scenario(self, change):
@@ -31,6 +31,12 @@ class WatchdogTests(unittest.TestCase):
 
     def test_stopped_tears_down(self):
         self.scenario(lambda x:x['production']['pos-v1-api'].update(running=False))
+
+    def test_health_error_tears_down(self):
+        self.scenario(lambda x:x['health'].update(status=500))
+
+    def test_latency_spike_tears_down(self):
+        self.scenario(lambda x:x['health'].update(latency_ms=501))
 
     def test_healthy_does_not_teardown(self):
         teardown=Mock()

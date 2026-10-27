@@ -5,6 +5,7 @@ import os
 import secrets
 import subprocess
 import tarfile
+import shlex
 from urllib.parse import urlsplit
 
 BASE = Path('/opt/smlpos-staging')
@@ -13,6 +14,9 @@ VOLUME = 'smlpos-staging_pgdata'
 COMPOSE = ['docker','compose','--project-name',PROJECT,
            '--project-directory',str(BASE),'--env-file',str(BASE/'.env'),
            '-f',str(BASE/'docker-compose.staging.yml')]
+DEADMAN_SOURCE = '__DEADMAN_SOURCE__'
+DEADMAN = ['systemd-run','--unit=smlpos-staging-deadman','--on-active=3h',
+           '/usr/bin/python3','-c',DEADMAN_SOURCE]
 
 
 def run(args, **kwargs):
@@ -98,6 +102,14 @@ def main():
                             capture_output=True,text=True).stdout)
     validate_config(config)
     run([*COMPOSE,'config','--quiet'])
+    if DEADMAN_SOURCE.startswith('__DEADMAN_'):
+        raise SystemExit('Dead-man teardown payload was not embedded')
+    print('Exact dead-man command:',shlex.join(DEADMAN),flush=True)
+    # A scheduling failure blocks deployment. The inline source is stored by
+    # systemd itself and does not execute a deploy-user-writable script as root.
+    run(DEADMAN)
+    run(['systemctl','is-active','--quiet','smlpos-staging-deadman.timer'])
+    run(['systemctl','list-timers','smlpos-staging-deadman.timer','--no-pager'])
     run([*COMPOSE,'up','-d','--build','postgres','api'])
     run([*COMPOSE,'ps'])
     print('Complete tunnel/two-PC verification and reviewed teardown separately. Stop on any failure.')

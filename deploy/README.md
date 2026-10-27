@@ -1,8 +1,9 @@
 # SMLPOS shared-host staging plan
 
-**Status: blocked before server access.** The user must supply the independently
-verified ED25519 SHA256 host-key fingerprint and say “go”. No staging deployment
-or production backup/restore verification has been performed for this plan.
+**Status: local proof and staging preparation.** The independently verified
+ED25519 host-key pin and the initial production dump/restore check were completed
+in Step B. No new shared-host staging stack has been deployed. Recheck the pin,
+resources and a fresh backup before the separately authorized staging run.
 No purchase is authorized. See [the staging plan](../infra/hetzner/shared-host-staging-plan.md).
 
 The historical stack at `/opt/pos/staging` serves the production API. It is not
@@ -10,9 +11,9 @@ the staging target and must not be modified. The new isolated stack uses
 `/opt/smlpos-staging`, project `smlpos-staging`, volume
 `smlpos-staging_pgdata`, network `smlpos-staging_internal`, and the standalone
 `docker-compose.staging.yml`. Never combine it with `docker-compose.yml`.
-API and PowerSync ports are bound only to `127.0.0.1:23001` and `:23002` and
-require SSH tunnels. Every container has CPU and memory limits. There is no
-staging Caddy or published Postgres port. No production Caddy, DNS, firewall,
+Only the API port is bound, to `127.0.0.1:23001`, and requires an SSH tunnel.
+The staging stack contains only PostgreSQL and the API; each has CPU and memory
+limits. There is no staging PowerSync, Caddy, or published Postgres port. No production Caddy, DNS, firewall,
 containers or volumes may be changed.
 
 `infra/hetzner/stage_backend.py` requires `--shared-host-staging`, explicit

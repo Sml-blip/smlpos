@@ -25,6 +25,41 @@ class SafetyTests(unittest.TestCase):
     def test_preview_never_connects(self):
         self.assertEqual(self.call_main(['--shared-host-staging','--show-plan']), 0)
 
+    def test_deadman_is_embedded_and_scheduled_before_compose_up(self):
+        self.assertIn('Remove only verified smlpos-staging Docker resources',local.REMOTE)
+        self.assertIn("'--on-active=3h'",local.REMOTE)
+        self.assertLess(local.REMOTE.index('run(DEADMAN)'),local.REMOTE.index("run([*COMPOSE,'up'"))
+
+    def test_archive_is_streamed_over_ssh_without_scp(self):
+        with patch.object(sys, 'argv', ['stage_backend.py','--shared-host-staging','--show-plan']), \
+             patch.dict(os.environ, {'USERPROFILE':str(local.ROOT)}, clear=True), \
+             redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(local.main(),0)
+        plan=out.getvalue()
+        self.assertIn('set -C; umask 077; cat > /opt/smlpos-staging/sync-backend.tar.gz',plan)
+        self.assertIn('second SSH command receives the binary archive on stdin',plan)
+        self.assertNotIn('\nscp ',plan)
+
+    def test_execute_streams_archive_as_stdin_in_order(self):
+        calls=[]
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if len(calls)==2:
+                self.assertEqual(kwargs['stdin'].read(),b'synthetic archive')
+            return type('Result',(),{'returncode':0})()
+        with patch.object(sys,'argv',['stage_backend.py','--shared-host-staging','--execute','--step-b-clean']), \
+             patch.dict(os.environ,{'USERPROFILE':str(local.ROOT),'SMLPOS_STAGING_HOST':local.HOST,
+                'SMLPOS_STAGING_HOST_FINGERPRINT':'SHA256:'+'A'*43},clear=True), \
+             patch.object(local,'validate_pin'), patch.object(local,'build_archive'), \
+             patch.object(Path,'is_file',return_value=True), \
+             patch.object(Path,'open',return_value=io.BytesIO(b'synthetic archive')), \
+             patch.object(local.subprocess,'run',side_effect=fake_run), redirect_stdout(io.StringIO()):
+            self.assertEqual(local.main(),0)
+        self.assertEqual(len(calls),3)
+        self.assertIn('install -d',calls[0][-1])
+        self.assertIn('cat > /opt/smlpos-staging/sync-backend.tar.gz',calls[1][-1])
+        self.assertEqual(calls[2][-1],'sudo -n python3 -')
+
     def test_no_target_and_unpinned_production_are_refused(self):
         with self.assertRaisesRegex(SystemExit, 'no target selected'):
             self.call_main(['--shared-host-staging'])

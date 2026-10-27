@@ -1,13 +1,12 @@
-# Shared-host staging review — Step A only
+# Shared-host staging review
 
 Target: existing `smlpos-sync-01`, `2.28.64.69`. No purchases.
-No server connection is authorized until the user says **go**.
-The supplied fingerprint is a placeholder, so pinning is blocked even after go
-until the real trusted ED25519 SHA256 fingerprint is supplied.
+The user authorized the staging run after successful local proof. The host key
+was independently verified and pinned in Step B; recheck it before execution.
 
 Identity selected from the local bootstrap record: SSH user `deploy`, local
-identity `%USERPROFILE%\.ssh\pos_codex`. File presence is confirmed locally;
-current server access is untested. Do not use the new `smlpos-staging` key,
+identity `%USERPROFILE%\.ssh\pos_codex`. This identity authenticated in Step B;
+recheck access. Do not use the new `smlpos-staging` key,
 change SSH configuration, request private keys, or retry with other identities.
 Stop and report if this identity cannot authenticate.
 
@@ -46,7 +45,7 @@ Stop and report if this identity cannot authenticate.
    inspection. Record full container IDs, StartedAt, RestartCount, project and
    volume labels, volume attachments, and the production feature flags only
    (never print database passwords or entire container environments).
-   Stop on any unexpected result, occupied staging ports 23001/23002, existing
+   Stop on any unexpected result, occupied staging port 23001, existing
    staging resources/directory, production RAM above about 50% of physical
    RAM, or any relevant disk above about 70% full. Ask the user if either
    resource threshold is exceeded. Do not proceed based on old documentation.
@@ -81,8 +80,9 @@ $env:SMLPOS_STAGING_HOST = '2.28.64.69'
 & C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --execute --step-b-clean
 ```
 
-`commands.preview.txt` contains every SSH/SCP argument and the exact Python
-stdin used remotely. `stage_backend_remote.py` contains every nested command.
+`commands.preview.txt` contains every SSH argument, the archive streamed on
+stdin, and the exact Python stdin used remotely. `stage_backend_remote.py`
+contains every nested command.
 All Compose operations use exactly:
 
 ```sh
@@ -94,19 +94,20 @@ No Caddy, DNS, firewall changes, ports 80/443, host Docker pruning, or productio
 container lifecycle commands are included. New secrets are generated remotely,
 and existing staging directories/resources are refused rather than reused.
 The only named data volume is `smlpos-staging_pgdata`; the only network is
-`smlpos-staging_internal`. PostgreSQL's internal database is `pos` in this own
-volume, not the production cluster. Every container has RAM/CPU limits:
-Postgres 512 MiB/0.5 CPU, API 256 MiB/0.5 CPU, PowerSync 512 MiB/0.5 CPU,
-tests 256 MiB/0.5 CPU. The maximum simultaneous configured container RAM is
-1536 MiB; build and host overhead need additional headroom.
+`smlpos-staging_internal`. PostgreSQL's internal database is `smlpos_staging`
+in its own volume. Only PostgreSQL (512 MiB/0.5 CPU) and the API (256 MiB/0.5
+CPU) run; build and host overhead need additional headroom. The helper schedules
+the restricted three-hour systemd teardown before starting either container;
+if scheduling fails it stops before Compose up. The exact command is printed
+by the helper and stored in the local command preview.
 
 API flags LIVE_WRITES_ENABLED, SEED_STAGING_ENABLED, SYNC2_ENABLED and
-STAGING_ONLY are true only in the staging .env. API and PowerSync publish
-127.0.0.1:23001 and 127.0.0.1:23002 only; DB has no published port. Tunnel
+STAGING_ONLY are true only in the staging .env. Only the API publishes
+127.0.0.1:23001; the DB has no published port. Tunnel
 with the same pinned SSH options and identity, adding:
 
 ```sh
--N -o ExitOnForwardFailure=yes -L 127.0.0.1:23001:127.0.0.1:23001 -L 127.0.0.1:23002:127.0.0.1:23002
+-N -o ExitOnForwardFailure=yes -L 127.0.0.1:23001:127.0.0.1:23001
 ```
 
 After deployment, paste raw health/flags and deploy/api test outputs. Run the
@@ -118,7 +119,7 @@ API separately. Do not claim actual PC-to-PC streaming based on fixture tests.
 Stop and report any failure; preserve evidence until reviewed.
 
 After successful testing, inspect the staging labels/mounts again and use the
-exact Compose prefix above followed by `--profile test down --volumes`.
+exact Compose prefix above followed by `down --volumes`.
 Never use `--remove-orphans`, Docker prune, or a production project for cleanup.
 Retain the backup and logs. Paste raw production `docker ps`, full IDs,
 StartedAt/RestartCount, volume list/attachments and production flags before

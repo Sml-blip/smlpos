@@ -1,13 +1,15 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const apiDir = resolve(repoRoot, 'deploy/api')
 let seeds = 20
+let seedsSpecified = false
 let baseUrl
 for (let index=2; index<process.argv.length; index++) {
-  if (process.argv[index] === '--seeds') seeds = Number(process.argv[++index])
+  if (process.argv[index] === '--seeds') { seeds = Number(process.argv[++index]); seedsSpecified = true }
   else if (process.argv[index] === '--base-url') {
     baseUrl = process.argv[++index]
     if (!baseUrl) { console.error('--base-url requires a value.'); process.exit(2) }
@@ -18,8 +20,24 @@ if (!Number.isSafeInteger(seeds) || seeds < 1 || seeds > 1000) {
   console.error('--seeds must be an integer between 1 and 1000.'); process.exit(2)
 }
 if (baseUrl !== undefined) {
-  console.error('--base-url is not yet supported safely: external fixture isolation and cleanup are not implemented; no connection attempted.')
-  process.exit(2)
+  if(baseUrl!=='http://127.0.0.1:23001') { console.error('Refusing external URL: only http://127.0.0.1:23001 is allowed.'); process.exit(2) }
+  if(!seedsSpecified) seeds=1
+  if(seeds!==1) { console.error('External mode requires one seed per disposable staging project; teardown is the cleanup.'); process.exit(2) }
+  let credentials
+  try { credentials=JSON.parse(readFileSync(0,'utf8')) } catch { console.error('External mode requires synthetic admin JSON on stdin.'); process.exit(2) }
+  if(credentials.username!=='desktop-proof'||typeof credentials.password!=='string'||credentials.password.length<12) {
+    console.error('Invalid synthetic admin input.'); process.exit(2)
+  }
+  try {
+    const {externalProof}=await import('./external-proof.mjs')
+    await externalProof(baseUrl,credentials.password,1)
+    console.log('RESULT external seeds_requested=1 passed=1 failed=0')
+  } catch(error) {
+    console.error('FAIL external seed=1:',error.message)
+    console.error('RESULT external seeds_requested=1 passed=0 failed=1')
+    process.exitCode=1
+  }
+  process.exit()
 }
 const rawUrl = process.env.SMLPOS_E2E_TEST_DATABASE_URL
 const allowedName = process.env.SMLPOS_E2E_ALLOW_SCRATCH_DB
