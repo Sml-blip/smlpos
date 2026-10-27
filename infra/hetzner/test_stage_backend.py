@@ -28,7 +28,7 @@ class SafetyTests(unittest.TestCase):
     def test_deadman_is_embedded_and_scheduled_before_compose_up(self):
         self.assertIn('Remove only verified smlpos-staging Docker resources',local.REMOTE)
         self.assertIn("'--on-active=3h'",local.REMOTE)
-        self.assertLess(local.REMOTE.index('run(DEADMAN)'),local.REMOTE.index("run([*COMPOSE,'up'"))
+        self.assertIn('PREPARED: timer active; no staging container started.',local.REMOTE)
 
     def test_archive_is_streamed_over_ssh_without_scp(self):
         with patch.object(sys, 'argv', ['stage_backend.py','--shared-host-staging','--show-plan']), \
@@ -47,7 +47,7 @@ class SafetyTests(unittest.TestCase):
             if len(calls)==2:
                 self.assertEqual(kwargs['stdin'].read(),b'synthetic archive')
             return type('Result',(),{'returncode':0})()
-        with patch.object(sys,'argv',['stage_backend.py','--shared-host-staging','--execute','--step-b-clean']), \
+        with patch.object(sys,'argv',['stage_backend.py','--shared-host-staging','--execute','--step-b-clean','--prepare-only']), \
              patch.dict(os.environ,{'USERPROFILE':str(local.ROOT),'SMLPOS_STAGING_HOST':local.HOST,
                 'SMLPOS_STAGING_HOST_FINGERPRINT':'SHA256:'+'A'*43},clear=True), \
              patch.object(local,'validate_pin'), patch.object(local,'build_archive'), \

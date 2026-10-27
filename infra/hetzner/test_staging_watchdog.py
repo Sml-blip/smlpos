@@ -43,6 +43,15 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(watchdog.run_monitor(lambda:self.base,teardown,sleep=lambda _:None,iterations=1),0)
         teardown.assert_not_called()
 
+    def test_sampling_uses_fixed_cadence_despite_poll_duration(self):
+        now=[0.0]; starts=[]
+        def poll():
+            starts.append(now[0]);now[0]+=2
+            return self.base
+        def sleep(seconds):now[0]+=seconds
+        self.assertEqual(watchdog.run_monitor(poll,Mock(),sleep=sleep,interval=30,iterations=3,clock=lambda:now[0]),0)
+        self.assertEqual(starts,[0,30,60,90])
+
     def test_no_production_refused(self):
         with self.assertRaises(ValueError): watchdog.unsafe_reason({'production':{}},{'available_mb':1000,'production':{}})
 

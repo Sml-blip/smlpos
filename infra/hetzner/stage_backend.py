@@ -60,6 +60,9 @@ def main() -> int:
     parser.add_argument('--show-plan', action='store_true', help='Print commands without selecting or contacting a target')
     parser.add_argument('--execute', action='store_true', help='Default is local preview only')
     parser.add_argument('--step-b-clean', action='store_true', help='Attest reviewed Step B passed')
+    phases=parser.add_mutually_exclusive_group()
+    phases.add_argument('--prepare-only',action='store_true',help='Prepare and schedule timer; do not start containers')
+    phases.add_argument('--start-prepared',action='store_true',help='Start the previously prepared stack')
     args = parser.parse_args()
     if args.show_plan and (args.execute or args.step_b_clean):
         raise SystemExit('--show-plan cannot be combined with execution flags.')
@@ -98,24 +101,32 @@ def main() -> int:
          f'set -C; umask 077; cat > {DIRECTORY}/sync-backend.tar.gz'],
         [os.environ.get('SMLPOS_SSH_BINARY','ssh'),*common,target,'sudo -n python3 -'],
     ]
+    remote = REMOTE.replace("'__START_PREPARED__'",repr(args.start_prepared))
+    if args.start_prepared:
+        commands=commands[-1:]
     print('LOCAL PLAN ONLY' if args.show_plan else 'PINNED LOCAL PREVIEW; no connection without --execute and --step-b-clean.')
     print(f'SSH user: {user}; identity file: {key}; host: {HOST}')
     for command in commands:
         print(shlex.join(command))
-    print(f'The second SSH command receives the binary archive on stdin: {ARCHIVE}')
+    if not args.start_prepared:
+        print(f'The second SSH command receives the binary archive on stdin: {ARCHIVE}')
     print('--- Exact Python stdin for the final SSH command ---')
-    print(REMOTE)
+    print(remote)
     if args.show_plan or not args.execute:
         return 0
     if not args.step_b_clean:
         raise SystemExit('Refusing execution: complete and review Step B first.')
+    if not (args.prepare_only or args.start_prepared):
+        raise SystemExit('Refusing execution: select --prepare-only or --start-prepared.')
     if not key.is_file():
         raise SystemExit('SSH identity absent; no connection attempted.')
+    if args.start_prepared:
+        return subprocess.run(commands[0], input=remote, text=True).returncode
     build_archive()
     subprocess.run(commands[0], check=True)
     with ARCHIVE.open('rb') as archive_stream:
         subprocess.run(commands[1], stdin=archive_stream, check=True)
-    return subprocess.run(commands[2], input=REMOTE, text=True).returncode
+    return subprocess.run(commands[2], input=remote, text=True).returncode
 
 
 if __name__ == '__main__':

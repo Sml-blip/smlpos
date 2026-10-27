@@ -21,7 +21,10 @@ containers or volumes may be changed.
 independently supplied `SMLPOS_STAGING_HOST_FINGERPRINT`. Without those the
 dry run refuses the target. `--show-plan` only prints the commands and remote
 Python payload; it does not select or contact a target. Executing also requires
-`--execute --step-b-clean` after the user’s go and reviewed Step B. The
+`--execute --step-b-clean --prepare-only` after the user’s go and reviewed
+Step B; this schedules and lists the dead-man timer without starting containers.
+After verifying the timer and fresh watchdog heartbeat, use
+`--execute --step-b-clean --start-prepared` to start the stack. The
 production project, `/opt/pos`, external/production volumes, and unexpected
 resource names are refused. The new `.env` and passwords are generated on the
 server, and the staging API enables `LIVE_WRITES_ENABLED`,

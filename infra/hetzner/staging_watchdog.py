@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 import stage_backend
 
@@ -70,24 +71,27 @@ def remote(command, script):
     return subprocess.run(command,input=script,text=True,capture_output=True,check=True).stdout
 
 
-def run_monitor(poll, teardown, sleep=time.sleep, interval=30, iterations=None):
+def run_monitor(poll, teardown, sleep=time.sleep, interval=30, iterations=None, clock=time.monotonic):
+    next_poll=clock()+interval
     baseline = poll()
     reason = unsafe_reason(baseline, baseline)
     if reason:
         print('STOP:',reason,flush=True)
         print(teardown(),flush=True)
         return 1
-    print('Baseline:',json.dumps(baseline,sort_keys=True),flush=True)
+    print('HEARTBEAT',json.dumps({'timestamp':datetime.now(timezone.utc).isoformat(),'sample':baseline},sort_keys=True),flush=True)
     count=0
     while iterations is None or count < iterations:
-        sleep(interval)
+        sleep(max(0,next_poll-clock()))
         current=poll()
-        print('Check:',json.dumps(current,sort_keys=True),flush=True)
         reason=unsafe_reason(baseline,current)
         if reason:
             print('STOP:',reason,flush=True)
             print(teardown(),flush=True)
             return 1
+        print('HEARTBEAT',json.dumps({'timestamp':datetime.now(timezone.utc).isoformat(),'sample':current},sort_keys=True),flush=True)
+        next_poll+=interval
+        if next_poll<=clock(): next_poll=clock()+interval
         count+=1
     return 0
 

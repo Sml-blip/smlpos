@@ -67,9 +67,11 @@ Stop and report if this identity cannot authenticate.
 
 ## Step C, only after Step B is clean
 
-The helper is **not** the Step B runner. It deploys only after explicit
-`--execute --step-b-clean`. These flags are operator attestations, not automatic
-proof that Step B passed. Never supply them before the review is complete.
+The helper is **not** the Step B runner. It requires explicit
+`--execute --step-b-clean` and either `--prepare-only` or `--start-prepared`.
+Preparation schedules and lists the three-hour timer without starting containers;
+after verifying the timer and fresh heartbeat, start the prepared stack. These
+flags are operator attestations, not automatic proof that Step B passed.
 
 ```powershell
 $env:SMLPOS_STAGING_HOST_FINGERPRINT = 'REAL_TRUSTED_SHA256_FINGERPRINT'
@@ -77,7 +79,9 @@ $env:SMLPOS_STAGING_HOST = '2.28.64.69'
 # No connection: writes only the command preview to stdout.
 & C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --show-plan
 # After approval, clean Step B and pinning ONLY:
-& C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --execute --step-b-clean
+& C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --execute --step-b-clean --prepare-only
+# Verify the timer listing and fresh watchdog/supervisor heartbeats before starting:
+& C:/Users/moote/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -B infra/hetzner/stage_backend.py --shared-host-staging --execute --step-b-clean --start-prepared
 ```
 
 `commands.preview.txt` contains every SSH argument, the archive streamed on

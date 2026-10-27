@@ -15,6 +15,7 @@ COMPOSE = ['docker','compose','--project-name',PROJECT,
            '--project-directory',str(BASE),'--env-file',str(BASE/'.env'),
            '-f',str(BASE/'docker-compose.staging.yml')]
 DEADMAN_SOURCE = '__DEADMAN_SOURCE__'
+START_PREPARED = '__START_PREPARED__'
 DEADMAN = ['systemd-run','--unit=smlpos-staging-deadman','--on-active=3h',
            '/usr/bin/python3','-c',DEADMAN_SOURCE]
 
@@ -67,7 +68,7 @@ def validate_config(config):
 def main():
     if BASE.is_symlink() or BASE.resolve() != BASE or BASE.parent.resolve() != Path('/opt'):
         raise SystemExit('Unsafe staging directory')
-    if set(p.name for p in BASE.iterdir()) != {'sync-backend.tar.gz'}:
+    if not START_PREPARED and set(p.name for p in BASE.iterdir()) != {'sync-backend.tar.gz'}:
         raise SystemExit('Unexpected staging directory contents; stop and inspect')
     if names(['docker','ps','-aq','--filter','label=com.docker.compose.project='+PROJECT]):
         raise SystemExit('Staging containers already exist')
@@ -75,6 +76,17 @@ def main():
         raise SystemExit('Staging volume already exists')
     if PROJECT+'_internal' in names(['docker','network','ls','--format','{{.Name}}']):
         raise SystemExit('Staging network already exists')
+    if START_PREPARED:
+        if not (BASE/'.env').is_file() or (BASE/'.env').is_symlink():
+            raise SystemExit('Prepared staging environment missing or unsafe')
+        os.chdir(BASE)
+        config=json.loads(run([*COMPOSE,'config','--format','json'],capture_output=True,text=True).stdout)
+        validate_config(config)
+        run(['systemctl','is-active','--quiet','smlpos-staging-deadman.timer'])
+        run(['systemctl','list-timers','smlpos-staging-deadman.timer','--no-pager'])
+        run([*COMPOSE,'up','-d','--build','postgres','api'])
+        run([*COMPOSE,'ps'])
+        return
     with tarfile.open(BASE/'sync-backend.tar.gz') as tar:
         for item in tar.getmembers():
             if not (BASE/item.name).resolve().is_relative_to(BASE) or not item.isfile():
@@ -110,9 +122,7 @@ def main():
     run(DEADMAN)
     run(['systemctl','is-active','--quiet','smlpos-staging-deadman.timer'])
     run(['systemctl','list-timers','smlpos-staging-deadman.timer','--no-pager'])
-    run([*COMPOSE,'up','-d','--build','postgres','api'])
-    run([*COMPOSE,'ps'])
-    print('Complete tunnel/two-PC verification and reviewed teardown separately. Stop on any failure.')
+    print('PREPARED: timer active; no staging container started.',flush=True)
 
 
 if __name__ == '__main__':
