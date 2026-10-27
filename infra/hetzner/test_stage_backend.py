@@ -72,9 +72,12 @@ class SafetyTests(unittest.TestCase):
                   'volumes':{'pgdata':{'name':'smlpos-staging_pgdata'}},
                   'networks':{'internal':{'name':'smlpos-staging_internal'}},
                   'services':{name:{'mem_limit':256*1024*1024,'cpus':0.5,'networks':{'internal':None}}
-                              for name in ['postgres','api','powersync','tests']}}
+                              for name in ['postgres','api']}}
+        config['services']['postgres']['environment'] = {'POSTGRES_DB':'smlpos_staging'}
+        config['services']['postgres']['mem_limit'] = 512*1024*1024
         config['services']['api']['environment'] = {key:'true' for key in
             ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY']}
+        config['services']['api']['environment']['DATABASE_URL'] = 'postgresql://pos_api:secret@postgres:5432/smlpos_staging'
         remote.validate_config(config)
         variants = []
         def changed():
@@ -82,18 +85,28 @@ class SafetyTests(unittest.TestCase):
             variants.append(result)
             return result
         changed()['name'] = 'pos-sync-staging'
+        changed()['name'] = 'pos-v1-production'
         changed()['volumes']['pgdata']['name'] = 'pos-sync-staging_pgdata'
+        changed()['volumes']['pgdata']['name'] = 'pos-v1_pgdata'
+        changed()['networks']['internal']['name'] = 'pos-sync-staging_internal'
+        changed()['networks']['internal']['name'] = 'pos-v1-network'
         changed()['volumes']['pgdata']['external'] = True
         changed()['networks']['internal']['external'] = True
         changed()['services']['api']['ports'] = [{'host_ip':'0.0.0.0','published':'23001'}]
         changed()['services']['api']['ports'] = [{'host_ip':'127.0.0.1','published':'443'}]
         changed()['services']['api']['mem_limit'] = 0
-        changed()['services']['tests']['cpus'] = 0
+        changed()['services']['postgres']['cpus'] = 0
         changed()['services']['api']['volumes'] = [{'type':'bind','source':'/opt/pos','read_only':True}]
+        changed()['services']['api']['volumes'] = [{'type':'bind','source':'/opt/pos-v1/secrets','read_only':True}]
         changed()['services']['api']['volumes'] = [{'type':'bind','source':'/var/run/docker.sock','read_only':True}]
         changed()['services']['postgres']['volumes'] = [{'type':'volume','source':'production_pgdata'}]
         changed()['services']['api']['network_mode'] = 'host'
+        changed()['services']['api']['container_name'] = 'pos-v1-api'
         changed()['services']['api']['environment']['LIVE_WRITES_ENABLED'] = 'false'
+        changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://x:y@postgres:5432/pos'
+        changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://x:y@pos-sync-staging-postgres-1:5432/smlpos_staging'
+        changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://pos_api:y@postgres:5432/smlpos_staging?host=pos-sync-staging-postgres-1'
+        changed()['services']['postgres']['environment']['POSTGRES_DB'] = 'pos'
         for index, invalid in enumerate(variants):
             with self.subTest(index=index), self.assertRaises(SystemExit):
                 remote.validate_config(invalid)

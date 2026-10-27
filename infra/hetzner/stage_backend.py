@@ -42,7 +42,7 @@ def build_archive() -> None:
     GENERATED.mkdir(exist_ok=True)
     with tarfile.open(ARCHIVE, 'w:gz') as tar:
         # Never ship the production Compose file, Caddy, secrets or local .env.
-        for entry in [COMPOSE_FILE, 'api', 'postgres', 'powersync']:
+        for entry in [COMPOSE_FILE, 'api', 'postgres']:
             source = ROOT / 'deploy' / entry
             for path in sorted(source.rglob('*')) if source.is_dir() else [source]:
                 rel = path.relative_to(ROOT / 'deploy')

@@ -5,6 +5,7 @@ import os
 import secrets
 import subprocess
 import tarfile
+from urllib.parse import urlsplit
 
 BASE = Path('/opt/smlpos-staging')
 PROJECT = 'smlpos-staging'
@@ -24,19 +25,20 @@ def names(args):
 
 def validate_config(config):
     # Exact allowlists reject /opt/pos, production projects/volumes and external resources.
-    if config.get('name') != PROJECT or set(config['services']) != {'postgres','api','powersync','tests'}:
+    if config.get('name') != PROJECT or set(config['services']) != {'postgres','api'}:
         raise SystemExit('Unsafe Compose project/services')
     if set(config.get('volumes',{})) != {'pgdata'} or config['volumes']['pgdata'].get('name') != VOLUME or config['volumes']['pgdata'].get('external'):
         raise SystemExit('Unsafe volume: production volume names forbidden')
     if set(config.get('networks',{})) != {'internal'} or config['networks']['internal'].get('name') != PROJECT+'_internal' or config['networks']['internal'].get('external'):
         raise SystemExit('Unsafe network')
     for name, service in config['services'].items():
-        if not service.get('mem_limit') or not float(service.get('cpus',0)):
-            raise SystemExit('Missing resource limit: '+name)
-        if any(service.get(k) for k in ['privileged','network_mode','container_name','volumes_from','devices','pid','ipc','external_links','cap_add']):
+        expected_memory = {'postgres': 512 * 1024 * 1024, 'api': 256 * 1024 * 1024}[name]
+        if int(service.get('mem_limit', 0)) != expected_memory or not 0 < float(service.get('cpus',0)) <= 0.5:
+            raise SystemExit('Unexpected resource limit: '+name)
+        if any(service.get(k) for k in ['privileged','network_mode','container_name','volumes_from','devices','pid','ipc','external_links','links','extra_hosts','dns','cap_add']):
             raise SystemExit('Unsafe service settings: '+name)
         for port in service.get('ports',[]):
-            if port.get('host_ip') != '127.0.0.1' or str(port.get('published')) not in {'23001','23002'}:
+            if name != 'api' or port.get('host_ip') != '127.0.0.1' or str(port.get('published')) != '23001':
                 raise SystemExit('Unsafe published port')
         for volume in service.get('volumes',[]):
             if volume['type'] == 'volume':
@@ -47,6 +49,13 @@ def validate_config(config):
         if set(service.get('networks',{})) != {'internal'}:
             raise SystemExit('Unsafe service network')
     api_env = config['services']['api']['environment']
+    database = urlsplit(api_env.get('DATABASE_URL', ''))
+    if (database.scheme != 'postgresql' or database.hostname != 'postgres'
+            or database.username != 'pos_api' or database.port != 5432
+            or database.path != '/smlpos_staging' or database.query or database.fragment):
+        raise SystemExit('Unsafe staging DATABASE_URL host or database')
+    if config['services']['postgres'].get('environment', {}).get('POSTGRES_DB') != 'smlpos_staging':
+        raise SystemExit('Unsafe staging PostgreSQL database name')
     if any(str(api_env.get(k)).lower() != 'true' for k in ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY']):
         raise SystemExit('Unexpected staging feature flags')
 
@@ -69,10 +78,10 @@ def main():
         tar.extractall(BASE, filter='data')
     secret_dir = BASE/'secrets'
     secret_dir.mkdir(mode=0o700)
-    values = {'POWERSYNC_VERSION':'1.27.2','MIN_CLIENT_VERSION':'1.9.1038',
+    values = {'MIN_CLIENT_VERSION':'1.9.1038',
               'LIVE_WRITES_ENABLED':'true','SEED_STAGING_ENABLED':'true',
               'SYNC2_ENABLED':'true','STAGING_ONLY':'true'}
-    for name in ['PG_PASSWORD','API_DB_PASSWORD','PS_PASSWORD','PS_STORAGE_PASSWORD']:
+    for name in ['PG_PASSWORD','API_DB_PASSWORD']:
         values[name] = secrets.token_hex(24)
     fd = os.open(BASE/'.env', os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
     with os.fdopen(fd,'w') as f:
@@ -85,12 +94,11 @@ def main():
     key.chmod(0o400)
     os.chdir(BASE)
     # Resolved config contains secrets: validate in memory, never print it.
-    config = json.loads(run([*COMPOSE,'--profile','test','config','--format','json'],
+    config = json.loads(run([*COMPOSE,'config','--format','json'],
                             capture_output=True,text=True).stdout)
     validate_config(config)
     run([*COMPOSE,'config','--quiet'])
-    run([*COMPOSE,'up','-d','--build','postgres','api','powersync'])
-    run([*COMPOSE,'--profile','test','run','--build','--rm','tests'])
+    run([*COMPOSE,'up','-d','--build','postgres','api'])
     run([*COMPOSE,'ps'])
     print('Complete tunnel/two-PC verification and reviewed teardown separately. Stop on any failure.')
 
