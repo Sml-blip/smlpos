@@ -1,5 +1,5 @@
 import { join, dirname } from 'path'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'fs'
 import { fileURLToPath } from 'url'
 import * as PELibrary from 'pe-library'
 import * as ResEdit from 'resedit'
@@ -8,6 +8,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** Force SMLPOS icon into the Windows exe when signAndEditExecutable is disabled. */
 export default async function afterPack(context) {
+  if (process.env.SMLPOS_TEST_BUILD === '1') {
+    const updateYml = join(context.appOutDir, 'resources', 'app-update.yml')
+    if (existsSync(updateYml)) rmSync(updateYml, { force: true })
+    console.log('[after-pack] Removed resources/app-update.yml (test build)')
+  }
   if (context.electronPlatformName !== 'win32') return
 
   const unpackedRoot = join(context.appOutDir, 'resources', 'app.asar.unpacked')

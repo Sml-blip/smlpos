@@ -8,7 +8,8 @@ import { promisify } from 'util'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
 import { bindRow } from './bindRow'
-import { setupAutoUpdater } from './updater'
+import { setupAutoUpdater, registerTestBuildUpdaterHandlers } from './updater'
+import { TEST_BUILD } from './buildFlags'
 import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
 import { discoverRecoverableDatabases } from './userDataWipe'
 import { applyRemoteRows, getLocalTableCount, isPullTableAllowed, LOCAL_SETTINGS_KEYS } from './syncPull'
@@ -617,6 +618,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     ...(appIcon ? { icon: appIcon } : {}),
+    title: TEST_BUILD ? 'SMLPOS — TEST BUILD' : 'SMLPOS',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#FFD600',
@@ -701,7 +703,13 @@ app.whenReady().then(() => {
   setupIpcHandlers()
   registerHetznerSyncIpc()
   createWindow()
-  setupAutoUpdater(() => mainWindow)
+  console.log(`[startup] userData=${app.getPath('userData')} syncBackend=https://api.pos.sml.boutique`)
+  if (TEST_BUILD) {
+    console.log('[updater] DISABLED (test build)')
+    registerTestBuildUpdaterHandlers()
+  } else {
+    setupAutoUpdater(() => mainWindow)
+  }
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
