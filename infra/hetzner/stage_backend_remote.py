@@ -61,7 +61,7 @@ def validate_config(config):
         raise SystemExit('Unsafe staging DATABASE_URL host or database')
     if config['services']['postgres'].get('environment', {}).get('POSTGRES_DB') != 'smlpos_staging':
         raise SystemExit('Unsafe staging PostgreSQL database name')
-    if any(str(api_env.get(k)).lower() != 'true' for k in ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY']):
+    if any(str(api_env.get(k)).lower() != 'true' for k in ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY','SKIP_STARTUP_MIGRATION']):
         raise SystemExit('Unexpected staging feature flags')
 
 
@@ -84,7 +84,10 @@ def main():
         validate_config(config)
         run(['systemctl','is-active','--quiet','smlpos-staging-deadman.timer'])
         run(['systemctl','list-timers','smlpos-staging-deadman.timer','--no-pager'])
-        run([*COMPOSE,'up','-d','--build','postgres','api'])
+        run([*COMPOSE,'build','api'])
+        run([*COMPOSE,'up','-d','--no-build','--wait','postgres'])
+        run([*COMPOSE,'run','--rm','--no-deps','--name','smlpos-staging-api-1','api','node','src/stagingBootstrap.ts'])
+        run([*COMPOSE,'up','-d','--no-build','api'])
         run([*COMPOSE,'ps'])
         return
     with tarfile.open(BASE/'sync-backend.tar.gz') as tar:
@@ -92,6 +95,14 @@ def main():
             if not (BASE/item.name).resolve().is_relative_to(BASE) or not item.isfile():
                 raise SystemExit('Unsafe archive member')
         tar.extractall(BASE, filter='data')
+    # The deploy user's staging tree must not acquire root-owned source paths.
+    owner = BASE.stat()
+    for root, directories, files in os.walk(BASE):
+        for name in directories + files:
+            path = Path(root) / name
+            if path.is_symlink() or not path.resolve().is_relative_to(BASE):
+                raise SystemExit('Unsafe extracted path')
+            os.chown(path, owner.st_uid, owner.st_gid)
     secret_dir = BASE/'secrets'
     secret_dir.mkdir(mode=0o700)
     values = {'MIN_CLIENT_VERSION':'1.9.1038',

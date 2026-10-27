@@ -8,7 +8,10 @@ const data=JSON.parse(input)
 if(typeof data.username!=='string'||!/^[a-zA-Z0-9_.-]{3,80}$/.test(data.username)||typeof data.password!=='string'||data.password.length<12||!['admin','manager','cashier'].includes(data.role))throw new Error('Invalid user input')
 const pool=createPool(process.env.DATABASE_URL??'')
 try{
- await migrate(pool)
+ if(process.env.SKIP_STARTUP_MIGRATION==='true') {
+  const target=new URL(process.env.DATABASE_URL??'')
+  if(process.env.STAGING_ONLY!=='true'||target.protocol!=='postgresql:'||target.hostname!=='postgres'||target.port!=='5432'||target.username!=='pos_api'||target.pathname!=='/smlpos_staging'||target.search||target.hash)throw new Error('Refusing non-staging migration bypass')
+ } else await migrate(pool)
  const client=await pool.connect()
  try{
   await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(7311044)')

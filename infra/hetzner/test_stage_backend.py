@@ -111,7 +111,7 @@ class SafetyTests(unittest.TestCase):
         config['services']['postgres']['environment'] = {'POSTGRES_DB':'smlpos_staging'}
         config['services']['postgres']['mem_limit'] = 512*1024*1024
         config['services']['api']['environment'] = {key:'true' for key in
-            ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY']}
+            ['LIVE_WRITES_ENABLED','SEED_STAGING_ENABLED','SYNC2_ENABLED','STAGING_ONLY','SKIP_STARTUP_MIGRATION']}
         config['services']['api']['environment']['DATABASE_URL'] = 'postgresql://pos_api:secret@postgres:5432/smlpos_staging'
         remote.validate_config(config)
         variants = []
@@ -138,6 +138,7 @@ class SafetyTests(unittest.TestCase):
         changed()['services']['api']['network_mode'] = 'host'
         changed()['services']['api']['container_name'] = 'pos-v1-api'
         changed()['services']['api']['environment']['LIVE_WRITES_ENABLED'] = 'false'
+        changed()['services']['api']['environment']['SKIP_STARTUP_MIGRATION'] = 'false'
         changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://x:y@postgres:5432/pos'
         changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://x:y@pos-sync-staging-postgres-1:5432/smlpos_staging'
         changed()['services']['api']['environment']['DATABASE_URL'] = 'postgresql://pos_api:y@postgres:5432/smlpos_staging?host=pos-sync-staging-postgres-1'

@@ -44,6 +44,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
+    define: { __SML_TEST_BUILD__: JSON.stringify(testBuild) },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),

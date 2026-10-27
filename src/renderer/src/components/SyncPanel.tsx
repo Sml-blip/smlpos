@@ -3,6 +3,7 @@ import { X, Wifi, WifiOff, Monitor, ShieldCheck, Upload, Pause, Play, AlertTrian
 import type { SeedApi, SeedPanelStatus, SeedRejectedOp, SeedResult } from '../lib/seedTypes'
 import LiveSyncStatus from './LiveSyncStatus'
 import { friendlySyncError } from '../lib/syncErrors'
+declare const __SML_TEST_BUILD__: boolean
 
 const api = window.api as unknown as SeedApi
 
@@ -32,7 +33,7 @@ export default function SyncPanel({ onClose, mode = 'manage' }: { onClose: () =>
   const [err, setErr] = useState<string | null>(null)
   const [phrase, setPhrase] = useState('')
   const [joinPhrase, setJoinPhrase] = useState('')
-  const [form, setForm] = useState({ url: 'https://api.pos.sml.boutique', username: '', password: '', name: 'PC Caisse 2' })
+  const [form, setForm] = useState({ url: typeof __SML_TEST_BUILD__ !== 'undefined' && __SML_TEST_BUILD__ ? 'http://127.0.0.1:23001' : 'https://api.pos.sml.boutique', username: '', password: '', name: 'PC Caisse 2' })
   const [joinStage, setJoinStage] = useState<JoinStage>('credentials')
   const [rejected, setRejected] = useState<SeedRejectedOp[] | null>(null)
   const alive = useRef(true)

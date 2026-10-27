@@ -25,7 +25,7 @@ import {
 } from './r2BackupService'
 import { startSupabaseKeepAlive } from './supabaseKeepAlive'
 import { registerSeedIpc, legacySyncGate } from './seed/ipc'
-import { registerHetznerSyncIpc } from './hetznerSync'
+import { HETZNER_API, registerHetznerSyncIpc } from './hetznerSync'
 import { newCashId, reserveNumber } from './seed/numbering'
 import { guardInvoiceEdit, requireReversal } from './seed/financialGuard'
 import { importDefaultProductCatalog } from './seedProducts'
@@ -703,7 +703,7 @@ app.whenReady().then(() => {
   setupIpcHandlers()
   registerHetznerSyncIpc()
   createWindow()
-  console.log(`[startup] userData=${app.getPath('userData')} syncBackend=https://api.pos.sml.boutique`)
+  console.log(`[startup] userData=${app.getPath('userData')} syncBackend=${HETZNER_API}`)
   if (TEST_BUILD) {
     console.log('[updater] DISABLED (test build)')
     registerTestBuildUpdaterHandlers()

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { convertRow, describeColumns, iterateSeedRows } from './dryRun'
 import { COUNTER_COLUMNS, primaryKeyOf } from './tables'
+import { TEST_BUILD } from '../buildFlags'
 import type {
   BackendError, BatchResult, BootstrapPage, ClientOptions, FinalizeResult, LiveChange, Sync2Verification,
   LiveOp, PullPage, PushResult, Preflight, ServerStatus, Session,
@@ -70,6 +71,7 @@ export class ServerAdapter {
   private readonly sleep: (ms: number) => Promise<void>
 
   constructor(private readonly o: ClientOptions & { appVersion: string }) {
+    if (TEST_BUILD && o.baseUrl !== 'http://127.0.0.1:23001') throw new Error('Test build requires http://127.0.0.1:23001')
     this.f = o.fetchImpl ?? fetch
     this.timeoutMs = o.timeoutMs ?? 30_000
     this.maxAttempts = o.maxAttempts ?? 4
@@ -83,6 +85,7 @@ export class ServerAdapter {
       return await this.f(this.o.baseUrl + path, {
         method, headers: { accept: 'application/json', 'content-type': 'application/json', 'X-Client-Version': this.o.appVersion, ...headers },
         body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal,
+        ...(TEST_BUILD ? { redirect: 'error' as const } : {}),
       })
     } finally { clearTimeout(timer) }
   }

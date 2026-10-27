@@ -45,12 +45,11 @@ services:
       SEED_STAGING_ENABLED: ${SEED_STAGING_ENABLED:?explicit staging flag required}
       SYNC2_ENABLED: ${SYNC2_ENABLED:?explicit staging flag required}
       STAGING_ONLY: ${STAGING_ONLY:?explicit staging flag required}
-      SKIP_STARTUP_MIGRATION: ${SKIP_STARTUP_MIGRATION:?must be true for staging}
+      SKIP_STARTUP_MIGRATION: "true"
       JWT_ISSUER: http://127.0.0.1:23001
       SYNC_URL: http://127.0.0.1:23001
     volumes:
       - ./secrets/jwt_private.pem:/run/secrets/jwt_private.pem:ro
-      - ./api/test:/app/test:ro
     ports: ["127.0.0.1:23001:3000"]
     healthcheck:
       test: [CMD, node, -e, "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

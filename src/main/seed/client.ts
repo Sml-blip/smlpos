@@ -1,5 +1,6 @@
 /** Public seed/sync API kept stable for the rest of the app; protocol details live in serverAdapter. */
 import { ServerAdapter } from './serverAdapter'
+import { TEST_BUILD } from '../buildFlags'
 
 export interface Session {
   access_token: string
@@ -75,6 +76,7 @@ export interface ClientOptions {
 }
 
 export function validateBaseUrl(raw: string): string {
+  if (TEST_BUILD && raw.trim() !== 'http://127.0.0.1:23001') throw new Error('Test build requires http://127.0.0.1:23001')
   let u: URL
   try { u = new URL(raw.trim()) } catch { throw new Error('Invalid backend URL') }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)

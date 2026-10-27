@@ -10,8 +10,10 @@ import { getArchiveDir } from './dataPaths'
 import { inspectSeedCopy } from './seedPreflight'
 import { buildSeedBundle } from '../../deploy/api/src/seedConversion'
 import type { LegacySnapshot } from '../../deploy/api/src/seedConversion'
+import { TEST_BUILD } from './buildFlags'
 
-const API='https://api.pos.sml.boutique'
+export const HETZNER_API=TEST_BUILD?'http://127.0.0.1:23001':'https://api.pos.sml.boutique'
+const API=HETZNER_API
 type Session={accessToken:string;refreshToken:string;expiresAt:number;role:string}
 let refreshInFlight:Promise<Session>|null=null
 let preflightRunning=false
