@@ -8,7 +8,8 @@ POS database.
 ## Safety gate
 
 Provide a dedicated scratch database URL and repeat its exact database name in
-`SMLPOS_E2E_ALLOW_SCRATCH_DB`. The runner rejects names that do not contain a
+`SMLPOS_E2E_ALLOW_SCRATCH_DB`. The runner accepts only a loopback PostgreSQL
+host, rejects names that do not contain a
 `test`, `scratch`, or `e2e` marker, rejects names marked `prod`, `production`,
 or `live`, and never prints the URL. The API integration fixture creates a
 random schema, migrates only that schema, inserts generated test users and
@@ -21,6 +22,24 @@ $env:SMLPOS_E2E_TEST_DATABASE_URL = 'postgresql://user:password@localhost:5432/s
 $env:SMLPOS_E2E_ALLOW_SCRATCH_DB = 'smlpos_e2e_test'
 node scripts/e2e-two-pc/run.mjs
 ```
+
+The runner defaults to `--seeds 20`; `--seeds N` selects a reproducible
+sequence of seeds 1 through N, with 200 high-level operations per seed. It
+prints the seed and a failure immediately if a run fails. A GitHub Actions
+workflow supplies a scratch PostgreSQL 16 service and invokes `--seeds 50`.
+The generator produces sales, returns, price changes, stock adjustments and
+category deletions; writes accumulate in offline windows and device drain
+order varies. The runner checks replica counts, sale totals in millimes,
+product stock and price, duplicate sale numbers, pending outbox entries and
+pull rejects. Some pushes are repeated and the replica SQLite connection is
+closed and reopened during the workload.
+
+**Proof remains incomplete:** `--base-url` currently refuses to connect,
+because external fixture provisioning, isolation and cleanup are not yet
+implemented. The SQLite reopen is not an operating-system process kill, and
+the generated workload does not yet prove random process kills, arbitrary
+request reordering, or all-product stock reconciliation. A pass must not be represented as complete staged or
+physical two-PC verification.
 
 The endpoint is intentionally opt-in: missing or mismatched scratch database
 settings fail before any connection is made. Do not put production credentials
@@ -42,4 +61,4 @@ database and service restart, first-touch lock release only after verification,
 lost push acknowledgement replay, offline sales and line items from both PCs,
 stock movement deltas, customer balance deltas, and final row/count convergence.
 Temporary user-data directories and the random Postgres schema are removed at
-the end. This foundation does not run the 50-seed stress test.
+the end.

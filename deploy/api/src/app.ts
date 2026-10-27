@@ -29,7 +29,7 @@ export function createApp(pool: Pool, config: Config) {
   app.use('*',async(c,next)=>{
     if(config.stagingOnly){
       const host=(c.req.header('host')??'').toLowerCase()
-      if(!['localhost','localhost:3000','localhost:13001','127.0.0.1','127.0.0.1:3000','127.0.0.1:13001','[::1]','[::1]:3000','[::1]:13001'].includes(host))return c.json({code:'STAGING_LOCAL_ONLY'},404)
+      if(!['localhost','localhost:3000','localhost:13001','localhost:23001','127.0.0.1','127.0.0.1:3000','127.0.0.1:13001','127.0.0.1:23001','[::1]','[::1]:3000','[::1]:13001','[::1]:23001'].includes(host))return c.json({code:'STAGING_LOCAL_ONLY'},404)
     }
     await next()
   })

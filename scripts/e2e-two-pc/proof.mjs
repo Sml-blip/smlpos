@@ -10,7 +10,7 @@ import { createPool, migrate } from '../../deploy/api/src/db.ts'
 import { createApp } from '../../deploy/api/src/app.ts'
 import { newId } from '../../deploy/api/src/domain.ts'
 
-export async function desktopProof(databaseUrl) {
+export async function desktopProof(databaseUrl, { seed } = {}) {
   const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..')
   const requireApi=createRequire(join(root,'deploy/api/package.json'))
   const {serve}=requireApi('@hono/node-server'),{hash}=requireApi('@node-rs/argon2')
@@ -32,7 +32,7 @@ export async function desktopProof(databaseUrl) {
     await build({entryPoints:[join(root,'scripts/e2e-two-pc/desktop-proof.ts')],outfile:bundle,bundle:true,platform:'node',format:'cjs',target:'node20',external:['better-sqlite3'],alias:{electron:join(root,'scripts/seed-test/electron-stub.mjs')},logLevel:'error'})
     const runtime=process.env.SMLPOS_SEED_TEST_RUNTIME||join(root,'node_modules/electron/dist',process.platform==='win32'?'electron.exe':'electron')
     const code=await new Promise((resolve,reject)=>{
-      const child=spawn(runtime,[bundle],{cwd:root,windowsHide:true,stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:'1',NODE_PATH:join(root,'node_modules'),USERPROFILE:join(temporary,'profile'),APPDATA:join(temporary,'roaming'),LOCALAPPDATA:join(temporary,'local'),SMLSEED_TMP:temporary,SMLPOS_PROOF_URL:`http://127.0.0.1:${address.port}`,SMLPOS_PROOF_PASSWORD:password}})
+      const child=spawn(runtime,[bundle],{cwd:root,windowsHide:true,stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:'1',NODE_PATH:join(root,'node_modules'),USERPROFILE:join(temporary,'profile'),APPDATA:join(temporary,'roaming'),LOCALAPPDATA:join(temporary,'local'),SMLSEED_TMP:temporary,SMLPOS_PROOF_URL:`http://127.0.0.1:${address.port}`,SMLPOS_PROOF_PASSWORD:password,...(seed?{SMLPOS_WORKLOAD_SEED:String(seed)}:{})}})
       const timer=setTimeout(()=>{child.kill();reject(new Error('Desktop proof exceeded 120 seconds'))},120000)
       child.once('error',error=>{clearTimeout(timer);reject(error)})
       child.once('exit',code=>{clearTimeout(timer);resolve(code)})

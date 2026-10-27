@@ -27,5 +27,6 @@ test('staging-only API rejects public hosts while retaining loopback health acce
  const pool={query:async()=>({rows:[{ok:1}]})} as unknown as Pool
  const app=createApp(pool,{privateKey,issuer:'https://fixture.invalid',keyId:'fixture',minimumVersion:'1.10.0',syncUrl:'https://sync.fixture.invalid',liveWrites:false,stagingOnly:true})
  assert.equal((await app.request('/health',{headers:{host:'127.0.0.1:13001'}})).status,200)
+ assert.equal((await app.request('/health',{headers:{host:'127.0.0.1:23001'}})).status,200)
  assert.equal((await app.request('/health',{headers:{host:'api.pos.sml.boutique'}})).status,404)
 })

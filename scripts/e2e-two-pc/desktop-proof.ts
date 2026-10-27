@@ -6,6 +6,7 @@ import { SeedService } from '../../src/main/seed/service'
 import { SeedLedger } from '../../src/main/seed/ledger'
 import { captureState, setCaptureState } from '../../src/main/seed/gate'
 import { liveIssues } from '../../src/main/seed/monitor'
+import { generateWorkload } from './workload.mjs'
 
 async function main(){
  const baseUrl=process.env.SMLPOS_PROOF_URL!,password=process.env.SMLPOS_PROOF_PASSWORD!,root=process.env.SMLSEED_TMP!
@@ -18,9 +19,14 @@ async function main(){
   const ledger=new SeedLedger(join(root,name+'.ledger.db'));ledgers.push(ledger)
   return new SeedService({liveDb:db,ledger,archiveDir:join(root,name+'-backups'),secrets:{seal:()=>null,open:()=>null},appVersion:'1.9.1039',platform:'win32',legacyQueue:()=>({pending:0,failed:0}),fetchImpl,sleep:async()=>{}})
  }
- let lostAck=false,interruptReplica=false
+ let lostAck=false,interruptReplica=false,duplicateNext=false
  const sourceFetch:typeof fetch=async(input,init)=>{
   const response=await fetch(input,init)
+  if(duplicateNext&&new URL(String(input)).pathname==='/sync2/push'){
+   duplicateNext=false
+   const replay=await fetch(input,init)
+   assert.equal(replay.status,200,'identical push replay failed')
+  }
   if(lostAck&&new URL(String(input)).pathname==='/sync2/push'){lostAck=false;await response.arrayBuffer();throw new TypeError('Synthetic lost acknowledgement')}
   return response
  }
@@ -87,6 +93,69 @@ async function main(){
   await pull(a,source);await pull(b,replica)
   assert.equal(stock(source),102);assert.equal(balance(replica),45.94)
   console.log('PASS: offline sales + lines + stock + balances converge in both directions without replay duplication')
+  const price=(db:Database.Database)=>(db.prepare("SELECT round(prix_vente*1000) n FROM produits WHERE id='proof-product'").get() as {n:number}).n
+  source.prepare('UPDATE produits SET prix_vente=? WHERE id=?').run(10.001,'proof-product')
+  await drain(a,source);await pull(b,replica);assert.equal(price(replica),10001)
+  replica.prepare('UPDATE produits SET prix_vente=? WHERE id=?').run(20.002,'proof-product')
+  await drain(b,replica);await pull(a,source);assert.equal(price(source),20002)
+  source.prepare('UPDATE produits SET prix_vente=? WHERE id=?').run(30.003,'proof-product')
+  await drain(a,source);await pull(b,replica);assert.equal(price(replica),30003)
+  console.log('PASS: explicit A→B→A price edits converge in millimes')
+  if (process.env.SMLPOS_WORKLOAD_SEED) {
+   const seed=Number(process.env.SMLPOS_WORKLOAD_SEED)
+   const workload=generateWorkload(seed,200)
+   let pending=0,restarts=0
+   const flush=async(reverse:boolean)=>{
+    if(reverse){await drain(b,replica);await drain(a,source)}else{await drain(a,source);await drain(b,replica)}
+    await pull(a,source);await pull(b,replica);pending=0
+   }
+   for(const item of workload){
+    if(item.duplicate)duplicateNext=true
+    const db=item.device==='A'?source:replica
+    const id=`work-${seed}-${item.index}`
+    db.transaction(()=>{
+     if(item.kind==='sale'){
+      const amount=item.value/1000
+      db.prepare('INSERT INTO ventes(id,numero,client_id,total_ttc) VALUES(?,?,?,?)').run(id,`NUM-${seed}-${item.index}`,'proof-client',amount)
+      db.prepare('INSERT INTO lignes_vente(id,vente_id,produit_id,designation,quantite,prix_unitaire,total_ligne) VALUES(?,?,?,?,?,?,?)').run(id+'-line',id,'proof-product','Synthetic',1,amount,amount)
+      db.prepare('UPDATE produits SET stock_actuel=stock_actuel-1 WHERE id=?').run('proof-product')
+     }else if(item.kind==='return'){
+      db.prepare('INSERT INTO retours(id,produit_id,designation,quantite,prix_unitaire,type_retour,montant_rembourse) VALUES(?,?,?,?,?,?,?)').run(id,'proof-product','Synthetic',1,item.value/1000,'SANS_PROBLEME',item.value/1000)
+      db.prepare('UPDATE produits SET stock_actuel=stock_actuel+1 WHERE id=?').run('proof-product')
+     }else if(item.kind==='price'){
+      db.prepare('UPDATE produits SET prix_vente=? WHERE id=?').run(item.value/1000,'proof-product')
+     }else if(item.kind==='stock'){
+      db.prepare('UPDATE produits SET stock_actuel=stock_actuel+? WHERE id=?').run(item.value%7-3,'proof-product')
+     }else{
+      db.prepare('INSERT INTO categories(id,nom) VALUES(?,?)').run(id,id)
+      db.prepare('DELETE FROM categories WHERE id=?').run(id)
+     }
+    })()
+    pending++
+    // Offline windows accumulate writes locally. Alternating drain order changes
+    // cross-device request order while preserving each device's outbox order.
+    if(pending>=8 || (!item.offline && item.kind==='price')) await flush(item.reorder)
+    if(item.restart && item.device==='B'){
+     ledgers.pop()!.close();replica.close();replica=new Database(replicaPath)
+     replica.pragma('foreign_keys=ON');replica.pragma('recursive_triggers=ON')
+     b=service(()=>replica,'replica');await b.registerDevice(baseUrl,'desktop-proof',password,'Synthetic replica')
+     restarts++
+    }
+   }
+   await flush(false)
+   const snapshot=(db:Database.Database)=>({
+    sales:count(db,'ventes'), lines:count(db,'lignes_vente'), returns:count(db,'retours'),
+    categories:count(db,'categories'), stock:stock(db),
+    price:(db.prepare("SELECT round(prix_vente*1000) n FROM produits WHERE id='proof-product'").get() as {n:number}).n,
+    millimes:(db.prepare('SELECT coalesce(sum(round(total_ttc*1000)),0) n FROM ventes').get() as {n:number}).n,
+    duplicateNumbers:(db.prepare('SELECT count(*) n FROM (SELECT numero FROM ventes GROUP BY numero HAVING count(*)>1)').get() as {n:number}).n,
+    pending:(db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,
+    pullRejects:(db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,
+   })
+   const first=snapshot(source),second=snapshot(replica)
+   assert.deepEqual(second,first);assert.equal(first.duplicateNumbers,0);assert.equal(first.pending,0);assert.equal(first.pullRejects,0)
+   console.log(`PASS random seed=${seed} operations=${workload.length} sqlite_reopens=${restarts} result=${JSON.stringify(first)}`)
+  }
  }finally{for(const ledger of ledgers)ledger.close();replica.close();closeDatabase()}
 }
 main().catch(error=>{console.error(error);process.exitCode=1})
