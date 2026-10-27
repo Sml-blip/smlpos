@@ -1,0 +1,13 @@
+api.{$DOMAIN} {
+	encode gzip
+	reverse_proxy api:3000
+    header X-Content-Type-Options nosniff
+}
+
+sync.{$DOMAIN} {
+	# PowerSync keeps long-lived streaming connections open: don't buffer them
+	reverse_proxy powersync:8080 {
+		flush_interval -1
+	}
+}
+

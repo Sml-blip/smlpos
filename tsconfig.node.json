@@ -10,12 +10,17 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["electron-vite/node"]
   },
   "include": [
     "electron.vite.config.*",
     "src/main/**/*",
     "src/shared/**/*",
-    "src/preload/**/*"
+    "src/preload/**/*",
+    "deploy/api/src/domain.ts",
+    "deploy/api/src/seedContract.ts",
+    "deploy/api/src/seedConversion.ts"
   ]
 }
+

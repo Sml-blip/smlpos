@@ -7,9 +7,15 @@ export function liveStatus(db: Database.Database) {
   const count = (sql: string) => (db.prepare(sql).get() as { n: number }).n
   const cursor = Number(captureState(db, 'pull_cursor') ?? 0)
   const head = captureState(db, 'server_seq')
+  let bootstrapVerification: {serverSeq:number;tables:number;rows:number;moneyFields:number}|null=null
+  try { bootstrapVerification=JSON.parse(captureState(db,'bootstrap_verification')??'null') } catch { /* old/corrupt status is not trusted */ }
   return {
     prepared: ready, enabled: canDrainOutbox(db),
     joining: captureState(db, 'replica_join_pending') === '1',
+    bootstrapState: captureState(db, 'bootstrap_state') ?? 'idle',
+    bootstrapRows: Number(captureState(db, 'bootstrap_rows') ?? 0),
+    bootstrapPages: Number(captureState(db, 'bootstrap_pages') ?? 0),
+    bootstrapVerification,
     backend: captureState(db, 'sync_backend') === 'vps' ? 'vps' as const : 'legacy' as const,
     pending: ready ? count("SELECT count(*) n FROM outbox WHERE sent_at IS NULL AND (last_error IS NULL OR last_error NOT LIKE 'rejected:%')") : 0,
     rejected: ready ? count("SELECT count(*) n FROM outbox WHERE sent_at IS NULL AND last_error LIKE 'rejected:%'") : 0,

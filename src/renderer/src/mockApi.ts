@@ -2,7 +2,6 @@
 // Provides realistic dummy data so all tabs render correctly.
 import PRODUITS_SEED from './productsSeed.json'
 import type { DemandeClient } from './lib/types'
-import { seedMock } from './lib/seedMock'
 
 const OPERATEURS = [
   { id: 'op1', nom: 'Amira', identifiant: 'amira', role: 'superadmin' as const, actif: 1 },
@@ -172,8 +171,15 @@ let nextFacClientSeq = 2
 let nextFacFourn = FACTURES_FOURNISSEURS.length
 
 const mockApi = {
-  ...seedMock,
-  sync2ReserveNumber: async (_table: string, proposed: string) => proposed,
+  // Browser-only fixtures. They never contact the VPS or touch a desktop DB.
+  hetznerOverview: async () => ({
+    deviceId:'preview-main',deviceName:'PC principal · aperçu',endpoint:'Aperçu sans connexion réelle',
+    localQueue:0,importEnabled:false,authenticated:true,serverReachable:false,stage:'preview',
+    message:'Aperçu de l’interface uniquement — aucune connexion ni donnée réelle.',role:'admin',rejections:[],
+    devices:[{id:'preview-main',name:'PC principal · aperçu',platform:'windows',client_version:'1.10.0',importer:false,last_seen_at:new Date().toISOString(),revoked_at:null,online:false}],
+  }),
+  hetznerLogin: async () => { throw new Error('Connexion disponible uniquement dans l’application Electron.') },
+  hetznerPreflight: async () => { throw new Error('La sauvegarde vérifiée doit être créée dans l’application Electron sur le PC principal.') },
   dbQuery: async () => [],
   dbRun: async () => ({ changes: 1, lastInsertRowid: 1 }),
   dbGet: async () => null,
@@ -497,7 +503,7 @@ const mockApi = {
     return CLIENTS
   },
   clientsCreate: async (c: unknown) => ({ ...(c as object), id: `cl${Date.now()}`, solde_credit: 0, actif: 1, created_at: new Date().toISOString() }),
-  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
+  clientsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as object) }),
 
   // Crédits clients
   creditsList: async () => [],
@@ -508,14 +514,14 @@ const mockApi = {
   avancesClientsList: async () => [],
 
   // Ventes: annulation
-  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...(data as Record<string, unknown>) }),
+  ventesAnnuler: async (id: string, data: unknown) => ({ success: true, id, ...(data as object) }),
 
   // Organisations
   organisationsList: async () => [
     { id: 'org1', nom: 'B2B Tech', telephone: '71 000 001', matricule_fiscal: '1234567B', credit_total: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   organisationsCreate: async (org: unknown) => ({ ...(org as object), id: `org${Date.now()}`, credit_total: 0, actif: 1, created_at: new Date().toISOString() }),
-  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
+  organisationsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as object) }),
   organisationsDelete: async () => ({ success: true }),
 
   // Personnels
@@ -523,7 +529,7 @@ const mockApi = {
     { id: 'pers1', nom: 'Salah', prenom: 'Ben Amor', poste: 'Technicien', telephone: '22 111 222', cin: '12345678', salaire_base: 900, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() },
   ],
   personnelsCreate: async (p: unknown) => ({ ...(p as object), id: `pers${Date.now()}`, avance_solde: 0, credit_solde: 0, actif: 1, created_at: new Date().toISOString() }),
-  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
+  personnelsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as object) }),
   personnelsDelete: async () => ({ success: true }),
   mouvementsPersonnelsList: async () => [],
   mouvementsPersonnelsCreate: async (m: unknown) => ({ ...(m as object), id: `mp${Date.now()}`, created_at: new Date().toISOString() }),
@@ -534,7 +540,7 @@ const mockApi = {
   documentsGet: async (id: string) => ({ id, numero: 'FAC-MOCK-001', type_document: 'FACTURE_VENTE', statut: 'ACTIF', total_ht: 0, total_tva: 0, total_ttc: 0, created_at: new Date().toISOString() }),
   documentsCreateDailyFactureF: async () => ({ success: true, documentId: 'daily-f-mock', numero: '26/#00001', lineCount: 1, totalTTC: 10 }),
   documentsCreate: async (doc: unknown, _lignes: unknown[]) => ({ ...(doc as object), id: `doc${Date.now()}`, created_at: new Date().toISOString() }),
-  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
+  documentsUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as object) }),
   documentsRevoquer: async () => ({ success: true }),
   documentsAnnulerAvecAvoir: async (_id: string, _motif?: string) => ({ success: true, avoir: { id: `av${Date.now()}`, numero: 'AVO-MOCK-001' } }),
   documentsReplaceLignes: async (_documentId: string, _lignes: unknown[], _totals: unknown) => ({ success: true }),
@@ -543,7 +549,7 @@ const mockApi = {
 
   authVerifyCaissePin: async (pin: string) => ({ valid: pin === 'sml2023' }),
 
-  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as Record<string, unknown>) }),
+  facturesFournisseursUpdate: async (_id: string, data: unknown) => ({ success: true, ...(data as object) }),
   facturesFournisseursReplaceLignes: async () => ({ success: true }),
 
   // Factures fournisseurs marquer reçu
@@ -629,3 +635,4 @@ export function injectMockApi() {
     ;(window as unknown as { api: typeof mockApi }).api = mockApi
   }
 }
+

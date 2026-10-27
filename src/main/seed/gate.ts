@@ -1,4 +1,15 @@
 import type Database from 'better-sqlite3'
+import { randomBytes } from 'node:crypto'
+
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+function newDeviceUuidV7(): string {
+  const bytes = randomBytes(16)
+  bytes.writeUIntBE(Date.now(), 0, 6)
+  bytes[6] = (bytes[6] & 15) | 112
+  bytes[8] = (bytes[8] & 63) | 128
+  const value = bytes.toString('hex')
+  return `${value.slice(0,8)}-${value.slice(8,12)}-${value.slice(12,16)}-${value.slice(16,20)}-${value.slice(20)}`
+}
 
 export function captureState(db: Database.Database, key: string): string | null {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_state'").get()) return null
@@ -6,6 +17,17 @@ export function captureState(db: Database.Database, key: string): string | null 
 }
 export function setCaptureState(db: Database.Database, key: string, value: string): void {
   db.prepare('INSERT INTO sync_state(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(key, value)
+}
+/** Stable server device identity. Never silently replace a previously assigned non-v7 identity. */
+export function ensureDeviceId(db: Database.Database, preferredId?: string | null): string {
+  db.exec('CREATE TABLE IF NOT EXISTS sync_state(k TEXT PRIMARY KEY,v TEXT)')
+  const current = captureState(db, 'device_id')
+  if (current && UUID_V7.test(current)) return current
+  if (current) throw new Error('Stored device ID is not a UUIDv7; refusing to change this device identity')
+  if (preferredId && !UUID_V7.test(preferredId)) throw new Error('Existing device ID is not a UUIDv7; refusing to replace this device identity')
+  const id = preferredId || newDeviceUuidV7()
+  setCaptureState(db, 'device_id', id)
+  return id
 }
 export function closeSeedGate(db: Database.Database): void {
   if (captureState(db, 'apply_mute') === null) return

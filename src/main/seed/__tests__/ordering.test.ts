@@ -28,7 +28,7 @@ function setup() {
 test('capture precedes snapshot; 20 sales, 3 returns, adjustment and deleted draft survive seed pause',async()=>{
   const f=setup()
   try {
-    await f.service.registerDevice('https://mock.invalid','good-token','Fixture')
+    await f.service.registerDevice('https://mock.invalid','good-user','good-pass','Fixture')
     let copies=0;const native=f.db.backup.bind(f.db)
     f.db.backup=async(path:string)=>{
       if(++copies===2){assert.ok(f.db.prepare("SELECT 1 FROM sqlite_master WHERE name='outbox'").get());f.db.exec("UPDATE produits SET stock_actuel=95 WHERE id='p'")}
@@ -68,7 +68,7 @@ test('capture precedes snapshot; 20 sales, 3 returns, adjustment and deleted dra
 test('rejections keep gate closed; a verified snapshot remains valid after source deletion',async()=>{
   const f=setup()
   try {
-    await f.service.registerDevice('https://mock.invalid','good-token','Fixture');await f.service.backupAndCheck();await f.service.approve('SEED')
+    await f.service.registerDevice('https://mock.invalid','good-user','good-pass','Fixture');await f.service.backupAndCheck();await f.service.approve('SEED')
     f.backend.rejectPks.add('p');await f.service.run();assert.equal(f.ledger.state(),'needs_review');assert.equal(canDrainOutbox(f.db),false)
     f.backend.rejectPks.clear();await f.service.run();assert.equal(canDrainOutbox(f.db),true)
     const backup=f.ledger.getJson<{path:string}>('backup')!

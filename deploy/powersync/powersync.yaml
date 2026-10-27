@@ -1,0 +1,25 @@
+# Verify keys against the current PowerSync self-hosting docs before first run.
+telemetry:
+  disable_telemetry_sharing: true
+
+replication:
+  connections:
+    - type: postgresql
+      uri: !env PS_DATA_SOURCE_URI
+      sslmode: disable        # internal Docker network only
+
+storage:
+  type: postgresql
+  uri: !env PS_STORAGE_URI
+  sslmode: disable
+
+port: 8080
+
+sync_config:
+  path: sync_rules.yaml
+
+client_auth:
+  # the API serves its public key(s); tokens must carry a matching `kid`
+  jwks_uri: http://api:3000/.well-known/jwks.json
+  audience: ["powersync"]
+

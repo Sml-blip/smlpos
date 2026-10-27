@@ -1,0 +1,818 @@
+{
+  "tables": [
+    {
+      "name": "activity_logs",
+      "columns": [
+        "id",
+        "shift_id",
+        "operateur",
+        "action",
+        "details",
+        "montant",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "ajustements_fournisseurs",
+      "columns": [
+        "id",
+        "fournisseur_id",
+        "type",
+        "montant",
+        "motif",
+        "caisse_source",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "app_settings",
+      "columns": [
+        "key",
+        "value",
+        "updated_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "avances_clients",
+      "columns": [
+        "id",
+        "numero",
+        "client_id",
+        "client_nom",
+        "client_tel",
+        "client_adresse",
+        "produit_description",
+        "montant",
+        "mode_paiement",
+        "reference",
+        "note",
+        "shift_id",
+        "operateur",
+        "type_avance",
+        "dossier_id",
+        "produit_id",
+        "numero_serie",
+        "prix_produit",
+        "inclure_facture",
+        "produits_json",
+        "facture_id",
+        "statut",
+        "vente_id",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "caisse_interne",
+      "columns": [
+        "id",
+        "date_journal",
+        "solde_ouverture",
+        "total_entrees",
+        "total_sorties",
+        "notes",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "categories",
+      "columns": [
+        "id",
+        "nom",
+        "icone"
+      ],
+      "local": false
+    },
+    {
+      "name": "clients",
+      "columns": [
+        "id",
+        "nom",
+        "telephone",
+        "email",
+        "adresse",
+        "matricule_fiscal",
+        "credit_limite",
+        "solde_credit",
+        "organisation_id",
+        "agent",
+        "actif",
+        "notes",
+        "created_at",
+        "fidelite_code",
+        "solde_fidelite"
+      ],
+      "local": false
+    },
+    {
+      "name": "credits_clients",
+      "columns": [
+        "id",
+        "client_id",
+        "client_nom",
+        "shift_id",
+        "type",
+        "montant",
+        "reference",
+        "note",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "demandes_clients",
+      "columns": [
+        "id",
+        "type_demande",
+        "titre",
+        "details",
+        "client_nom",
+        "client_tel",
+        "avance",
+        "responsable_id",
+        "responsable_nom",
+        "echeance",
+        "priorite",
+        "statut",
+        "created_by",
+        "completed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "documents",
+      "columns": [
+        "id",
+        "numero",
+        "type_document",
+        "statut",
+        "shift_id",
+        "vente_id",
+        "fournisseur_id",
+        "client_id",
+        "client_nom",
+        "client_tel",
+        "client_adresse",
+        "client_matricule",
+        "total_ht",
+        "total_tva",
+        "total_ttc",
+        "statut_paiement",
+        "montant_paye",
+        "date_echeance",
+        "imprimee",
+        "layout_snapshot",
+        "contenu_json",
+        "created_at",
+        "updated_at",
+        "exo",
+        "timbre",
+        "ht_7",
+        "tva_7",
+        "ht_19",
+        "tva_19",
+        "total_remise",
+        "tva_taux_principal",
+        "revoque_par",
+        "revoque_at",
+        "revoque_motif",
+        "reference_source_id",
+        "avoir_id",
+        "document_origine_id",
+        "facture_origine_numero",
+        "annule_motif"
+      ],
+      "local": false
+    },
+    {
+      "name": "factures_clients",
+      "columns": [
+        "id",
+        "numero",
+        "shift_id",
+        "vente_id",
+        "type_facture",
+        "client_nom",
+        "client_tel",
+        "client_adresse",
+        "client_matricule",
+        "total_ht",
+        "total_tva",
+        "total_ttc",
+        "imprimee",
+        "created_at",
+        "tva_taux_principal",
+        "exo"
+      ],
+      "local": false
+    },
+    {
+      "name": "factures_fournisseurs",
+      "columns": [
+        "id",
+        "numero_facture",
+        "fournisseur_id",
+        "date_facture",
+        "date_echeance",
+        "statut_paiement",
+        "montant_ht",
+        "montant_tva",
+        "montant_ttc",
+        "montant_paye",
+        "retenue_source_pct",
+        "retenue_source_montant",
+        "net_a_payer",
+        "notes",
+        "created_at",
+        "type",
+        "statut_reception",
+        "exo",
+        "timbre",
+        "ht_7",
+        "tva_7",
+        "ht_19",
+        "tva_19",
+        "total_remise",
+        "updated_at",
+        "stock_applied"
+      ],
+      "local": false
+    },
+    {
+      "name": "fournisseur_commerciaux",
+      "columns": [
+        "id",
+        "fournisseur_id",
+        "nom",
+        "telephone",
+        "email",
+        "actif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "fournisseurs",
+      "columns": [
+        "id",
+        "nom",
+        "contact_nom",
+        "telephone",
+        "email",
+        "adresse",
+        "matricule_fiscal",
+        "rib",
+        "solde_du",
+        "notes",
+        "actif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "inventory_repair_ledger",
+      "columns": [
+        "repair_key",
+        "operation_id",
+        "repaired_at",
+        "details"
+      ],
+      "local": true
+    },
+    {
+      "name": "lignes_document",
+      "columns": [
+        "id",
+        "document_id",
+        "produit_id",
+        "designation",
+        "quantite",
+        "prix_unitaire",
+        "remise_pct",
+        "tva_taux",
+        "total_ht",
+        "total_tva",
+        "total_ttc",
+        "type_produit",
+        "numero_serie"
+      ],
+      "local": false
+    },
+    {
+      "name": "lignes_facture_fournisseur",
+      "columns": [
+        "id",
+        "facture_id",
+        "produit_id",
+        "designation",
+        "quantite",
+        "ancien_prix_achat",
+        "nouveau_prix_achat",
+        "prix_vente_suggere",
+        "prix_vente_applique",
+        "tva_taux",
+        "pending_product_json",
+        "numeros_serie_json"
+      ],
+      "local": false
+    },
+    {
+      "name": "lignes_vente",
+      "columns": [
+        "id",
+        "vente_id",
+        "produit_id",
+        "designation",
+        "quantite",
+        "prix_unitaire",
+        "remise_pct",
+        "total_ligne",
+        "type_produit",
+        "numero_serie"
+      ],
+      "local": false
+    },
+    {
+      "name": "mouvements_caisse_interne",
+      "columns": [
+        "id",
+        "date_journal",
+        "type",
+        "categorie",
+        "montant",
+        "reference_id",
+        "note",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "mouvements_echange",
+      "columns": [
+        "id",
+        "vente_id",
+        "shift_id",
+        "type",
+        "montant",
+        "ancien_total",
+        "nouveau_total",
+        "operateur",
+        "details_json",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "mouvements_fidelite",
+      "columns": [
+        "id",
+        "client_id",
+        "vente_id",
+        "type",
+        "montant",
+        "solde_avant",
+        "solde_apres",
+        "note",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "mouvements_personnels",
+      "columns": [
+        "id",
+        "personnel_id",
+        "type",
+        "montant",
+        "mois",
+        "note",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "mouvements_tresorerie_attente",
+      "columns": [
+        "id",
+        "direction",
+        "categorie",
+        "montant",
+        "reference_id",
+        "note",
+        "operateur",
+        "impact_applique",
+        "statut",
+        "created_at",
+        "accepted_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "operateurs",
+      "columns": [
+        "id",
+        "nom",
+        "identifiant",
+        "role",
+        "actif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "organisations",
+      "columns": [
+        "id",
+        "nom",
+        "telephone",
+        "email",
+        "adresse",
+        "matricule_fiscal",
+        "credit_total",
+        "notes",
+        "actif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "paiements_fournisseurs",
+      "columns": [
+        "id",
+        "facture_id",
+        "fournisseur_id",
+        "montant",
+        "mode_paiement",
+        "reference_cheque",
+        "date_paiement",
+        "notes",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "personnels",
+      "columns": [
+        "id",
+        "nom",
+        "prenom",
+        "poste",
+        "telephone",
+        "cin",
+        "date_embauche",
+        "salaire_base",
+        "avance_solde",
+        "credit_solde",
+        "actif",
+        "notes",
+        "created_at",
+        "updated_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "pieces_reparation",
+      "columns": [
+        "id",
+        "reparation_id",
+        "produit_id",
+        "designation",
+        "quantite",
+        "prix_unitaire",
+        "type",
+        "prix_achat",
+        "destock_stock"
+      ],
+      "local": false
+    },
+    {
+      "name": "produits",
+      "columns": [
+        "id",
+        "code_barre",
+        "reference",
+        "nom",
+        "description",
+        "categorie",
+        "categorie_id",
+        "type",
+        "prix_achat",
+        "prix_vente",
+        "tva_taux",
+        "stock_actuel",
+        "stock_minimum",
+        "fournisseur",
+        "fournisseur_id",
+        "actif",
+        "created_at",
+        "updated_at",
+        "has_serial_number",
+        "numero_serie",
+        "tva_achat_pct",
+        "marge_pct",
+        "coef_av",
+        "cout_supplementaire",
+        "cout_de_revient",
+        "prix_vente_ht",
+        "pvp",
+        "prix_achat_ttc",
+        "source_tag"
+      ],
+      "local": false
+    },
+    {
+      "name": "rapports_caisse",
+      "columns": [
+        "id",
+        "numero",
+        "shift_id",
+        "date_journal",
+        "session_type",
+        "operateur",
+        "started_at",
+        "ended_at",
+        "fond_de_caisse",
+        "total_entrees",
+        "total_sorties",
+        "solde_theorique",
+        "solde_reel",
+        "ecart",
+        "notes",
+        "summary_json",
+        "operations_json",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "remboursements_ventes",
+      "columns": [
+        "id",
+        "vente_id",
+        "shift_id",
+        "montant",
+        "mode_paiement",
+        "operateur",
+        "motif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "reparation_status_history",
+      "columns": [
+        "id",
+        "reparation_id",
+        "statut",
+        "source_status",
+        "note",
+        "changed_by",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "reparations",
+      "columns": [
+        "id",
+        "numero",
+        "shift_id",
+        "operateur_nom",
+        "client_nom",
+        "client_tel",
+        "type_appareil",
+        "marque",
+        "modele",
+        "description_panne",
+        "main_oeuvre",
+        "acompte",
+        "total_estime",
+        "total_final",
+        "statut",
+        "technicien",
+        "notes_technicien",
+        "created_at",
+        "updated_at",
+        "benefice",
+        "repair_token",
+        "estimated_completion"
+      ],
+      "local": false
+    },
+    {
+      "name": "retours",
+      "columns": [
+        "id",
+        "vente_id",
+        "vente_numero",
+        "shift_id",
+        "produit_id",
+        "designation",
+        "quantite",
+        "prix_unitaire",
+        "motif",
+        "type_retour",
+        "statut",
+        "resolution",
+        "montant_rembourse",
+        "operateur",
+        "created_at",
+        "updated_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "saved_paniers",
+      "columns": [
+        "id",
+        "label",
+        "saved_at",
+        "shift_id",
+        "payload_json",
+        "updated_at"
+      ],
+      "local": true
+    },
+    {
+      "name": "serial_numbers",
+      "columns": [
+        "id",
+        "produit_id",
+        "numero_serie",
+        "statut",
+        "vente_id",
+        "created_at",
+        "updated_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "services_pos",
+      "columns": [
+        "id",
+        "nom",
+        "code_barre",
+        "logo_url",
+        "actif",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "shifts",
+      "columns": [
+        "id",
+        "operateur_id",
+        "operateur_nom",
+        "fond_de_caisse",
+        "started_at",
+        "ended_at",
+        "total_ventes_especes",
+        "total_services",
+        "total_reparations",
+        "total_credits_recus",
+        "total_sorties",
+        "solde_theorique",
+        "solde_declare",
+        "ecart",
+        "transfere_caisse_interne",
+        "notes_cloture",
+        "session_type"
+      ],
+      "local": false
+    },
+    {
+      "name": "sorties_caisse",
+      "columns": [
+        "id",
+        "shift_id",
+        "montant",
+        "note",
+        "operateur",
+        "created_at",
+        "mouvement_interne_id"
+      ],
+      "local": false
+    },
+    {
+      "name": "sync_queue",
+      "columns": [
+        "id",
+        "table_name",
+        "operation",
+        "payload",
+        "record_id",
+        "attempts",
+        "last_error",
+        "synced_at",
+        "created_at"
+      ],
+      "local": true
+    },
+    {
+      "name": "transactions_services",
+      "columns": [
+        "id",
+        "shift_id",
+        "service_id",
+        "service_nom",
+        "montant_frais",
+        "note",
+        "operateur",
+        "created_at"
+      ],
+      "local": false
+    },
+    {
+      "name": "ventes",
+      "columns": [
+        "id",
+        "numero",
+        "shift_id",
+        "operateur_nom",
+        "client_nom",
+        "client_tel",
+        "client_adresse",
+        "client_matricule",
+        "sous_total",
+        "total_remises",
+        "total_ttc",
+        "mode_paiement",
+        "montant_recu",
+        "monnaie_rendue",
+        "type",
+        "note_vente",
+        "a_facture",
+        "created_at",
+        "montant_encaisse_initial",
+        "statut",
+        "annule_par",
+        "annule_at",
+        "annule_motif",
+        "fidelite_utilisee",
+        "fidelite_gagnee",
+        "type_vente",
+        "client_id",
+        "avance_dossier_id",
+        "avance_utilisee"
+      ],
+      "local": false
+    },
+    {
+      "name": "ventes_en_ligne",
+      "columns": [
+        "id",
+        "numero",
+        "shift_id",
+        "operateur_nom",
+        "client_nom",
+        "client_tel",
+        "client_adresse",
+        "produits_json",
+        "montant_ttc",
+        "montant_net",
+        "frais_livraison",
+        "frais_retour",
+        "statut",
+        "livraison_nom",
+        "montant_recu",
+        "reference_livraison",
+        "note",
+        "created_at",
+        "updated_at"
+      ],
+      "local": false
+    }
+  ],
+  "derived": {
+    "produits": [
+      "stock_actuel"
+    ],
+    "clients": [
+      "solde_credit",
+      "solde_fidelite"
+    ],
+    "fournisseurs": [
+      "solde_du"
+    ],
+    "organisations": [
+      "credit_total"
+    ],
+    "personnels": [
+      "avance_solde",
+      "credit_solde"
+    ]
+  }
+}
+

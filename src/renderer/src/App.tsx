@@ -4,6 +4,7 @@ import ShiftModal from './components/ShiftModal'
 import SplashScreen from './components/SplashScreen'
 import LockScreen from './components/LockScreen'
 import TitleBar from './components/TitleBar'
+import MultiDevicePanel from './components/MultiDevicePanel'
 import StatusBar from './components/StatusBar'
 import POSTab from './modules/pos/POSTab'
 import HistoriqueTab from './modules/historique/HistoriqueTab'
@@ -246,6 +247,7 @@ export default function App() {
       )}
 
       <TitleBar />
+      <MultiDevicePanel />
 
       {/* Tab Navigation — scrollable to fit all 12 tabs */}
       <div className="flex items-center gap-0 bg-[var(--bg-primary)] border-b border-border px-2 pt-1 flex-shrink-0 overflow-x-auto">

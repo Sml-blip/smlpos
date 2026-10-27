@@ -43,7 +43,9 @@ export type SeedStateName =
 
 export interface SeedPanelStatus {
   live: {
-    prepared: boolean; enabled: boolean; joining: boolean; backend: 'legacy' | 'vps'; pending: number; rejected: number; pullRejected: number
+    prepared: boolean; enabled: boolean; joining: boolean; bootstrapState: 'idle' | 'downloading' | 'verifying' | 'complete' | 'review' | 'error'; bootstrapRows: number; bootstrapPages: number
+    bootstrapVerification: { serverSeq: number; tables: number; rows: number; moneyFields: number } | null
+    backend: 'legacy' | 'vps'; pending: number; rejected: number; pullRejected: number
     cursor: number; serverSeq: number | null; lag: number | null; lastPush: string | null; lastPull: string | null
     pushError: string | null; pullError: string | null; retryAt: number
   }
@@ -78,7 +80,7 @@ export interface SeedApi {
   sync2Retry: () => Promise<SeedResult<void>>
   sync2Export: () => Promise<SeedResult<string | null>>
   seedStatus: (force?: boolean) => Promise<SeedResult<SeedPanelStatus>>
-  seedRegister: (baseUrl: string, token: string, name: string) => Promise<SeedResult<void>>
+  seedRegister: (baseUrl: string, username: string, password: string, name: string) => Promise<SeedResult<void>>
   seedBackupAndCheck: () => Promise<SeedResult<SeedReportView>>
   seedRecheck: () => Promise<SeedResult<SeedReportView>>
   seedApprove: (phrase: string) => Promise<SeedResult<void>>

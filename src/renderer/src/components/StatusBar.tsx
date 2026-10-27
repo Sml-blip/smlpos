@@ -27,6 +27,7 @@ const reminderTiming = (now: Date, timeValue: string) => {
 export default function StatusBar() {
   const { isOnline, currentShift, currentOperateur } = useAppStore()
   const [showSyncPanel, setShowSyncPanel] = useState(false)
+  const [syncPanelMode, setSyncPanelMode] = useState<'manage' | 'join'>('manage')
   const [time, setTime] = useState(new Date())
   const [showFermeture, setShowFermeture] = useState(false)
   const [pendingSync, setPendingSync] = useState(0)
@@ -49,6 +50,12 @@ export default function StatusBar() {
     eveningTime: '21:00',
     snoozeMinutes: 10,
   })
+
+  useEffect(() => {
+    const openJoin = () => { setSyncPanelMode('join'); setShowSyncPanel(true) }
+    window.addEventListener('smlpos:open-company-join', openJoin)
+    return () => window.removeEventListener('smlpos:open-company-join', openJoin)
+  }, [])
 
   useEffect(() => {
     api.appHealth?.().then((h: { ok?: boolean; error?: string }) => {
@@ -264,7 +271,7 @@ export default function StatusBar() {
         <div className="ml-auto flex items-center gap-2">
           {currentOperateur?.role === 'superadmin' && (
             <button
-              onClick={() => setShowSyncPanel(true)}
+              onClick={() => { setSyncPanelMode('manage'); setShowSyncPanel(true) }}
               className="flex items-center gap-1 text-text-muted hover:text-teal-600 transition-colors"
               title="Synchronisation multi-postes"
             >
@@ -358,7 +365,7 @@ export default function StatusBar() {
         />
       )}
 
-      {showSyncPanel && <SyncPanel onClose={() => setShowSyncPanel(false)} />}
+      {showSyncPanel && <SyncPanel mode={syncPanelMode} onClose={() => setShowSyncPanel(false)} />}
 
       {showPinnedShiftReminder && currentShift && (
         <div className="fixed left-4 bottom-10 z-[190] w-[min(390px,calc(100vw-2rem))] animate-slide-in">

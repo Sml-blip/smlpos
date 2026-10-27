@@ -4,7 +4,6 @@ dist-v*
 out
 release
 release2
-.sync-release-private/
 *.db
 .env
 .env.local
@@ -13,5 +12,7 @@ release2
 .orchids
 nul
 *.tsbuildinfo
+.seed-review/
 ERP_*.md
 apps/
+

@@ -16,11 +16,12 @@ import { reserveNumber } from '../numbering'
 import { prepareEmptyReplica } from '../replica'
 function fixture(empty=false,shared?:MockBackend,device='dev-2') {
  const directory=mkdtempSync(join(tmpdir(),'sml-pull-')),path=join(directory,'fixture.db');let db=new Database(path)
- db.exec('CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL)')
- if(!empty)db.exec("INSERT INTO produits VALUES('p','Product','P',10,100)")
+ db.exec("CREATE TABLE categories(id TEXT PRIMARY KEY,nom TEXT UNIQUE); CREATE TABLE produits(id TEXT PRIMARY KEY,nom TEXT,reference TEXT UNIQUE,prix_vente REAL,stock_actuel INTEGER DEFAULT 0,device_id TEXT); CREATE TABLE ventes(id TEXT PRIMARY KEY,numero TEXT UNIQUE,total_ttc REAL); CREATE TABLE lignes_vente(id TEXT PRIMARY KEY,vente_id TEXT REFERENCES ventes(id),designation TEXT,total_ligne REAL); CREATE TABLE stock_movements(id TEXT PRIMARY KEY,produit_id TEXT,delta INTEGER,reason TEXT,ref_id TEXT,device_id TEXT); CREATE TABLE clients(id TEXT PRIMARY KEY,nom TEXT,solde_credit REAL,solde_fidelite REAL,device_id TEXT); INSERT INTO categories VALUES('c','Category')")
+ if(!empty)db.exec("INSERT INTO produits VALUES('p','Product','P',10,100,NULL)")
  installOutbox(db);setCaptureState(db,'device_id',device);setCaptureState(db,'snapshot_hash','a'.repeat(64));setCaptureState(db,'snapshot_fence','0')
- const tables=Object.fromEntries(['categories','produits','ventes','lignes_vente'].map(table=>[table,{pk:'id',columns:(db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name)}]))
+ const tables=Object.fromEntries(['categories','produits','ventes','lignes_vente','stock_movements','clients'].map(table=>[table,{pk:'id',columns:(db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name)}]))
  const backend=shared??new MockBackend({serverState:'seeded',tables})
+ if(!shared)backend.rows.set('categories',new Map([['c',{id:'c',nom:'Category'}]]))
  if(!shared)backend.rows.set('produits',new Map([['p',{id:'p',nom:'Product',reference:'P',prix_vente:10000,stock_actuel:100}]]))
  const client=(fetchImpl=backend.fetch)=>new BackendClient({baseUrl:'https://mock.invalid',fetchImpl,maxAttempts:1,loadSession:()=>({access_token:'mock',refresh_token:'mock',expires_at:'2099-01-01T00:00:00Z'}),saveSession:()=>{}})
  return {get db(){return db},backend,client,enable:()=>openVerifiedGate(db,'b'.repeat(64),'a'.repeat(64)),reopen:()=>{db.close();db=new Database(path);db.pragma('recursive_triggers=ON')},close:()=>{db.close();assert.ok(directory.startsWith(join(tmpdir(),'sml-pull-')));rmSync(directory,{recursive:true,force:true})}}
@@ -28,6 +29,17 @@ function fixture(empty=false,shared?:MockBackend,device='dev-2') {
 const stock=(db:Database.Database)=>(db.prepare("SELECT stock_actuel n FROM produits WHERE id='p'").get() as {n:number}).n
 const queued=(db:Database.Database)=>(db.prepare('SELECT count(*) n FROM outbox').get() as {n:number}).n
 const delta=(seq:number):LiveChange=>({server_seq:seq,origin_device:'dev-1',table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1})
+
+test('sync2 pull metadata applies money DELTA in millimes rather than as an UPSERT',async()=>{
+ const f=fixture();try{
+  f.enable()
+  setCaptureState(f.db,'apply_mute','1');f.db.prepare("INSERT INTO clients VALUES('client','Client',10,2,'dev-2')").run();setCaptureState(f.db,'apply_mute','0')
+  f.backend.liveSequence=1;f.backend.liveChanges=[{server_seq:1,origin_device:'dev-1',table:'clients',pk:'client',op:'DELTA',field:'solde_credit',value:-1250,row:{id:'client',nom:'Client',device_id:'dev-1'}}]
+  const result=await new PullClient(f.db,f.client()).once()
+  assert.equal(result.applied,1);assert.equal((f.db.prepare("SELECT solde_credit FROM clients WHERE id='client'").get() as {solde_credit:number}).solde_credit,8.75)
+  assert.equal((f.db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,0)
+ }finally{f.close()}
+})
 
 test('explicit secondary-PC preparation refuses business history, locks writes until a restart-safe bootstrap completes', async () => {
  const f=fixture();try{
@@ -94,35 +106,57 @@ test('one UNIQUE collision and one FK failure are quarantined while later rows a
   assert.equal((f.db.prepare("SELECT prix_vente n FROM produits WHERE id='new-1'").get() as {n:number}).n,12.345)
  }finally{f.close()}
 })
-test('two offline devices converge to opening minus five with no pull echo',async()=>{
+test('two offline stock changes send ledger-backed DELTAs and converge on pull',async()=>{
  const a=fixture(false,undefined,'dev-1'),b=fixture(false,a.backend,'dev-2');try{
   a.enable();b.enable();a.db.exec("UPDATE produits SET stock_actuel=98 WHERE id='p'");b.db.exec("UPDATE produits SET stock_actuel=97 WHERE id='p'")
-  await new OutboxDrainer(a.db,a.client()).once();await new OutboxDrainer(b.db,b.client()).once()
+  a.backend.deviceId='dev-1';const da=await new OutboxDrainer(a.db,a.client()).once()
+  a.backend.deviceId='dev-2';const db=await new OutboxDrainer(b.db,b.client()).once()
+  assert.equal(da.applied,2);assert.equal(da.rejected,0);assert.equal(db.applied,2);assert.equal(db.rejected,0)
+  assert.equal(a.backend.rows.get('produits')!.get('p')!.stock_actuel,95)
   await new PullClient(a.db,a.client()).once();await new PullClient(b.db,b.client()).once()
-  assert.equal(stock(a.db),95);assert.equal(stock(b.db),95);assert.equal(a.backend.rows.get('produits')!.get('p')!.stock_actuel,95);assert.equal(queued(a.db),2);assert.equal(queued(b.db),2)
+  assert.equal(stock(a.db),95);assert.equal(stock(b.db),95)
+  assert.equal((a.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
+  assert.equal((b.db.prepare('SELECT count(*) n FROM outbox WHERE sent_at IS NULL').get() as {n:number}).n,0)
  }finally{a.close();b.close()}
 })
 test('remote state overrides an unsent edit; its later own echo restores the winning server state',async()=>{
  const f=fixture();try{
-  f.enable();f.db.exec("UPDATE produits SET prix_vente=12 WHERE id='p'")
-  await f.client().pushLive('dev-1',[{seq:1,table:'produits',pk:'p',op:'UPSERT',row:{id:'p',nom:'Product',reference:'P',prix_vente:14000},at:'2020-01-01T00:00:00Z'}])
-  const pull=new PullClient(f.db,f.client());await pull.once();assert.equal((f.db.prepare("SELECT prix_vente n FROM produits WHERE id='p'").get() as {n:number}).n,14)
-  await new OutboxDrainer(f.db,f.client()).once();await pull.once();assert.equal((f.db.prepare("SELECT prix_vente n FROM produits WHERE id='p'").get() as {n:number}).n,12);assert.equal(queued(f.db),1)
-  await f.client().pushLive('dev-1',[{seq:2,table:'produits',pk:'p',op:'DELETE',at:'2020-01-01T00:00:00Z'}]);await pull.once();assert.equal(f.db.prepare("SELECT id FROM produits WHERE id='p'").get(),undefined);assert.equal(queued(f.db),1)
+  f.enable();f.db.exec("UPDATE categories SET nom='Local' WHERE id='c'")
+  await f.client().pushLive('dev-1',[{seq:1,table:'categories',pk:'c',op:'UPSERT',row:{id:'c',nom:'Remote'},at:'2020-01-01T00:00:00Z'}])
+  const pull=new PullClient(f.db,f.client());await pull.once();assert.equal((f.db.prepare("SELECT nom FROM categories WHERE id='c'").get() as {nom:string}).nom,'Remote')
+  await new OutboxDrainer(f.db,f.client()).once();await pull.once();assert.equal((f.db.prepare("SELECT nom FROM categories WHERE id='c'").get() as {nom:string}).nom,'Local');assert.equal(queued(f.db),1)
+  await f.client().pushLive('dev-1',[{seq:2,table:'categories',pk:'c',op:'DELETE',at:'2020-01-01T00:00:00Z'}]);await pull.once();assert.equal(f.db.prepare("SELECT id FROM categories WHERE id='c'").get(),undefined);assert.equal(queued(f.db),1)
  }finally{f.close()}
 })
-test('bootstrap pins one snapshot while a new sale arrives, then pull catches up',async()=>{
+test('fresh replica receives the full snapshot and verifies row counts plus money totals before enabling POS',async()=>{
  const f=fixture(true);try{
-  let changed=false;f.backend.onBootstrapPage=async()=>{if(!changed){changed=true;await f.client().pushLive('dev-1',[{seq:1,table:'produits',pk:'p',op:'DELTA',field:'stock_actuel',value:-1,at:'2026-10-25T00:00:00Z'}])}}
-  const pull=new PullClient(f.db,f.client());await pull.bootstrap();assert.equal(stock(f.db),100);assert.equal(captureState(f.db,'pull_cursor'),'0');assert.equal(queued(f.db),0)
-  await pull.once();assert.equal(stock(f.db),99);assert.equal(captureState(f.db,'pull_cursor'),'1');assert.equal(queued(f.db),0)
+  const pull=new PullClient(f.db,f.client());await pull.bootstrap();assert.equal(stock(f.db),100);assert.equal(captureState(f.db,'pull_cursor'),'2');assert.equal(queued(f.db),0)
+  assert.equal(captureState(f.db,'bootstrap_complete'),'1');assert.equal(captureState(f.db,'outbox_drain_enabled'),'1')
+  assert.deepEqual(JSON.parse(captureState(f.db,'bootstrap_verification')!),{serverSeq:2,tables:6,rows:2,moneyFields:5})
+  assert.equal((f.db.prepare("SELECT prix_vente FROM produits WHERE id='p'").get() as {prix_vente:number}).prix_vente,10)
+ }finally{f.close()}
+})
+test('fresh replica stays locked when a server money total differs from the downloaded snapshot',async()=>{
+ const f=fixture(true);try{
+  f.db.exec('CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT)')
+  f.backend.tableSpec.app_settings={pk:'key',columns:['key','value']}
+  prepareEmptyReplica(f.db)
+  const mismatched:typeof fetch=async(input,init)=>{
+   const response=await f.backend.fetch(input,init),url=new URL(String(input))
+   if(url.pathname!=='/sync2/verification')return response
+   const data=await response.json() as {tables:Record<string,{moneyTotals:Record<string,string>}>}
+   data.tables.produits.moneyTotals.prix_vente='10001'
+   return new Response(JSON.stringify(data),{status:response.status,headers:{'content-type':'application/json'}})
+  }
+  await assert.rejects(new PullClient(f.db,f.client(mismatched)).bootstrap(),/Vérification du téléchargement échouée/)
+  assert.notEqual(captureState(f.db,'bootstrap_complete'),'1');assert.notEqual(captureState(f.db,'outbox_drain_enabled'),'1');assert.equal(captureState(f.db,'bootstrap_state'),'error');assert.match(captureState(f.db,'pull_last_error')!,/Vérification du téléchargement échouée/)
  }finally{f.close()}
 })
 test('a 600-row bootstrap resumes after a failed page without duplicate or echo rows',async()=>{
  const f=fixture(true);try{
   f.backend.rows.set('produits',new Map(Array.from({length:600},(_,i)=>{const id=`p${String(i).padStart(4,'0')}`;return [id,{id,nom:'Remote',reference:`R${i}`,prix_vente:10000,stock_actuel:1}]})))
-  const broken:typeof fetch=async(input,init)=>{const url=new URL(String(input));if(url.pathname==='/v1/sync/bootstrap'&&url.searchParams.get('table')==='produits'&&url.searchParams.get('after'))throw new TypeError('connection lost');return f.backend.fetch(input,init)}
-  await assert.rejects(new PullClient(f.db,f.client(broken)).bootstrap(),/connection lost/);assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,500)
+  const broken:typeof fetch=async(input,init)=>{const url=new URL(String(input));if(url.pathname==='/sync2/pull'&&Number(url.searchParams.get('since'))>0)throw new TypeError('connection lost');return f.backend.fetch(input,init)}
+  await assert.rejects(new PullClient(f.db,f.client(broken)).bootstrap(),/connection lost/);assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,499)
   f.reopen();await new PullClient(f.db,f.client()).bootstrap();assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,600);assert.equal(queued(f.db),0);assert.equal(captureState(f.db,'bootstrap_complete'),'1')
  }finally{f.close()}
 })
@@ -130,5 +164,32 @@ test('an interrupted join never repopulates the bundled catalog on restart',()=>
  const f=fixture(true);try{
   setCaptureState(f.db,'bootstrap_tables','["produits"]');f.reopen();seedProductsIfEmpty(f.db)
   assert.equal((f.db.prepare('SELECT count(*) n FROM produits').get() as {n:number}).n,0);assert.equal(queued(f.db),0)
+ }finally{f.close()}
+})
+
+test('bootstrap retries foreign-key dependencies without losing the deferred line',async()=>{
+ const f=fixture(true);try{
+  f.db.pragma('foreign_keys=ON')
+  f.backend.rows.set('lignes_vente',new Map([['line',{id:'line',vente_id:'sale',designation:'Synthetic',total_ligne:2500}]]))
+  f.backend.rows.set('ventes',new Map([['sale',{id:'sale',numero:'SYNTHETIC',total_ttc:2500}]]))
+  await new PullClient(f.db,f.client()).bootstrap()
+  assert.equal(captureState(f.db,'bootstrap_complete'),'1')
+  assert.equal((f.db.prepare('SELECT total_ligne n FROM lignes_vente').get() as {n:number}).n,2.5)
+  assert.equal((f.db.prepare('SELECT count(*) n FROM pull_rejects').get() as {n:number}).n,0)
+ }finally{f.close()}
+})
+test('bootstrap verifies its snapshot boundary then receives a concurrent money DELTA through live pull',async()=>{
+ const f=fixture(true);try{
+  f.backend.rows.set('clients',new Map([['customer',{id:'customer',nom:'Synthetic',solde_credit:20000,solde_fidelite:0}]]))
+  f.backend.onBootstrapPage=()=>{
+   f.backend.onBootstrapPage=null
+   const row=f.backend.rows.get('clients')!.get('customer')!
+   f.backend.rows.get('clients')!.set('customer',{...row,solde_credit:21000})
+   f.backend.liveChanges.push({server_seq:++f.backend.liveSequence,origin_device:'dev-1',table:'clients',pk:'customer',op:'DELTA',field:'solde_credit',value:1000})
+  }
+  const pull=new PullClient(f.db,f.client());await pull.bootstrap()
+  const amount=()=>(f.db.prepare("SELECT solde_credit n FROM clients WHERE id='customer'").get() as {n:number}).n
+  assert.equal(amount(),20);assert.equal(captureState(f.db,'bootstrap_complete'),'1')
+  await pull.once();assert.equal(amount(),21);await pull.once();assert.equal(amount(),21)
  }finally{f.close()}
 })

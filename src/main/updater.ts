@@ -4,6 +4,7 @@ import type { ProgressInfo, UpdateInfo } from 'electron-updater'
 import { createEmergencyBackup } from './backupService'
 
 const { autoUpdater } = updaterPkg
+import { TEST_BUILD } from './buildFlags'
 
 const CHECK_TIMEOUT_MS = 30000
 
@@ -139,4 +140,10 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
       console.warn('[updater] Startup check failed:', err)
     })
   }, 8000)
+}
+
+export function registerTestBuildUpdaterHandlers(): void {
+  if (!TEST_BUILD) throw new Error('Test updater handlers require test build')
+  ipcMain.handle('update:check', () => ({ ok: false, reason: 'disabled in test build' }))
+  ipcMain.handle('update:install', () => ({ ok: false, reason: 'disabled in test build' }))
 }

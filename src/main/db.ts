@@ -55,6 +55,7 @@ export const SCHEMA_VERSION = '1.10.10'
 
 export function initDatabase() {
   const db = getDb()
+  const freshInstall = !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings'").get()
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='sync_state'").get()) {
     const joining = db.prepare("SELECT v FROM sync_state WHERE k='replica_join_pending'").get() as {v:string}|undefined
     const backend = db.prepare("SELECT v FROM sync_state WHERE k='sync_backend'").get() as {v:string}|undefined
@@ -69,6 +70,18 @@ export function initDatabase() {
   const dbPath = dbFilePath
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
+
+  // Create the first-touch gate atomically with the settings table. If the app
+  // closes during its first schema migration, the next launch must still know
+  // this is an unverified fresh database.
+  if(freshInstall)db.transaction(()=>{
+    db.exec(`CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );`)
+    db.prepare("INSERT OR IGNORE INTO app_settings(key,value) VALUES('first_touch_pending','1')").run()
+  })()
 
   db.exec(`
     -- ── Opérateurs ──────────────────────────────────────────────────────────
@@ -982,7 +995,7 @@ export function initDatabase() {
   `)
 
   const legacyImportDone = db.prepare(`SELECT value FROM app_settings WHERE key = 'smlfixv2_json_import_v1'`).get() as { value?: string } | undefined
-  const downloadCandidates = [
+  const downloadCandidates = freshInstall ? [] : [
     join(process.env.USERPROFILE || '', 'Downloads'),
     'C:\\Users\\SML\\Downloads',
   ]

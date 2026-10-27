@@ -24,6 +24,7 @@ function loadEnvFile(name: string): Record<string, string> {
 const env = { ...loadEnvFile('.env'), ...loadEnvFile('.env.local'), ...process.env }
 const supabaseUrl = env.VITE_SUPABASE_URL ?? ''
 const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY ?? ''
+const testBuild = env.SMLPOS_TEST_BUILD === '1'
 
 export default defineConfig({
   main: {
@@ -31,6 +32,7 @@ export default defineConfig({
     define: {
       __SML_SUPABASE_URL__: JSON.stringify(supabaseUrl),
       __SML_SUPABASE_ANON_KEY__: JSON.stringify(supabaseAnonKey),
+      __SML_TEST_BUILD__: JSON.stringify(testBuild),
     },
     build: {
       rollupOptions: {
@@ -42,6 +44,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
+    define: { __SML_TEST_BUILD__: JSON.stringify(testBuild) },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
