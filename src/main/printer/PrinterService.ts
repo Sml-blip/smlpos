@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -24,6 +25,8 @@ export interface PrintWindowOptions {
   scaleFactor?: number;
   landscape?: boolean;
   dpi?: { horizontal: number; vertical: number };
+  /** Optional job watchdog. Omit for the existing interactive print flow. */
+  timeoutMs?: number;
 }
 
 export interface GainschaLabelElement {
@@ -365,7 +368,7 @@ export class PrinterService {
 
   static resolveElectronPageSize(
     pageSize?: string | ElectronPageSize | CustomPageSizeMm
-  ): ElectronPageSize {
+  ): NonNullable<Electron.WebContentsPrintOptions['pageSize']> {
     if (!pageSize || pageSize === 'A4') return 'A4';
     if (pageSize === 'A5') return { width: 148000, height: 210000 };
     if (typeof pageSize === 'object') {
@@ -375,7 +378,7 @@ export class PrinterService {
           height: this.mmToMicrons(pageSize.heightMm),
         };
       }
-      if ('width' in pageSize && 'height' in pageSize) return pageSize as ElectronPageSize;
+      if ('width' in pageSize && 'height' in pageSize) return { width: pageSize.width, height: pageSize.height };
     }
     if (pageSize === '58mm') return { width: 58000, height: 297000 };
     if (pageSize === '80mm') return { width: 80000, height: 297000 };
@@ -392,19 +395,28 @@ export class PrinterService {
   static printHtmlInHiddenWindow(
     html: string,
     options: PrintWindowOptions = {}
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; uncertain?: boolean }> {
     return new Promise((resolve) => {
-      const win = new BrowserWindow({
-        show: false,
-        width: 900,
-        height: 1200,
-        webPreferences: { nodeIntegration: false, contextIsolation: true },
-      });
-      const tmpPath = join(tmpdir(), `smlpos-print-${Date.now()}.html`);
-      let cleaned = false;
-      const cleanup = () => {
-        if (cleaned) return;
-        cleaned = true;
+      const tmpPath = join(tmpdir(), `smlpos-print-${randomUUID()}.html`);
+      let win: BrowserWindow;
+      try {
+        win = new BrowserWindow({
+          show: false,
+          width: 900,
+          height: 1200,
+          webPreferences: { nodeIntegration: false, contextIsolation: true },
+        });
+      } catch (error) {
+        resolve({ success: false, error: String(error) });
+        return;
+      }
+      let finished = false;
+      let printSubmitted = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const finish = (result: { success: boolean; error?: string; uncertain?: boolean }) => {
+        if (finished) return;
+        finished = true;
+        if (timeout !== undefined) clearTimeout(timeout);
         try {
           unlinkSync(tmpPath);
         } catch {
@@ -415,20 +427,28 @@ export class PrinterService {
         } catch {
           /* ignore */
         }
+        resolve(result);
       };
-
-      try {
-        writeFileSync(tmpPath, html, 'utf8');
-      } catch (e) {
-        cleanup();
-        resolve({ success: false, error: String(e) });
-        return;
-      }
-
-      win.webContents.once('did-fail-load', () => {
-        cleanup();
-        resolve({ success: false, error: 'Échec chargement HTML impression' });
+      const fail = (error: string) => finish({
+        success: false,
+        error,
+        // Once print() has been invoked, interruption cannot prove whether the
+        // driver already accepted the job. Never automatically retry this case.
+        ...(printSubmitted ? { uncertain: true } : {}),
       });
+
+      win.once('closed', () => fail('Fenêtre d’impression fermée avant confirmation'));
+      win.webContents.once('render-process-gone', () => fail('Le moteur d’impression s’est arrêté avant confirmation'));
+      win.webContents.once('destroyed', () => fail('Le contenu d’impression a été fermé avant confirmation'));
+      win.webContents.once('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
+        if (isMainFrame !== false) fail('Échec chargement HTML impression');
+      });
+
+      if (typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+        timeout = setTimeout(() => fail(printSubmitted
+          ? 'Délai d’impression dépassé : envoi non confirmé. Vérifiez la file Windows avant de réessayer.'
+          : 'Délai de préparation du document dépassé'), options.timeoutMs);
+      }
 
       win.webContents.once('did-finish-load', async () => {
         // Electron can finish loading the HTML before a thermal-ticket image is
@@ -455,37 +475,47 @@ export class PrinterService {
         } catch {
           // Continue with printing if readiness detection is unavailable.
         }
-        if (win.isDestroyed()) return
-        const printOpts: Electron.WebContentsPrintOptions = {
-          deviceName: options.printerName || undefined,
-          silent: options.silent === true,
-          printBackground: options.printBackground !== false,
-          color: options.color !== false,
-          copies: typeof options.copies === 'number' ? options.copies : 1,
-          pageSize: options.pageSize === 'A5' && options.landscape
-            ? { width: 210000, height: 148000 }
-            : this.resolveElectronPageSize(options.pageSize),
-        };
-        if (typeof options.scaleFactor === 'number') {
-          printOpts.scaleFactor = options.scaleFactor;
+        if (finished) return;
+        if (win.isDestroyed()) {
+          fail('Fenêtre d’impression indisponible');
+          return;
         }
-        if (options.dpi) {
-          (
-            printOpts as Electron.WebContentsPrintOptions & {
-              dpi?: { horizontal: number; vertical: number };
-            }
-          ).dpi = options.dpi;
+        try {
+          const printOpts: Electron.WebContentsPrintOptions = {
+            deviceName: options.printerName || undefined,
+            silent: options.silent === true,
+            printBackground: options.printBackground !== false,
+            color: options.color !== false,
+            copies: typeof options.copies === 'number' ? options.copies : 1,
+            pageSize: options.pageSize === 'A5' && options.landscape
+              ? { width: 210000, height: 148000 }
+              : this.resolveElectronPageSize(options.pageSize),
+          };
+          if (typeof options.scaleFactor === 'number') {
+            printOpts.scaleFactor = options.scaleFactor;
+          }
+          if (options.dpi) {
+            (
+              printOpts as Electron.WebContentsPrintOptions & {
+                dpi?: { horizontal: number; vertical: number };
+              }
+            ).dpi = options.dpi;
+          }
+          printSubmitted = true;
+          win.webContents.print(printOpts, (success, failureReason) => {
+            finish({ success, error: success ? undefined : failureReason });
+          });
+        } catch (error) {
+          fail(String(error));
         }
-        win.webContents.print(printOpts, (success, failureReason) => {
-          cleanup();
-          resolve({ success, error: success ? undefined : failureReason });
-        });
       });
 
-      win.loadFile(tmpPath).catch((err) => {
-        cleanup();
-        resolve({ success: false, error: String(err) });
-      });
+      try {
+        writeFileSync(tmpPath, html, 'utf8');
+        win.loadFile(tmpPath).catch((error) => fail(String(error)));
+      } catch (error) {
+        fail(String(error));
+      }
     });
   }
 

@@ -308,7 +308,7 @@ interface Window {
       html: string,
       printerName: string,
       options?: Record<string, unknown>,
-    ) => Promise<{ success: boolean; error?: string }>
+    ) => Promise<{ success: boolean; error?: string; uncertain?: boolean }>
     gainschaIsAvailable?: () => Promise<boolean>
     gainschaDetectUsb?: () => Promise<{ success: boolean; devices?: string[]; error?: string }>
     gainschaVersion?: () => Promise<{ success: boolean; version?: string; error?: string }>

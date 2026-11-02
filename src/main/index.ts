@@ -5777,6 +5777,12 @@ function setupIpcHandlers() {
 
   // ── Documents: list all (unified view — documents + factures_fournisseurs) ──
   ipcMain.handle('documents:listAll', (_e, filters: Record<string, unknown> = {}) => {
+    const bulkPrint = filters.bulkPrint === true
+    if (bulkPrint && (
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(filters.dateFrom ?? '')) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(filters.dateTo ?? '')) ||
+      String(filters.dateFrom) > String(filters.dateTo)
+    )) throw new Error('Choisissez une plage de dates valide pour l’impression en groupe')
     const typeStr = (filters.type_document ?? '') as string
     const achatTypes = new Set(['FACTURE_ACHAT', 'FACTURE_ACHAT_BL'])
     const venteTypes = new Set(['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F', 'DEVIS', 'BON_LIVRAISON', 'AVOIR'])
@@ -5790,8 +5796,8 @@ function setupIpcHandlers() {
       params.push(filters.type_document)
     }
     let dateCond = ''
-    if (filters.dateFrom) { dateCond += ` AND d.created_at >= ?`; params.push(filters.dateFrom + 'T00:00:00.000Z') }
-    if (filters.dateTo)   { dateCond += ` AND d.created_at <= ?`; params.push(filters.dateTo + 'T23:59:59.999Z') }
+    if (filters.dateFrom) { dateCond += ` AND date(d.created_at,'localtime') >= ?`; params.push(filters.dateFrom) }
+    if (filters.dateTo)   { dateCond += ` AND date(d.created_at,'localtime') <= ?`; params.push(filters.dateTo) }
 
     const docs = fetchDocs
       ? db.prepare(`
@@ -5799,7 +5805,7 @@ function setupIpcHandlers() {
           FROM documents d
           LEFT JOIN documents av ON av.id = d.avoir_id
           WHERE 1=1 ${typeCond} ${dateCond}
-          ORDER BY d.created_at DESC LIMIT 300
+          ORDER BY d.created_at DESC ${bulkPrint ? '' : 'LIMIT 300'}
         `).all(...params) as Record<string, unknown>[]
       : []
 
@@ -5810,8 +5816,8 @@ function setupIpcHandlers() {
       let ffDateCond = ''
       if (typeStr === 'FACTURE_ACHAT')    { ffTypeCond = ` AND ff.type = ?`; ffParams.push('FACTURE_ACHAT') }
       if (typeStr === 'FACTURE_ACHAT_BL') { ffTypeCond = ` AND ff.type = ?`; ffParams.push('FACTURE_ACHAT_BL') }
-      if (filters.dateFrom) { ffDateCond += ` AND ff.created_at >= ?`; ffParams.push(filters.dateFrom + 'T00:00:00.000Z') }
-      if (filters.dateTo)   { ffDateCond += ` AND ff.created_at <= ?`; ffParams.push(filters.dateTo + 'T23:59:59.999Z') }
+      if (filters.dateFrom) { ffDateCond += ` AND date(ff.created_at,'localtime') >= ?`; ffParams.push(filters.dateFrom) }
+      if (filters.dateTo)   { ffDateCond += ` AND date(ff.created_at,'localtime') <= ?`; ffParams.push(filters.dateTo) }
       ffDocs = db.prepare(`
         SELECT ff.id, ff.numero_facture AS numero, ff.type AS type_document,
           CASE WHEN ff.statut_reception = 'NON_ARRIVE' THEN 'NON_ARRIVE'
@@ -5826,13 +5832,14 @@ function setupIpcHandlers() {
         FROM factures_fournisseurs ff
         LEFT JOIN fournisseurs f ON f.id = ff.fournisseur_id
         WHERE ff.statut_paiement != 'BROUILLON' ${ffTypeCond} ${ffDateCond}
-        ORDER BY ff.created_at DESC LIMIT 300
+        ORDER BY ff.created_at DESC ${bulkPrint ? '' : 'LIMIT 300'}
       `).all(...ffParams) as Record<string, unknown>[]
     }
 
-    return [...docs, ...ffDocs].sort((a, b) =>
+    const sorted = [...docs, ...ffDocs].sort((a, b) =>
       String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
-    ).slice(0, 500)
+    )
+    return bulkPrint ? sorted : sorted.slice(0, 500)
   })
 
   // Fiscal sales export: regular invoices and daily invoices are one report.
@@ -6087,6 +6094,7 @@ function setupIpcHandlers() {
       pageSize: PrinterService.resolveElectronPageSize(pageSize),
       scaleFactor: typeof options.scaleFactor === 'number' ? options.scaleFactor : undefined,
       landscape: options.landscape === true,
+      timeoutMs: options.timeoutMs === 90_000 ? 90_000 : undefined,
       dpi: options.dpi as { horizontal: number; vertical: number } | undefined,
     })
   })

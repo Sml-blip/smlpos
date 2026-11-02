@@ -13,6 +13,7 @@ import { showToast } from '../../lib/toast'
 import DocumentPrintModal from '../historique/DocumentPrintModal'
 import FactureAchatPrintModal from '../achats/FactureAchatPrintModal'
 import PinUnlockModal from '../../components/PinUnlockModal'
+import BulkPrintModal from './BulkPrintModal'
 import InvoiceEditModal from '../../components/InvoiceEditModal'
 import type { Document } from '../../lib/types'
 import InvoicePrintTemplate, { type InvoiceCompanySettings, type InvoiceDocData, type InvoiceLineData } from '../../components/InvoicePrintTemplate'
@@ -133,7 +134,7 @@ function renderInvoiceMarkup(doc: InvoiceDocData, lignes: InvoiceLineData[], set
   }
 }
 
-async function loadFullInvoiceMarkup(row: DocRow): Promise<string> {
+async function loadFullInvoiceMarkup(row: DocRow, activeOnly = false): Promise<string> {
   if (row._source === 'ff') {
     const [facture, lignes, settings] = await Promise.all([
       api.facturesFournisseursGet(row.id) as Promise<Record<string, unknown> | null>,
@@ -141,12 +142,14 @@ async function loadFullInvoiceMarkup(row: DocRow): Promise<string> {
       api.settingsGetAll() as Promise<InvoiceCompanySettings>,
     ])
     if (!facture) throw new Error(`Document introuvable : ${row.numero}`)
+    if (activeOnly && ['ANNULE', 'BROUILLON'].includes(String(facture.statut_paiement))) throw new Error(`Document annulé ou brouillon : ${row.numero}`)
     const mapped = mapDbFactureAchatToInvoice(facture, lignes || [])
     return renderInvoiceMarkup(mapped.doc, mapped.lignes, settings || {})
   }
 
   const fresh = await api.documentsGet(row.id) as Document | null
   if (!fresh) throw new Error(`Document introuvable : ${row.numero}`)
+  if (activeOnly && ['ANNULE', 'REVOQUE', 'BROUILLON'].includes(fresh.statut)) throw new Error(`Document annulé, révoqué ou brouillon : ${row.numero}`)
   const settings = fresh.layout_snapshot
     ? (() => { try { return JSON.parse(fresh.layout_snapshot) as InvoiceCompanySettings } catch { return null } })()
     : null
@@ -492,6 +495,7 @@ export default function DocumentsTab() {
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [bulkPrintFilters, setBulkPrintFilters] = useState<{ type: string; dateFrom: string; dateTo: string; search: string } | null>(null)
   const [excelModal, setExcelModal] = useState<{
     rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean
     totalColumns?: string[]; totalLabelColumn?: string; tvaDocs?: TvaExportDoc[]
@@ -678,6 +682,13 @@ export default function DocumentsTab() {
           {subTab !== 'RAPPORT_CAISSE' && <button onClick={() => handlePrintTable()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold hover:bg-muted">
             <Printer size={13} /> Imprimer
           </button>}
+          {subTab !== 'RAPPORT_CAISSE' && <button
+            type="button"
+            disabled={loading || !dateFrom || !dateTo || dateFrom > dateTo}
+            title="Choisissez les dates Du et Au pour imprimer tous les PDF complets de la période"
+            onClick={() => setBulkPrintFilters({ type: subTab, dateFrom, dateTo, search })}
+            className="flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold hover:bg-accent-400 disabled:opacity-40"
+          ><Printer size={13}/> Imprimer en groupe</button>}
         </div>
       </div>
 
@@ -785,6 +796,11 @@ export default function DocumentsTab() {
       </div>}
 
       {/* Document preview modal */}
+      {bulkPrintFilters && <BulkPrintModal
+        {...bulkPrintFilters}
+        loadMarkup={row => loadFullInvoiceMarkup(row as DocRow, true)}
+        onClose={() => setBulkPrintFilters(null)}
+      />}
       {previewDoc && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-3">
