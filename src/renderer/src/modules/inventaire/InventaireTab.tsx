@@ -132,6 +132,9 @@ export default function InventaireTab() {
   const [serialNums, setSerialNums] = useState<string[]>([])
   const [existingSerials, setExistingSerials] = useState<SerialNumber[]>([])
   const [serialsLoading, setSerialsLoading] = useState(false)
+  const [serialsError, setSerialsError] = useState(false)
+  const [serialsEdited, setSerialsEdited] = useState(false)
+  const serialRequest = useRef(0)
   // New category modal
   const [showCatModal, setShowCatModal] = useState(false)
   const [newCatNom, setNewCatNom] = useState('')
@@ -314,6 +317,9 @@ export default function InventaireTab() {
 
   // Form handling
   const openCreate = () => {
+    serialRequest.current++
+    setSerialsError(false)
+    setSerialsEdited(false)
     setEditingProduct(null)
     setShowPriceMatches(false)
     setFormData(emptyForm())
@@ -325,6 +331,9 @@ export default function InventaireTab() {
   }
 
   const openEdit = (p: Produit) => {
+    const request = ++serialRequest.current
+    setSerialsError(false)
+    setSerialsEdited(false)
     setEditingProduct(p)
     setShowPriceMatches(false)
     setFormData({
@@ -355,7 +364,8 @@ export default function InventaireTab() {
     setExistingSerials([])
     setSerialNums([])
     setSerialsLoading(true)
-    loadData('Chargement numéros de série', () => api.serialNumbersGetByProduit(p.id), { silent: true }).then(sns => {
+    api.serialNumbersGetByProduit(p.id).then(sns => {
+      if (serialRequest.current !== request) return
       const list = ((sns ?? []) as Array<SerialNumber & { serial_number?: string; code?: string }>).map(sn => ({
         ...sn,
         numero_serie: String(sn.numero_serie ?? sn.serial_number ?? sn.code ?? '').trim(),
@@ -363,15 +373,17 @@ export default function InventaireTab() {
       })).filter(sn => sn.numero_serie)
       const legacySerials = parseLegacyProductSerials(p.numero_serie)
       const available = list.filter(sn => sn.statut === 'EN_STOCK')
-      const reservedCount = list.filter(sn => sn.statut === 'RESERVE_AVANCE').length
-      const tracksSerial = !!p.has_serial_number || available.length > 0 || reservedCount > 0 || legacySerials.length > 0
+      const tracksSerial = !!p.has_serial_number || list.length > 0 || legacySerials.length > 0
       setExistingSerials(list)
       if (tracksSerial && !p.has_serial_number) setFormData(prev => ({ ...prev, has_serial_number: true }))
       if (!tracksSerial) return
-      const editableCount = Math.max(0, p.stock_actuel - reservedCount)
-      const codes = [...available.map(sn => sn.numero_serie), ...legacySerials.filter(code => !available.some(sn => sn.numero_serie.toLocaleLowerCase('fr') === code.toLocaleLowerCase('fr')))]
-      setSerialNums(Array.from({ length: editableCount }, (_, i) => codes[i] || ''))
-    }).finally(() => setSerialsLoading(false))
+      const codes = [...available.map(sn => sn.numero_serie), ...legacySerials.filter(code => !list.some(sn => sn.numero_serie.toLocaleLowerCase('fr') === code.toLocaleLowerCase('fr')))]
+      setSerialNums(codes)
+    }).catch(() => {
+      if (serialRequest.current === request) setSerialsError(true)
+    }).finally(() => {
+      if (serialRequest.current === request) setSerialsLoading(false)
+    })
     setShowModal(true)
   }
 
@@ -386,14 +398,12 @@ export default function InventaireTab() {
 
   const handleSave = async () => {
     if (!validateForm()) return
-    if (serialsLoading) {
-      showNotif('Chargement des numéros de série en cours…', 'error')
-      return
-    }
-    if (formData.has_serial_number) {
-      const normalizedSerials = serialNums.map(sn => sn.trim()).filter(Boolean)
-      if (normalizedSerials.length !== serialNums.length) {
-        showNotif(`Renseignez tous les S/N (${normalizedSerials.length}/${serialNums.length}).`, 'error')
+    const writeSerials = !editingProduct || serialsEdited
+    const normalizedSerials = serialNums.map(sn => sn.trim()).filter(Boolean)
+    if (writeSerials && formData.has_serial_number) {
+      const required = Math.max(0, (parseInt(formData.stock_actuel) || 0) - existingSerials.filter(sn => sn.statut === 'RESERVE_AVANCE').length)
+      if (normalizedSerials.length !== required) {
+        showNotif(`Renseignez un S/N par unité disponible (${normalizedSerials.length}/${required}).`, 'error')
         return
       }
       if (new Set(normalizedSerials.map(sn => sn.toLocaleLowerCase('fr'))).size !== normalizedSerials.length) {
@@ -435,22 +445,24 @@ export default function InventaireTab() {
         fournisseur: formData.fournisseur.trim() || null,
         source_tag: formData.type === 'NF' && formData.source_tag.trim() ? formData.source_tag.trim() : null,
         has_serial_number: formData.has_serial_number ? 1 : 0,
-        serial_tracking_disable_confirmed: !!editingProduct && !formData.has_serial_number,
         created_at: editingProduct?.created_at || now,
         updated_at: now,
       }
       if (editingProduct) {
-        await api.produitsUpdate(editingProduct.id, p)
+        await api.produitsUpdate(editingProduct.id, {
+          ...p,
+          preserve_stock: p.stock_actuel === editingProduct.stock_actuel,
+          ...(writeSerials
+            ? {
+                serial_numbers_edit: formData.has_serial_number ? normalizedSerials : [],
+                serial_numbers_snapshot: existingSerials.map(row => JSON.stringify([row.id, row.numero_serie, row.statut])),
+                serial_tracking_disable_confirmed: !formData.has_serial_number,
+              }
+            : { preserve_serial_tracking: true }),
+        })
       } else {
         await api.produitsCreate(p)
-      }
-      if (formData.has_serial_number) {
-        const filled = serialNums.filter(s => s.trim())
-        await api.serialNumbersBulkSet(p.id, filled)
-      } else if (editingProduct) {
-        // Disabling tracking removes only editable EN_STOCK rows. Sold,
-        // defective and reserved history remains protected in the database.
-        await api.serialNumbersBulkSet(p.id, [])
+        if (formData.has_serial_number && normalizedSerials.length) await api.serialNumbersBulkSet(p.id, normalizedSerials)
       }
       setShowModal(false)
       await loadProduits(true)
@@ -1295,10 +1307,6 @@ export default function InventaireTab() {
                     onChange={e => {
                       const val = e.target.value.replace(/[^0-9]/g, '')
                       f('stock_actuel', val)
-                      if (formData.has_serial_number) {
-                        const newCount = parseInt(val) || 0
-                        setSerialNums(prev => Array.from({ length: newCount }, (_, i) => prev[i] ?? ''))
-                      }
                     }}
                     className="w-full border border-border rounded-lg px-3 py-2 text-sm font-price"
                   />
@@ -1362,19 +1370,19 @@ export default function InventaireTab() {
                       formData.has_serial_number ? 'bg-accent-500' : 'bg-border'
                     )}
                     onClick={() => {
+                      if (serialsLoading || serialsError) return
                       const next = !formData.has_serial_number
                       const reserved = existingSerials.filter(sn => normalizeSerialStatus(sn.statut) === 'RESERVE_AVANCE')
                       if (!next && reserved.length > 0) {
                         showNotif(`Impossible de désactiver : ${reserved.length} S/N réservé(s) par une avance client.`, 'error')
                         return
                       }
-                      setFormData(prev => ({ ...prev, has_serial_number: next }))
-                      if (next) {
-                        const count = parseInt(formData.stock_actuel) || 0
-                        setSerialNums(Array(count).fill(''))
-                      } else {
-                        setSerialNums([])
+                      if (!next && editingProduct && serialNums.some(code => code.trim())) {
+                        showNotif('Impossible de désactiver le suivi tant que des S/N sont enregistrés en stock.', 'error')
+                        return
                       }
+                      setSerialsEdited(true)
+                      setFormData(prev => ({ ...prev, has_serial_number: next }))
                     }}
                   >
                     <div className={cn(
@@ -1385,20 +1393,17 @@ export default function InventaireTab() {
                   <span className="text-xs font-semibold text-text-secondary">Numéros de série par unité (S/N)</span>
                 </label>
 
-                {formData.has_serial_number && (() => {
+                {serialsLoading && <p className="text-xs text-text-muted">Chargement des codes S/N…</p>}
+                {serialsError && <p role="alert" className="text-xs text-red-700">Impossible de charger les S/N. Vous pouvez modifier la fiche sans toucher aux codes. Rouvrez la fiche pour réessayer.</p>}
+                {formData.has_serial_number && !serialsLoading && !serialsError && (() => {
                   const physicalStock = Math.max(0, parseInt(formData.stock_actuel) || 0)
                   const reservedSerials = existingSerials.filter(sn => sn.statut === 'RESERVE_AVANCE')
                   const lockedSerials = existingSerials.filter(sn => sn.statut !== 'EN_STOCK')
                   // Reserved units are still in physical stock, but their S/N is
                   // immutable here. Only freely available units remain editable.
-                  const count = Math.max(0, physicalStock - reservedSerials.length)
-                  if (serialNums.length !== count) {
-                    const synced = Array.from({ length: count }, (_, i) => serialNums[i] ?? '')
-                    setTimeout(() => setSerialNums(synced), 0)
-                  }
+                  const count = Math.max(0, physicalStock - reservedSerials.length, serialNums.length)
                   return (
                     <div className="space-y-2">
-                      {serialsLoading && <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">Chargement des codes S/N…</div>}
                       {count > 0 ? (
                         <div className="border border-border rounded-xl overflow-hidden">
                           <div className="bg-muted px-3 py-2 flex items-center justify-between">
@@ -1416,6 +1421,7 @@ export default function InventaireTab() {
                                 <input
                                   value={serialNums[i] ?? ''}
                                   onChange={e => {
+                                    setSerialsEdited(true)
                                     const updated = [...serialNums]
                                     updated[i] = e.target.value
                                     setSerialNums(updated)
@@ -1503,10 +1509,10 @@ export default function InventaireTab() {
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={savingForm || serialsLoading}
+                disabled={savingForm}
                 className="flex-1 bg-accent-500 hover:bg-accent-600 disabled:bg-gray-200 disabled:text-gray-400 text-text-primary font-bold py-2.5 rounded-xl transition-colors"
               >
-                {serialsLoading ? 'Chargement S/N…' : savingForm ? 'Sauvegarde...' : editingProduct ? 'Mettre à jour' : 'Créer le produit'}
+                {savingForm ? 'Sauvegarde...' : editingProduct ? 'Mettre à jour' : 'Créer le produit'}
               </button>
             </div>
           </div>

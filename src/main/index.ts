@@ -1977,13 +1977,25 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('produits:update', (_e, id, p) => {
-    const { serial_tracking_disable_confirmed: serialTrackingDisableConfirmed, ...productData } = p as Record<string, unknown>
+    const {
+      preserve_serial_tracking: preserveSerialTracking,
+      preserve_stock: preserveStock,
+      serial_numbers_edit: serialNumbersEdit,
+      serial_numbers_snapshot: serialNumbersSnapshot,
+      serial_tracking_disable_confirmed: serialTrackingDisableConfirmed,
+      ...productData
+    } = p as Record<string, unknown>
+    const current = db.prepare('SELECT has_serial_number, numero_serie, stock_actuel FROM produits WHERE id=?').get(id) as
+      { has_serial_number: number; numero_serie: string | null; stock_actuel: number } | undefined
+    if (!current) throw new Error('Produit introuvable')
     const normalized = {
       has_serial_number: 0, numero_serie: null,
       tva_achat_pct: 0, marge_pct: null, coef_av: null,
       cout_supplementaire: 0, cout_de_revient: null, prix_vente_ht: null, pvp: null,
       source_tag: null,
-      ...productData
+      ...productData,
+      ...(preserveSerialTracking === true ? { has_serial_number: current.has_serial_number, numero_serie: current.numero_serie } : {}),
+      ...(preserveStock === true ? { stock_actuel: current.stock_actuel } : {}),
     }
     const disablingSerialTracking = Number(normalized.has_serial_number) === 0 && serialTrackingDisableConfirmed === true
     if (disablingSerialTracking) {
@@ -2003,8 +2015,17 @@ function setupIpcHandlers() {
       WHERE id=@id
     `)
     const result = db.transaction(() => {
+      if (Array.isArray(serialNumbersEdit)) {
+        const rows = db.prepare('SELECT id, numero_serie, statut FROM serial_numbers WHERE produit_id=?').all(id) as Array<{id: string; numero_serie: string; statut: string}>
+        const signature = rows.map(row => JSON.stringify([row.id, row.numero_serie.trim(), String(row.statut ?? '').trim().toUpperCase().replace(/ /g, '_') || 'EN_STOCK'])).sort()
+        if (!Array.isArray(serialNumbersSnapshot) || JSON.stringify(signature) !== JSON.stringify([...serialNumbersSnapshot].sort())) {
+          throw new Error('Les S/N ont changé depuis l’ouverture de la fiche. Rouvrez-la avant de modifier les codes.')
+        }
+      }
       const updated = stmt.run({ id, ...normalized })
-      if (disablingSerialTracking) {
+      if (Array.isArray(serialNumbersEdit)) {
+        replaceAvailableSerials(id, serialNumbersEdit.map(String), Number(normalized.has_serial_number) === 1)
+      } else if (disablingSerialTracking) {
         // Available rows are editable inventory state, not immutable sales
         // history. Locked VENDU/DEFECTUEUX rows remain available for audit.
         db.prepare(`DELETE FROM serial_numbers WHERE produit_id=? AND statut='EN_STOCK'`).run(id)
@@ -2012,7 +2033,7 @@ function setupIpcHandlers() {
       return updated
     })()
     addActivityLog({ action: 'PRODUCT_UPDATED', details: { id, nom: normalized.nom } })
-    enqueueSync('produits', 'UPDATE', { id, ...normalized })
+    enqueueProductSnapshot(id)
     return result
   })
 
@@ -2337,11 +2358,16 @@ function setupIpcHandlers() {
   }
 
   ipcMain.handle('serialNumbers:getByProduit', (_e, produitId: string) => {
-    recoverProductSerialsFromPurchases(produitId)
+    try {
+      recoverProductSerialsFromPurchases(produitId)
+    } catch (error) {
+      // Recovery is best-effort; a legacy invoice must not hide saved rows.
+      console.warn('[serial] Purchase S/N recovery failed', error)
+    }
     return db.prepare('SELECT * FROM serial_numbers WHERE produit_id = ? ORDER BY created_at ASC').all(produitId)
   })
 
-  ipcMain.handle('serialNumbers:bulkSet', (_e, produitId: string, snList: string[]) => {
+  function replaceAvailableSerials(produitId: string, snList: string[], trackingEnabled?: boolean) {
     // Replace available S/N only. Actual sold rows are immutable from the
     // product editor and can only become available through a cancellation.
     const now = new Date().toISOString()
@@ -2356,19 +2382,31 @@ function setupIpcHandlers() {
       const lockedSet = new Set(locked.map(row => row.numero_serie.trim().toLocaleLowerCase('fr')))
       const conflict = [...unique.entries()].find(([key]) => lockedSet.has(key))
       if (conflict) throw new Error(`S/N vendu, réservé ou indisponible et non modifiable : ${conflict[1]}`)
-      db.prepare("DELETE FROM serial_numbers WHERE produit_id = ? AND statut = 'EN_STOCK'").run(produitId)
+      const available = db.prepare("SELECT id, numero_serie FROM serial_numbers WHERE produit_id=? AND statut='EN_STOCK'").all(produitId) as Array<{id: string; numero_serie: string}>
+      if (trackingEnabled === false && available.length) throw new Error('Des S/N sont encore enregistrés en stock')
+      const remove = db.prepare("DELETE FROM serial_numbers WHERE id=? AND statut='EN_STOCK'")
+      const existing = new Set<string>()
+      for (const row of available) {
+        const key = row.numero_serie.trim().toLocaleLowerCase('fr')
+        if (!unique.has(key)) remove.run(row.id)
+        else {
+          existing.add(key)
+          if (unique.get(key) !== row.numero_serie) db.prepare('UPDATE serial_numbers SET numero_serie=?, updated_at=? WHERE id=?').run(unique.get(key), now, row.id)
+        }
+      }
       const insert = db.prepare(`
         INSERT INTO serial_numbers (id, produit_id, numero_serie, statut, created_at, updated_at)
         VALUES (?, ?, ?, 'EN_STOCK', ?, ?)
       `)
-      for (const sn of unique.values()) {
-        insert.run(randomUUID(), produitId, sn, now, now)
+      for (const [key, sn] of unique) {
+        if (!existing.has(key)) insert.run(randomUUID(), produitId, sn, now, now)
       }
       db.prepare(`UPDATE produits SET has_serial_number=?, numero_serie=NULL, updated_at=? WHERE id=?`)
-        .run(unique.size > 0 ? 1 : 0, now, produitId)
+        .run((trackingEnabled ?? (unique.size > 0)) ? 1 : 0, now, produitId)
     })()
     return { success: true }
-  })
+  }
+  ipcMain.handle('serialNumbers:bulkSet', (_e, produitId: string, snList: string[]) => replaceAvailableSerials(produitId, snList))
 
   ipcMain.handle('serialNumbers:markSold', (_e, produitId: string, venteId: string) => {
     // Deliberately refuse the legacy "pick the first serial" behavior. Every
