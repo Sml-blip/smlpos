@@ -495,6 +495,25 @@ export default function DocumentsTab() {
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [creatingBl, setCreatingBl] = useState<string | null>(null)
+  const creatingBlRef = useRef(false)
+  const createBlCopy = async (row: DocRow) => {
+    if (creatingBlRef.current) return
+    creatingBlRef.current = true
+    setCreatingBl(row.id)
+    try {
+      const result = await api.documentsCreateDeliveryCopy(row.id)
+      if (!result.success || !result.document) throw new Error('Création du BL impossible')
+      setPreviewDoc({ ...result.document, _source: 'documents' } as DocRow)
+      showToast('success', result.alreadyExists ? 'BL existant ouvert — aucun doublon créé' : 'BL créé — impression et téléchargement PDF disponibles')
+      void load()
+    } catch (error) {
+      showToast('error', error instanceof Error ? error.message : String(error))
+    } finally {
+      creatingBlRef.current = false
+      setCreatingBl(null)
+    }
+  }
   const [bulkPrintFilters, setBulkPrintFilters] = useState<{ type: string; dateFrom: string; dateTo: string; search: string } | null>(null)
   const [excelModal, setExcelModal] = useState<{
     rows: Record<string, unknown>[]; columns: string[]; title: string; fileName: string; isAchats?: boolean
@@ -766,6 +785,9 @@ export default function DocumentsTab() {
                       <button onClick={() => setPreviewDoc(d)} title="Voir" className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-muted"><Eye size={12} /></button>
                       <button onClick={() => printDoc(d)} title="Imprimer" className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-muted"><Printer size={12} /></button>
                       <button onClick={() => void exportSingleDoc(d)} title="Télécharger PDF" className="p-1 rounded text-text-muted hover:text-red-600 hover:bg-red-50"><FileDown size={12} /></button>
+                      {d._source !== 'ff' && ['FACTURE_VENTE', 'FACTURE_JOURNALIERE_F'].includes(d.type_document) && !['ANNULE', 'REVOQUE', 'BROUILLON'].includes(d.statut) && (
+                        <button type="button" disabled={creatingBl !== null} onClick={() => void createBlCopy(d)} title="Créer ou ouvrir le BL de cette facture, sans mouvement de stock" className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700 disabled:opacity-40">{creatingBl === d.id ? '…' : 'BL'}</button>
+                      )}
                       {canEditDoc(d) && (
                         <button onClick={() => startEdit(d)} title="Modifier" className="p-1 rounded text-text-muted hover:text-accent-600 hover:bg-accent-50"><Edit2 size={12} /></button>
                       )}
@@ -821,6 +843,7 @@ export default function DocumentsTab() {
             <div className="flex gap-2 flex-wrap">
               <button type="button" onClick={() => setPreviewDoc(null)} className="flex-1 bg-muted hover:bg-border py-2 rounded-xl text-sm font-semibold">Fermer</button>
               <button type="button" onClick={() => { printDoc(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-muted border border-border hover:bg-border rounded-xl text-sm font-semibold"><Printer size={13} /> Imprimer</button>
+              <button type="button" onClick={() => void exportSingleDoc(previewDoc)} className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700"><FileDown size={13}/> Télécharger PDF</button>
               {canEditDoc(previewDoc) && (
                 <button type="button" onClick={() => { startEdit(previewDoc); setPreviewDoc(null) }} className="flex items-center gap-1.5 px-4 py-2 bg-accent-50 hover:bg-accent-100 border border-accent-200 rounded-xl text-sm font-semibold"><Edit2 size={13} /> Modifier</button>
               )}

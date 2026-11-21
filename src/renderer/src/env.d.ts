@@ -100,6 +100,7 @@ interface Window {
     }) => Promise<{ success?: boolean; inserted?: number; updated?: number; skipped?: number }>
 
     // Serial Numbers
+    documentsCreateDeliveryCopy: (invoiceId: string) => Promise<{ success: boolean; document: import('./lib/types').Document; alreadyExists: boolean }>
     serialNumbersGetByProduit: (produitId: string) => Promise<unknown[]>
     serialNumbersBulkSet: (produitId: string, snList: string[]) => Promise<unknown>
     serialNumbersMarkSold: (produitId: string, venteId: string) => Promise<unknown>

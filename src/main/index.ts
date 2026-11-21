@@ -7,6 +7,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase, connectDatabase, db, dbFilePath, SCHEMA_VERSION } from './db'
+import { createInvoiceDeliveryCopy } from './invoiceDeliveryCopy'
 import { bindRow } from './bindRow'
 import { setupAutoUpdater } from './updater'
 import { wipeAllUserData, relaunchFresh, getResetDiagnostics } from './factoryReset'
@@ -5406,6 +5407,15 @@ function setupIpcHandlers() {
   })
 
   // ── Documents (Facture/Devis/BL) ─────────────────────────────────────────
+  ipcMain.handle('documents:createDeliveryCopy', (_e, invoiceId: string) => {
+    const result = createInvoiceDeliveryCopy(db, invoiceId, new Date().toISOString(), randomUUID)
+    if (!result.alreadyExists) {
+      enqueueSync('documents', 'INSERT', result.document)
+      for (const line of result.lines) enqueueSync('lignes_document', 'INSERT', line)
+      addActivityLog({ action: 'INVOICE_DELIVERY_COPY_CREATED', details: { invoice_id: invoiceId, bl_id: result.document.id, numero: result.document.numero } })
+    }
+    return { success: true, document: result.document, alreadyExists: result.alreadyExists }
+  })
   ipcMain.handle('documents:list', (_e, filters: Record<string, unknown> = {}) => {
     let sql = `SELECT * FROM documents WHERE 1=1`
     const params: unknown[] = []

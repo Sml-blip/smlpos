@@ -82,6 +82,7 @@ const api = {
   categoriesCreate: (cat: { id: string; nom: string; icone?: string }) => ipcRenderer.invoke('categories:create', cat),
 
   // Serial Numbers
+  documentsCreateDeliveryCopy: (invoiceId: string) => ipcRenderer.invoke('documents:createDeliveryCopy', invoiceId),
   serialNumbersGetByProduit: (produitId: string) => ipcRenderer.invoke('serialNumbers:getByProduit', produitId),
   serialNumbersBulkSet: (produitId: string, snList: string[]) => ipcRenderer.invoke('serialNumbers:bulkSet', produitId, snList),
   serialNumbersMarkSold: (produitId: string, venteId: string) => ipcRenderer.invoke('serialNumbers:markSold', produitId, venteId),
